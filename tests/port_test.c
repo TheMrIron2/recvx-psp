@@ -7,6 +7,7 @@
 #include "psp/expand.h"
 #include "psp/room.h"
 #include "psp/scene.h"
+#include "psp/mesh.h"
 #include "psp/selftest.h"
 
 static uint32_t next_random(uint32_t *state)
@@ -60,17 +61,21 @@ int main(int argc, char **argv)
         RecvxRoomFileInfo info;
         unsigned char *data = NULL;
         RecvxScene scene = {0};
+        RecvxRoomMesh mesh = {0};
         int room = recvxLoadRoomFile(argv[1], &info, &data);
         printf("Real room %s: %s (check %d), %u -> %u bytes\n", info.name,
                room ? "FAIL" : "PASS", room, info.packed_size, info.expanded_size);
         if (room)
             return 1;
         assert(recvxBuildRoomScene(data, info.expanded_size, &scene) == 0);
+        assert(recvxBuildRoomMesh(data, info.expanded_size, &mesh) == 0);
         free(data);
         printf("Room spatial scene: PASS (%u bounds, %u markers, %u vertices)\n",
                scene.box_count, scene.marker_count, scene.vertex_count);
         assert(((uintptr_t)scene.vertices & 15) == 0);
         recvxSceneFree(&scene);
+        printf("Room model mesh: PASS (%u models, %u triangles)\n", mesh.model_count, mesh.triangle_count);
+        recvxMeshFree(&mesh);
     }
     return flags || memory || expand;
 }

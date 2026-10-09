@@ -18,7 +18,7 @@ import zlib
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import mkiso
-from scene_api import Scene, bind_scene
+from scene_api import Mesh, Scene, bind_scene
 
 
 class RoomInfo(ctypes.Structure):
@@ -121,6 +121,14 @@ def prepare(args):
                                "vertices": scene.vertex_count,
                                "center": list(scene.center), "radius": scene.radius}
             library.recvxSceneFree(ctypes.byref(scene))
+            mesh = Mesh()
+            status = library.recvxBuildRoomMesh(output, written.value, ctypes.byref(mesh))
+            if status != 0:
+                raise ValueError(f"{name}: invalid room model geometry (status {status})")
+            record["mesh"] = {"objects": mesh.object_count, "models": mesh.model_count,
+                              "triangles": mesh.triangle_count, "vertices": mesh.vertex_count,
+                              "center": list(mesh.center), "radius": mesh.radius}
+            library.recvxMeshFree(ctypes.byref(mesh))
             report["rooms"].append(record)
             if name == selected:
                 if size + written.value > 14 * 1024 * 1024 or size > 8 * 1024 * 1024 or written.value > 12 * 1024 * 1024:
@@ -137,7 +145,7 @@ def prepare(args):
     (args.output / "room.rdx").write_bytes(packed)
     (args.output / "room.meta").write_bytes(metadata)
     (args.output / "asset-report.json").write_text(json.dumps(report, indent=2) + "\n")
-    print(f"PASS: {len(report['rooms'])}/{count} rooms decoded, inspected and built into spatial scenes" +
+    print(f"PASS: {len(report['rooms'])}/{count} rooms decoded, inspected and built into scenes and model meshes" +
           ("; all match original C reference" if reference is not None else ""))
     print(f"Prepared {selected}: {record['packed_size']:,} -> {record['expanded_size']:,} bytes, "
           f"CRC32 {record['crc32']}")

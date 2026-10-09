@@ -11,7 +11,7 @@ from pathlib import Path
 import struct
 import zlib
 
-from scene_api import Scene, bind_scene
+from scene_api import Mesh, Scene, bind_scene
 
 
 def dot(a, b):
@@ -46,12 +46,18 @@ def preview(args):
     if zlib.crc32(output.raw) != crc:
         raise ValueError("Room CRC mismatch")
     scene = Scene()
+    mesh = Mesh()
     if lib.recvxBuildRoomScene(output, expanded_size, ctypes.byref(scene)) != 0:
         raise ValueError("Scene build failed")
     try:
+        if lib.recvxBuildRoomMesh(output, expanded_size, ctypes.byref(mesh)) != 0:
+            raise ValueError("Model build failed")
+        model_geometry = args.mode != "spatial" and bool(mesh.vertices)
+        filled = args.mode == "model" and model_geometry
+        geometry = mesh if model_geometry else scene
         width, height = 480, 272
-        center = list(scene.center)
-        yaw, pitch, distance = 0.85, 0.6, scene.radius * 3
+        center = list(geometry.center)
+        yaw, pitch, distance = 0.85, 0.6, geometry.radius * 3
         eye = [center[0] + math.sin(yaw)*math.cos(pitch)*distance,
                center[1] + math.sin(pitch)*distance,
                center[2] + math.cos(yaw)*math.cos(pitch)*distance]
@@ -63,7 +69,7 @@ def preview(args):
         def project(vertex):
             delta = (vertex.x-eye[0], vertex.y-eye[1], vertex.z-eye[2])
             depth = dot(delta, forward)
-            if depth <= scene.radius * 0.01:
+            if depth <= geometry.radius * 0.01:
                 return None
             return (width/2 + dot(delta, right)*scale/depth,
                     height/2 - dot(delta, up)*scale/depth, depth)
@@ -73,8 +79,51 @@ def preview(args):
         svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
                '<rect width="100%" height="100%" fill="#0e1218"/>']
         visible = 0
-        for index in range(0, scene.vertex_count, 2):
-            v0, v1 = scene.vertices[index], scene.vertices[index + 1]
+        polygons = []
+        if filled:
+            for index in range(0, mesh.vertex_count, 3):
+                vertices = mesh.vertices[index:index + 3]
+                projected = [project(v) for v in vertices]
+                if any(p is None for p in projected):
+                    continue
+                a, b, c = projected
+                color = (vertices[0].color & 255, (vertices[0].color >> 8) & 255,
+                         (vertices[0].color >> 16) & 255)
+
+                def edge(p, q, x, y):
+                    return (x-p[0])*(q[1]-p[1]) - (y-p[1])*(q[0]-p[0])
+
+                area = edge(a, b, c[0], c[1])
+                if abs(area) < 1e-6:
+                    continue
+                polygons.append((sum(p[2] for p in projected), projected, color))
+                left = max(0, math.floor(min(p[0] for p in projected)))
+                right_edge = min(width-1, math.ceil(max(p[0] for p in projected)))
+                top = max(0, math.floor(min(p[1] for p in projected)))
+                bottom = min(height-1, math.ceil(max(p[1] for p in projected)))
+                hit = False
+                for y in range(top, bottom+1):
+                    for x in range(left, right_edge+1):
+                        w0 = edge(b, c, x+0.5, y+0.5) / area
+                        w1 = edge(c, a, x+0.5, y+0.5) / area
+                        w2 = 1-w0-w1
+                        if min(w0, w1, w2) < -1e-6:
+                            continue
+                        depth = 1/(w0/a[2] + w1/b[2] + w2/c[2])
+                        pixel = y*width+x
+                        if depth <= depths[pixel]:
+                            depths[pixel] = depth
+                            pixels[pixel*3:pixel*3+3] = bytes(color)
+                            hit = True
+                visible += hit
+            # SVG uses depth sorting; PNG above uses per-pixel depth testing.
+            for _, points, color in sorted(polygons, key=lambda p: p[0], reverse=True):
+                coordinates = " ".join(f"{p[0]:.2f},{p[1]:.2f}" for p in points)
+                svg.append(f'<polygon points="{coordinates}" fill="#{color[0]:02x}{color[1]:02x}{color[2]:02x}"/>')
+        line_vertices = mesh.wire_vertices if model_geometry else scene.vertices
+        line_count = mesh.vertex_count * 2 if model_geometry else scene.vertex_count
+        for index in range(0, 0 if filled else line_count, 2):
+            v0, v1 = line_vertices[index], line_vertices[index + 1]
             a, b = project(v0), project(v1)
             if a is None or b is None:
                 continue
@@ -89,13 +138,13 @@ def preview(args):
                 if 0 <= x < width and 0 <= y < height:
                     pixel = y*width + x
                     depth = 1 / ((1-t)/a[2] + t/b[2])
-                    if depth <= depths[pixel]:
+                    if model_geometry or depth <= depths[pixel]:
                         depths[pixel] = depth
                         pixels[pixel*3:pixel*3+3] = bytes(color)
                         hit = True
             visible += hit
         title = name.rstrip(b"\0").decode("ascii")
-        svg.extend([f'<text x="8" y="15" fill="white" font-family="monospace" font-size="10">{escape(title)} — host geometry preview</text>',
+        svg.extend([f'<text x="8" y="15" fill="white" font-family="monospace" font-size="10">{escape(title)} — host {args.mode} preview</text>',
                     '</svg>'])
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.with_suffix(".svg").write_text("\n".join(svg) + "\n")
@@ -107,12 +156,17 @@ def preview(args):
         png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
         png += chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
         args.output.with_suffix(".png").write_bytes(png)
-        if scene.box_count + scene.marker_count and visible == 0:
+        if geometry.vertex_count and visible == 0:
             raise ValueError("Default camera does not show the scene")
-        print(f"Preview: {scene.box_count} bounds, {scene.marker_count} markers, {visible} visible lines")
+        if model_geometry:
+            primitive = "faces" if filled else "lines"
+            print(f"Model preview: {mesh.model_count} models, {mesh.triangle_count} triangles, {visible} visible {primitive}")
+        else:
+            print(f"Spatial preview: {scene.box_count} bounds, {scene.marker_count} markers, {visible} visible lines")
         print(args.output.with_suffix(".svg"))
     finally:
         lib.recvxSceneFree(ctypes.byref(scene))
+        lib.recvxMeshFree(ctypes.byref(mesh))
 
 
 if __name__ == "__main__":
@@ -120,6 +174,7 @@ if __name__ == "__main__":
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--mode", choices=("model", "wire", "spatial"), default="wire")
     try:
         preview(parser.parse_args())
     except (OSError, ValueError, struct.error) as error:
