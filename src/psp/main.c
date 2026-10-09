@@ -9,11 +9,12 @@
 #include "psp/renderer.h"
 #include "psp/selftest.h"
 
-PSP_MODULE_INFO("RECVX PSP", PSP_MODULE_USER, 0, 3);
+PSP_MODULE_INFO("RECVX PSP", PSP_MODULE_USER, 0, 4);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);
 PSP_HEAP_SIZE_KB(16 * 1024);
 
 static RecvxScene scene;
+static RecvxRoomMesh mesh;
 static char room_name[17];
 
 static int exit_callback(int arg1, int arg2, void *common)
@@ -32,6 +33,7 @@ static void show_checks(const char *data_directory)
     int expand = recvxCheckExpand();
 
     recvxSceneFree(&scene);
+    recvxMeshFree(&mesh);
 
     pspDebugScreenClear();
     pspDebugScreenPrintf("Resident Evil: Code Veronica X\n");
@@ -71,6 +73,12 @@ static void show_checks(const char *data_directory)
             } else {
                 pspDebugScreenPrintf("Room viewer: FAIL (%d)\n\n", result);
             }
+            result = recvxBuildRoomMesh(room_data, info.expanded_size, &mesh);
+            if (result == 0)
+                pspDebugScreenPrintf("Model geometry: READY (%u models, %u triangles)\n\n",
+                                     (unsigned int)mesh.model_count, (unsigned int)mesh.triangle_count);
+            else
+                pspDebugScreenPrintf("Model geometry: FAIL (%d)\n\n", result);
         }
         free(room_data);
     }
@@ -118,7 +126,7 @@ int main(int argc, char **argv)
                     viewing = 0;
                     show_checks(data_directory);
                 } else if (scene.vertices != NULL) {
-                    if (recvxRendererStart(&scene) == 0)
+                    if (recvxRendererStart(&scene, &mesh) == 0)
                         viewing = 1;
                     else
                         pspDebugScreenPrintf("Could not initialize the renderer.\n");
@@ -127,7 +135,7 @@ int main(int argc, char **argv)
             if (!viewing && (pressed & PSP_CTRL_CROSS))
                 show_checks(data_directory);
             if (viewing)
-                recvxRendererFrame(&scene, room_name, &pad, pressed);
+                recvxRendererFrame(&scene, &mesh, room_name, &pad, pressed);
         }
         if (!viewing)
             sceKernelDelayThreadCB(16667);
@@ -137,6 +145,7 @@ int main(int argc, char **argv)
 
     recvxRendererStop();
     recvxSceneFree(&scene);
+    recvxMeshFree(&mesh);
     sceKernelExitGame();
     return 0;
 }

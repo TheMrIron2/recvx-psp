@@ -20,22 +20,26 @@
 
 static unsigned int command_list[16384] __attribute__((aligned(64)));
 static void *draw_buffer;
-static ScePspFVector3 center;
-static float yaw, pitch, distance;
+static ScePspFVector3 center, focus;
+static float yaw, pitch, distance, radius;
 static uint64_t previous_time;
 static int initialized;
+static int display_mode;
 
-static void reset_camera(const RecvxScene *scene)
+static void reset_camera(const RecvxScene *scene, const RecvxRoomMesh *mesh)
 {
-    center.x = scene->center[0];
-    center.y = scene->center[1];
-    center.z = scene->center[2];
+    const float *position = display_mode != 3 && mesh && mesh->vertices ? mesh->center : scene->center;
+    radius = display_mode != 3 && mesh && mesh->vertices ? mesh->radius : scene->radius;
+    focus.x = position[0];
+    focus.y = position[1];
+    focus.z = position[2];
+    center = focus;
     yaw = 0.85f;
     pitch = 0.6f;
-    distance = scene->radius * 3.0f;
+    distance = radius * 3.0f;
 }
 
-int recvxRendererStart(const RecvxScene *scene)
+int recvxRendererStart(const RecvxScene *scene, const RecvxRoomMesh *mesh)
 {
     if (scene == NULL || scene->vertices == NULL || initialized)
         return -1;
@@ -64,16 +68,19 @@ int recvxRendererStart(const RecvxScene *scene)
     sceGuSync(GU_SYNC_FINISH, GU_SYNC_WHAT_DONE);
     sceKernelDcacheWritebackRange(scene->vertices,
                                  scene->vertex_count * sizeof(*scene->vertices));
+    if (mesh && mesh->vertices)
+        sceKernelDcacheWritebackRange(mesh->vertices, mesh->vertex_count * 3 * sizeof(*mesh->vertices));
     sceDisplayWaitVblankStartCB();
     sceGuDisplay(GU_TRUE);
     pspDebugScreenSetColorMode(GU_PSM_8888);
     pspDebugScreenEnableBackColor(0);
-    reset_camera(scene);
+    display_mode = mesh && mesh->vertices ? 1 : 3;
+    reset_camera(scene, mesh);
     previous_time = sceKernelGetSystemTimeWide();
     return 0;
 }
 
-void recvxRendererFrame(const RecvxScene *scene, const char *room_name,
+void recvxRendererFrame(const RecvxScene *scene, const RecvxRoomMesh *mesh, const char *room_name,
                         const SceCtrlData *pad, unsigned int pressed)
 {
     uint64_t now = sceKernelGetSystemTimeWide();
@@ -83,8 +90,12 @@ void recvxRendererFrame(const RecvxScene *scene, const char *room_name,
     ScePspFVector3 eye, up = {0, 1, 0};
     previous_time = now;
 
+    if ((pressed & PSP_CTRL_SELECT) && mesh && mesh->vertices) {
+        display_mode = (display_mode + 1) % 4;
+        reset_camera(scene, mesh);
+    }
     if (pressed & PSP_CTRL_TRIANGLE)
-        reset_camera(scene);
+        reset_camera(scene, mesh);
     if (pad->Buttons & PSP_CTRL_LEFT)
         yaw -= dt * 1.7f;
     if (pad->Buttons & PSP_CTRL_RIGHT)
@@ -99,18 +110,16 @@ void recvxRendererFrame(const RecvxScene *scene, const char *room_name,
         distance *= 1.0f + dt;
     if (pad->Buttons & PSP_CTRL_RTRIGGER)
         distance *= 1.0f - dt;
-    distance = fmaxf(scene->radius * 0.2f, fminf(scene->radius * 12, distance));
+    distance = fmaxf(radius * 0.2f, fminf(radius * 12, distance));
     if (fabsf(analog_x) < 0.16f)
         analog_x = 0;
     if (fabsf(analog_y) < 0.16f)
         analog_y = 0;
-    center.x += (analog_x * cosf(yaw) + analog_y * sinf(yaw)) * scene->radius * dt;
-    center.z += (-analog_x * sinf(yaw) + analog_y * cosf(yaw)) * scene->radius * dt;
+    center.x += (analog_x * cosf(yaw) + analog_y * sinf(yaw)) * radius * dt;
+    center.z += (-analog_x * sinf(yaw) + analog_y * cosf(yaw)) * radius * dt;
     /* Keep repeated panning within a useful range of the actual room. */
-    center.x = fmaxf(scene->center[0] - scene->radius * 4,
-                    fminf(scene->center[0] + scene->radius * 4, center.x));
-    center.z = fmaxf(scene->center[2] - scene->radius * 4,
-                    fminf(scene->center[2] + scene->radius * 4, center.z));
+    center.x = fmaxf(focus.x - radius * 4, fminf(focus.x + radius * 4, center.x));
+    center.z = fmaxf(focus.z - radius * 4, fminf(focus.z + radius * 4, center.z));
     eye.x = center.x + sinf(yaw) * cosf(pitch) * distance;
     eye.y = center.y + sinf(pitch) * distance;
     eye.z = center.z + cosf(yaw) * cosf(pitch) * distance;
@@ -122,14 +131,35 @@ void recvxRendererFrame(const RecvxScene *scene, const char *room_name,
     sceGumMatrixMode(GU_PROJECTION);
     sceGumLoadIdentity();
     sceGumPerspective(50, (float)SCREEN_WIDTH / SCREEN_HEIGHT,
-                      scene->radius * 0.01f, scene->radius * 32);
+                      radius * 0.01f, radius * 32);
     sceGumMatrixMode(GU_VIEW);
     sceGumLoadIdentity();
     sceGumLookAt(&eye, &center, &up);
     sceGumMatrixMode(GU_MODEL);
     sceGumLoadIdentity();
-    sceGumDrawArray(GU_LINES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
-                    (int)scene->vertex_count, NULL, scene->vertices);
+    if ((display_mode == 0 || display_mode == 2) && mesh && mesh->vertices)
+        sceGumDrawArray(GU_TRIANGLES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+                        (int)mesh->vertex_count, NULL, mesh->vertices);
+    if (display_mode == 1 && mesh && mesh->wire_vertices) {
+        unsigned int offset = 0, remaining = mesh->vertex_count * 2;
+        sceGuDisable(GU_DEPTH_TEST);
+        /* GE primitive counts are 16-bit; retain line pairs across batches. */
+        while (remaining != 0) {
+            unsigned int batch = remaining > 32768 ? 32768 : remaining;
+            sceGumDrawArray(GU_LINES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+                            (int)batch, NULL, mesh->wire_vertices + offset);
+            offset += batch;
+            remaining -= batch;
+        }
+        sceGuEnable(GU_DEPTH_TEST);
+    }
+    if (display_mode >= 2) {
+        if (display_mode == 2)
+            sceGuDisable(GU_DEPTH_TEST);
+        sceGumDrawArray(GU_LINES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+                        (int)scene->vertex_count, NULL, scene->vertices);
+        sceGuEnable(GU_DEPTH_TEST);
+    }
     sceGuFinish();
     sceGuSync(GU_SYNC_FINISH, GU_SYNC_WHAT_DONE);
 
@@ -137,14 +167,20 @@ void recvxRendererFrame(const RecvxScene *scene, const char *room_name,
     pspDebugScreenSetOffset((int)(uintptr_t)draw_buffer);
     pspDebugScreenSetTextColor(0xffffffff);
     pspDebugScreenSetXY(1, 1);
-    pspDebugScreenPrintf("%s   Room spatial viewer", room_name);
+    pspDebugScreenPrintf("%s   %s", room_name,
+                         display_mode == 3 ? "Spatial viewer" :
+                         display_mode == 1 ? "Room model wireframe" : "Room model solid");
     pspDebugScreenSetXY(1, 2);
-    pspDebugScreenPrintf("%u bounds  %u markers  %u lines",
+    if (display_mode != 3 && mesh)
+        pspDebugScreenPrintf("%u models  %u triangles%s", (unsigned int)mesh->model_count,
+                             (unsigned int)mesh->triangle_count, display_mode == 2 ? " + spatial overlay" : "");
+    else
+        pspDebugScreenPrintf("%u bounds  %u markers  %u lines",
                          (unsigned int)scene->box_count,
                          (unsigned int)scene->marker_count,
                          (unsigned int)(scene->vertex_count / 2));
     pspDebugScreenSetXY(1, 29);
-    pspDebugScreenPrintf("Grey walls | Green floors | Red enemies | Amber cameras");
+    pspDebugScreenPrintf("SELECT: solid / wire / model + bounds / spatial");
     pspDebugScreenSetXY(1, 31);
     pspDebugScreenPrintf("D-pad orbit  Stick pan  L/R zoom  TRIANGLE reset");
     pspDebugScreenSetXY(1, 32);
