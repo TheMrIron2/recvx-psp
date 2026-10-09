@@ -11,7 +11,17 @@ from pathlib import Path
 import struct
 import zlib
 
-from scene_api import Mesh, Scene, bind_scene
+from scene_api import Mesh, Scene, TextureSet, bind_scene
+
+
+def write_png(path,width,height,pixels):
+    def chunk(kind,data):
+        return struct.pack(">I",len(data))+kind+data+struct.pack(">I",zlib.crc32(kind+data))
+    rows = b"".join(b"\0"+pixels[y*width*3:(y+1)*width*3] for y in range(height))
+    png = b"\x89PNG\r\n\x1a\n"+chunk(b"IHDR",struct.pack(">IIBBBBB",width,height,8,2,0,0,0))
+    png += chunk(b"IDAT",zlib.compress(rows))+chunk(b"IEND",b"")
+    path.write_bytes(png)
+    return png
 
 
 def dot(a, b):
@@ -47,13 +57,20 @@ def preview(args):
         raise ValueError("Room CRC mismatch")
     scene = Scene()
     mesh = Mesh()
+    textures = TextureSet()
     if lib.recvxBuildRoomScene(output, expanded_size, ctypes.byref(scene)) != 0:
         raise ValueError("Scene build failed")
     try:
         if lib.recvxBuildRoomMesh(output, expanded_size, ctypes.byref(mesh)) != 0:
             raise ValueError("Model build failed")
+        if args.mode == "textured":
+            if lib.recvxBuildRoomTextures(output, expanded_size, ctypes.byref(textures)) != 0:
+                raise ValueError("Texture build failed")
+            if lib.recvxValidateMeshTextures(ctypes.byref(mesh), ctypes.byref(textures)) != 0:
+                raise ValueError("Texture indices do not match the room")
+        textured = args.mode == "textured" and bool(textures.count)
         model_geometry = args.mode != "spatial" and bool(mesh.vertices)
-        filled = args.mode == "model" and model_geometry
+        filled = args.mode in ("model","textured") and model_geometry
         geometry = mesh if model_geometry else scene
         width, height = 480, 272
         center = list(geometry.center)
@@ -80,9 +97,38 @@ def preview(args):
                '<rect width="100%" height="100%" fill="#0e1218"/>']
         visible = 0
         polygons = []
+        samples = [(bytes(t.pixels[:t.image_bytes]), list(t.palette[:256]), t.width, t.height)
+                   for t in textures.textures[:textures.count]]
+
+        def sample(texture_index,u,v,flags):
+            image,palette,tw,th = samples[texture_index]
+
+            def texel(x,y):
+                x = min(tw-1,max(0,x)) if flags & 1 else x % tw
+                y = min(th-1,max(0,y)) if flags & 2 else y % th
+                offset = ((y//8)*(tw//16)+x//16)*128 + (y%8)*16 + x%16
+                color = palette[image[offset]]
+                return tuple((color >> shift) & 255 for shift in (0,8,16,24))
+
+            if not flags & 4:
+                return texel(math.floor(u*tw),math.floor(v*th))
+            x,y = u*tw-0.5,v*th-0.5
+            ix,iy = math.floor(x),math.floor(y)
+            fx,fy = x-ix,y-iy
+            colors = (texel(ix,iy),texel(ix+1,iy),texel(ix,iy+1),texel(ix+1,iy+1))
+            weights = ((1-fx)*(1-fy),fx*(1-fy),(1-fx)*fy,fx*fy)
+            return tuple(round(sum(c[channel]*w for c,w in zip(colors,weights))) for channel in range(4))
+
+        batches = list(mesh.batches[:mesh.batch_count])
+        batch_index = 0
         if filled:
             for index in range(0, mesh.vertex_count, 3):
                 vertices = mesh.vertices[index:index + 3]
+                while batch_index+1 < len(batches) and index >= batches[batch_index+1].first_vertex:
+                    batch_index += 1
+                batch = batches[batch_index] if batches else None
+                use_texture = textured and batch and batch.texture_index != 0xFFFFFFFF
+                texture_vertices = mesh.textured_vertices[index:index+3] if use_texture else None
                 projected = [project(v) for v in vertices]
                 if any(p is None for p in projected):
                     continue
@@ -112,8 +158,17 @@ def preview(args):
                         depth = 1/(w0/a[2] + w1/b[2] + w2/c[2])
                         pixel = y*width+x
                         if depth <= depths[pixel]:
+                            pixel_color = color
+                            if use_texture:
+                                weights = (w0/a[2]*depth,w1/b[2]*depth,w2/c[2]*depth)
+                                u = sum(t.u*w for t,w in zip(texture_vertices,weights))
+                                v = sum(t.v*w for t,w in zip(texture_vertices,weights))
+                                tex_color = sample(batch.texture_index,u,v,batch.flags)
+                                if tex_color[3] == 0:
+                                    continue
+                                pixel_color = tuple(round(t*c/255) for t,c in zip(tex_color[:3],color))
                             depths[pixel] = depth
-                            pixels[pixel*3:pixel*3+3] = bytes(color)
+                            pixels[pixel*3:pixel*3+3] = bytes(pixel_color)
                             hit = True
                 visible += hit
             # SVG uses depth sorting; PNG above uses per-pixel depth testing.
@@ -144,18 +199,29 @@ def preview(args):
                         hit = True
             visible += hit
         title = name.rstrip(b"\0").decode("ascii")
+        if textured:
+            svg = svg[:2]
         svg.extend([f'<text x="8" y="15" fill="white" font-family="monospace" font-size="10">{escape(title)} — host {args.mode} preview</text>',
                     '</svg>'])
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.with_suffix(".svg").write_text("\n".join(svg) + "\n")
 
-        def chunk(kind, data):
-            return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind+data))
-
-        rows = b"".join(b"\0" + pixels[y*width*3:(y+1)*width*3] for y in range(height))
-        png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-        png += chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
-        args.output.with_suffix(".png").write_bytes(png)
+        png = write_png(args.output.with_suffix(".png"),width,height,pixels)
+        if textured:
+            import base64
+            encoded = base64.b64encode(png).decode()
+            svg.insert(2,f'<image width="480" height="272" href="data:image/png;base64,{encoded}"/>')
+            atlas_width,atlas_height = 512,((textures.count+7)//8)*64
+            atlas = bytearray(atlas_width*atlas_height*3)
+            for i in range(textures.count):
+                for y in range(64):
+                    for x in range(64):
+                        color = sample(i,(x+0.5)/64,(y+0.5)/64,3)
+                        checker = 72 if (x//8+y//8)%2 else 112
+                        rgb = bytes((c*color[3]+checker*(255-color[3]))//255 for c in color[:3])
+                        pixel = ((i//8*64+y)*atlas_width+i%8*64+x)*3
+                        atlas[pixel:pixel+3] = rgb
+            write_png(args.output.with_name("room-textures.png"),atlas_width,atlas_height,atlas)
+        args.output.with_suffix(".svg").write_text("\n".join(svg)+"\n")
         if geometry.vertex_count and visible == 0:
             raise ValueError("Default camera does not show the scene")
         if model_geometry:
@@ -167,6 +233,7 @@ def preview(args):
     finally:
         lib.recvxSceneFree(ctypes.byref(scene))
         lib.recvxMeshFree(ctypes.byref(mesh))
+        lib.recvxTexturesFree(ctypes.byref(textures))
 
 
 if __name__ == "__main__":
@@ -174,7 +241,7 @@ if __name__ == "__main__":
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--mode", choices=("model", "wire", "spatial"), default="wire")
+    parser.add_argument("--mode", choices=("model", "wire", "spatial", "textured"), default="textured")
     try:
         preview(parser.parse_args())
     except (OSError, ValueError, struct.error) as error:

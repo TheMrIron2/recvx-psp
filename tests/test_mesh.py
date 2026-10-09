@@ -6,7 +6,7 @@ import struct
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from scene_api import Mesh, bind_scene
+from scene_api import Mesh, Texture, TextureSet, bind_scene
 
 lib = bind_scene(ctypes.CDLL(str(Path(sys.argv[1]).resolve())))
 mesh = Mesh()
@@ -66,6 +66,9 @@ assert ctypes.cast(mesh.vertices, ctypes.c_void_p).value % 16 == 0
 assert mesh.vertices[0].color == 0xFF39220C
 assert [(v.x, v.y, v.z) for v in mesh.wire_vertices[:6]] == [
     (0,0,0), (1,0,0), (1,0,0), (0,1,0), (0,1,0), (0,0,0)]
+assert mesh.batch_count == 1 and mesh.batches[0].vertex_count == 3
+assert mesh.batches[0].texture_index == 0
+assert [(v.u,v.v) for v in mesh.textured_vertices[:3]] == [(0,1)]*3
 old_storage = mesh.storage
 for size in range(len(good)):
     assert build(good[:size]) == -1 and mesh.storage == old_storage
@@ -137,6 +140,30 @@ data, _ = fixture()
 struct.pack_into("<I", data, 20, 0)
 assert build(data) == 0 and not mesh.vertices
 assert lib.recvxBuildRoomMesh(None, 0, ctypes.byref(mesh)) == -1
+data, (_,_,polygon) = fixture()
+data[polygon+9] = 0x30
+struct.pack_into("<H",data,polygon+10,0x4002)
+for i,uv in enumerate(((0,0),(1023,0),(0,1023))):
+    struct.pack_into("<HH",data,polygon+22+i*6,*uv)
+assert build(data) == 0
+assert mesh.batches[0].texture_index == 2 and mesh.batches[0].flags == 7
+assert [(v.u,v.v) for v in mesh.textured_vertices[:3]] == [(0,0),(1,0),(0,1)]
+struct.pack_into("<h",data,polygon+18,-3)
+assert build(data) == 0
+assert [(v.u,v.v) for v in mesh.textured_vertices[:3]] == [(1,0),(0,0),(0,1)]
+data[polygon+9] = 0xF0
+assert build(data) == 0
+assert [(v.u,v.v) for v in mesh.textured_vertices[:3]] == [(0,1),(1,1),(1,0)]
+dummy = (Texture*3)()
+textures = TextureSet(dummy,3,0)
+assert lib.recvxValidateMeshTextures(ctypes.byref(mesh),ctypes.byref(textures)) == 0
+textures.count = 2
+assert lib.recvxValidateMeshTextures(ctypes.byref(mesh),ctypes.byref(textures)) == -1
+data, _ = fixture(strip_type=64)
+assert build(data) == 0 and mesh.batches[0].texture_index == 0xFFFFFFFF
+assert lib.recvxValidateMeshTextures(ctypes.byref(mesh),ctypes.byref(TextureSet())) == 0
+data, _ = fixture(objects=2)
+assert build(data) == 0 and mesh.batch_count == 1 and mesh.batches[0].vertex_count == 6
 lib.recvxMeshFree(ctypes.byref(mesh))
 lib.recvxMeshFree(ctypes.byref(mesh))
-print("PASS: MLB bounds, transforms, hierarchy, strip winding, attributes and ownership")
+print("PASS: MLB bounds, transforms, winding, UVs, texture batches and ownership")

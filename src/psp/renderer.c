@@ -39,7 +39,7 @@ static void reset_camera(const RecvxScene *scene, const RecvxRoomMesh *mesh)
     distance = radius * 3.0f;
 }
 
-int recvxRendererStart(const RecvxScene *scene, const RecvxRoomMesh *mesh)
+int recvxRendererStart(const RecvxScene *scene, const RecvxRoomMesh *mesh, const RecvxTextureSet *textures)
 {
     if (scene == NULL || scene->vertices == NULL || initialized)
         return -1;
@@ -69,18 +69,24 @@ int recvxRendererStart(const RecvxScene *scene, const RecvxRoomMesh *mesh)
     sceKernelDcacheWritebackRange(scene->vertices,
                                  scene->vertex_count * sizeof(*scene->vertices));
     if (mesh && mesh->vertices)
-        sceKernelDcacheWritebackRange(mesh->vertices, mesh->vertex_count * 3 * sizeof(*mesh->vertices));
+        sceKernelDcacheWritebackRange(mesh->vertices, mesh->storage_bytes);
+    if (textures)
+        for (uint32_t i = 0; i < textures->count; ++i) {
+            const RecvxTexture *texture = &textures->textures[i];
+            sceKernelDcacheWritebackRange(texture->pixels, texture->image_bytes + 1024);
+        }
     sceDisplayWaitVblankStartCB();
     sceGuDisplay(GU_TRUE);
     pspDebugScreenSetColorMode(GU_PSM_8888);
     pspDebugScreenEnableBackColor(0);
-    display_mode = mesh && mesh->vertices ? 1 : 3;
+    display_mode = mesh && mesh->vertices ? (textures && textures->count ? 4 : 1) : 3;
     reset_camera(scene, mesh);
     previous_time = sceKernelGetSystemTimeWide();
     return 0;
 }
 
-void recvxRendererFrame(const RecvxScene *scene, const RecvxRoomMesh *mesh, const char *room_name,
+void recvxRendererFrame(const RecvxScene *scene, const RecvxRoomMesh *mesh, const RecvxTextureSet *textures,
+                        const char *room_name,
                         const SceCtrlData *pad, unsigned int pressed)
 {
     uint64_t now = sceKernelGetSystemTimeWide();
@@ -91,7 +97,7 @@ void recvxRendererFrame(const RecvxScene *scene, const RecvxRoomMesh *mesh, cons
     previous_time = now;
 
     if ((pressed & PSP_CTRL_SELECT) && mesh && mesh->vertices) {
-        display_mode = (display_mode + 1) % 4;
+        display_mode = (display_mode + 1) % (textures && textures->count ? 5 : 4);
         reset_camera(scene, mesh);
     }
     if (pressed & PSP_CTRL_TRIANGLE)
@@ -137,6 +143,38 @@ void recvxRendererFrame(const RecvxScene *scene, const RecvxRoomMesh *mesh, cons
     sceGumLookAt(&eye, &center, &up);
     sceGumMatrixMode(GU_MODEL);
     sceGumLoadIdentity();
+    if (display_mode == 4 && mesh && textures) {
+        sceGuTexMode(GU_PSM_T8, 0, 0, 1);
+        sceGuClutMode(GU_PSM_8888, 0, 0xff, 0);
+        sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
+        sceGuTexScale(1, 1);
+        sceGuTexOffset(0, 0);
+        sceGuAlphaFunc(GU_GREATER, 0, 0xff);
+        sceGuEnable(GU_ALPHA_TEST);
+        for (uint32_t i = 0; i < mesh->batch_count; ++i) {
+            const RecvxMeshBatch *batch = &mesh->batches[i];
+            if (batch->texture_index == UINT32_MAX) {
+                sceGuDisable(GU_TEXTURE_2D);
+                sceGumDrawArray(GU_TRIANGLES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+                                (int)batch->vertex_count, NULL, mesh->vertices + batch->first_vertex);
+            } else {
+                const RecvxTexture *texture = &textures->textures[batch->texture_index];
+                sceGuEnable(GU_TEXTURE_2D);
+                sceGuClutLoad(32, texture->palette);
+                sceGuTexImage(0, texture->width, texture->height, texture->width, texture->pixels);
+                sceGuTexWrap(batch->flags & 1 ? GU_CLAMP : GU_REPEAT,
+                             batch->flags & 2 ? GU_CLAMP : GU_REPEAT);
+                sceGuTexFilter(batch->flags & 4 ? GU_LINEAR : GU_NEAREST,
+                               batch->flags & 4 ? GU_LINEAR : GU_NEAREST);
+                sceGuTexFlush();
+                sceGumDrawArray(GU_TRIANGLES,
+                                GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+                                (int)batch->vertex_count, NULL, mesh->textured_vertices + batch->first_vertex);
+            }
+        }
+        sceGuDisable(GU_ALPHA_TEST);
+        sceGuDisable(GU_TEXTURE_2D);
+    }
     if ((display_mode == 0 || display_mode == 2) && mesh && mesh->vertices)
         sceGumDrawArray(GU_TRIANGLES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
                         (int)mesh->vertex_count, NULL, mesh->vertices);
@@ -153,7 +191,7 @@ void recvxRendererFrame(const RecvxScene *scene, const RecvxRoomMesh *mesh, cons
         }
         sceGuEnable(GU_DEPTH_TEST);
     }
-    if (display_mode >= 2) {
+    if (display_mode == 2 || display_mode == 3) {
         if (display_mode == 2)
             sceGuDisable(GU_DEPTH_TEST);
         sceGumDrawArray(GU_LINES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
@@ -168,7 +206,7 @@ void recvxRendererFrame(const RecvxScene *scene, const RecvxRoomMesh *mesh, cons
     pspDebugScreenSetTextColor(0xffffffff);
     pspDebugScreenSetXY(1, 1);
     pspDebugScreenPrintf("%s   %s", room_name,
-                         display_mode == 3 ? "Spatial viewer" :
+                         display_mode == 4 ? "Room model textured" : display_mode == 3 ? "Spatial viewer" :
                          display_mode == 1 ? "Room model wireframe" : "Room model solid");
     pspDebugScreenSetXY(1, 2);
     if (display_mode != 3 && mesh)
@@ -180,7 +218,7 @@ void recvxRendererFrame(const RecvxScene *scene, const RecvxRoomMesh *mesh, cons
                          (unsigned int)scene->marker_count,
                          (unsigned int)(scene->vertex_count / 2));
     pspDebugScreenSetXY(1, 29);
-    pspDebugScreenPrintf("SELECT: solid / wire / model + bounds / spatial");
+    pspDebugScreenPrintf("SELECT: solid / wire / bounds / spatial / textured");
     pspDebugScreenSetXY(1, 31);
     pspDebugScreenPrintf("D-pad orbit  Stick pan  L/R zoom  TRIANGLE reset");
     pspDebugScreenSetXY(1, 32);

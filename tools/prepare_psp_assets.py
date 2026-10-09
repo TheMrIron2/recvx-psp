@@ -18,7 +18,7 @@ import zlib
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import mkiso
-from scene_api import Mesh, Scene, bind_scene
+from scene_api import Mesh, Scene, TextureSet, bind_scene
 
 
 class RoomInfo(ctypes.Structure):
@@ -120,6 +120,7 @@ def prepare(args):
             record["scene"] = {"bounds": scene.box_count, "markers": scene.marker_count,
                                "vertices": scene.vertex_count,
                                "center": list(scene.center), "radius": scene.radius}
+            scene_bytes = scene.vertex_count * 16
             library.recvxSceneFree(ctypes.byref(scene))
             mesh = Mesh()
             status = library.recvxBuildRoomMesh(output, written.value, ctypes.byref(mesh))
@@ -127,7 +128,17 @@ def prepare(args):
                 raise ValueError(f"{name}: invalid room model geometry (status {status})")
             record["mesh"] = {"objects": mesh.object_count, "models": mesh.model_count,
                               "triangles": mesh.triangle_count, "vertices": mesh.vertex_count,
-                              "center": list(mesh.center), "radius": mesh.radius}
+                              "center": list(mesh.center), "radius": mesh.radius,
+                              "batches": mesh.batch_count, "storage_bytes": mesh.storage_bytes}
+            textures = TextureSet()
+            status = library.recvxBuildRoomTextures(output, written.value, ctypes.byref(textures))
+            if status != 0 or library.recvxValidateMeshTextures(ctypes.byref(mesh), ctypes.byref(textures)) != 0:
+                library.recvxMeshFree(ctypes.byref(mesh))
+                library.recvxTexturesFree(ctypes.byref(textures))
+                raise ValueError(f"{name}: invalid room textures (status {status})")
+            record["textures"] = {"count": textures.count, "storage_bytes": textures.storage_bytes}
+            record["geometry_load_bytes"] = written.value + scene_bytes + mesh.storage_bytes + textures.storage_bytes
+            library.recvxTexturesFree(ctypes.byref(textures))
             library.recvxMeshFree(ctypes.byref(mesh))
             report["rooms"].append(record)
             if name == selected:
@@ -145,7 +156,8 @@ def prepare(args):
     (args.output / "room.rdx").write_bytes(packed)
     (args.output / "room.meta").write_bytes(metadata)
     (args.output / "asset-report.json").write_text(json.dumps(report, indent=2) + "\n")
-    print(f"PASS: {len(report['rooms'])}/{count} rooms decoded, inspected and built into scenes and model meshes" +
+    texture_count = sum(r["textures"]["count"] for r in report["rooms"])
+    print(f"PASS: {len(report['rooms'])}/{count} rooms decoded; scenes, meshes and {texture_count} textures validated" +
           ("; all match original C reference" if reference is not None else ""))
     print(f"Prepared {selected}: {record['packed_size']:,} -> {record['expanded_size']:,} bytes, "
           f"CRC32 {record['crc32']}")

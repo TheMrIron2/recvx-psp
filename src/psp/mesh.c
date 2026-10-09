@@ -8,6 +8,10 @@
 #define MAX_OBJECTS 512
 #define MAX_DEPTH 64
 #define MAX_TRIANGLES 16384
+#define MAX_BATCHES 512
+
+_Static_assert(sizeof(RecvxTexturedVertex) == 24, "GU textured vertex layout");
+_Static_assert(offsetof(RecvxTexturedVertex, x) == 12, "GU position follows UV and color");
 
 typedef struct Matrix { float value[3][4]; } Matrix;
 
@@ -16,6 +20,7 @@ typedef struct MeshReader {
     size_t size, body, objects;
     unsigned int object_count;
     unsigned char *visited;
+    uint32_t last_texture, last_flags;
     RecvxRoomMesh mesh;
     float minimum[3], maximum[3];
 } MeshReader;
@@ -151,7 +156,8 @@ static uint32_t face_color(uint32_t argb, const float points[3][3])
 
 static int triangle(MeshReader *reader, size_t vertices, unsigned int first,
                     unsigned int count, const unsigned int indices[3],
-                    const Matrix *matrix, uint32_t color)
+                    const float uv[3][2], const Matrix *matrix, uint32_t color,
+                    uint32_t texture, uint32_t flags)
 {
     float points[3][3];
     unsigned int i, axis;
@@ -160,6 +166,20 @@ static int triangle(MeshReader *reader, size_t vertices, unsigned int first,
     for (i = 0; i < 3; ++i)
         if (point(reader, vertices, first, count, indices[i], matrix, points[i]) != 0)
             return -1;
+    if (!reader->mesh.batch_count || texture != reader->last_texture || flags != reader->last_flags) {
+        if (reader->mesh.batch_count == MAX_BATCHES)
+            return -2;
+        if (reader->mesh.batches) {
+            RecvxMeshBatch *batch = &reader->mesh.batches[reader->mesh.batch_count];
+            batch->first_vertex = reader->mesh.vertex_count;
+            batch->vertex_count = 0;
+            batch->texture_index = texture;
+            batch->flags = flags;
+        }
+        ++reader->mesh.batch_count;
+        reader->last_texture = texture;
+        reader->last_flags = flags;
+    }
     if (reader->mesh.vertices != NULL) {
         uint32_t shaded = face_color(color, points);
         for (i = 0; i < 3; ++i) {
@@ -168,7 +188,15 @@ static int triangle(MeshReader *reader, size_t vertices, unsigned int first,
             vertex->x = points[i][0];
             vertex->y = points[i][1];
             vertex->z = points[i][2];
+            RecvxTexturedVertex *textured = &reader->mesh.textured_vertices[reader->mesh.vertex_count + i];
+            textured->u = uv[i][0];
+            textured->v = uv[i][1];
+            textured->color = shaded;
+            textured->x = points[i][0];
+            textured->y = points[i][1];
+            textured->z = points[i][2];
         }
+        reader->mesh.batches[reader->mesh.batch_count - 1].vertex_count += 3;
         for (i = 0; i < 3; ++i) {
             reader->mesh.wire_vertices[reader->mesh.triangle_count * 6 + i * 2] =
                 reader->mesh.vertices[reader->mesh.vertex_count + i];
@@ -191,6 +219,7 @@ static int model(MeshReader *reader, uint32_t offset, const Matrix *matrix)
     size_t header, vertex_chunk, polygon;
     unsigned int first, count;
     uint32_t color = 0xffb2b2b2;
+    uint32_t texture = UINT32_MAX, sampler = 4, flip = 0;
     int result;
     if (relative(reader, offset, 24, &header) != 0)
         return -1;
@@ -224,6 +253,10 @@ static int model(MeshReader *reader, uint32_t offset, const Matrix *matrix)
         if (type == 8) {
             if (!range(reader, polygon, 4))
                 return -1;
+            unsigned int parameters = u16(reader->bytes + polygon + 2);
+            texture = parameters & 0xfff;
+            sampler = ((reader->bytes[polygon + 1] >> 4) & 3) | ((parameters & 0xc000) ? 4 : 0);
+            flip = reader->bytes[polygon + 1] >> 6;
             polygon += 4;
             continue;
         }
@@ -253,6 +286,7 @@ static int model(MeshReader *reader, uint32_t offset, const Matrix *matrix)
             position += 2;
             while (strips-- != 0) {
                 unsigned int encoded, length, i, previous[2] = {0, 0};
+                float previous_uv[2][2] = {{0}};
                 if (end - position < 2)
                     return -1;
                 encoded = u16(reader->bytes + position);
@@ -262,29 +296,49 @@ static int model(MeshReader *reader, uint32_t offset, const Matrix *matrix)
                     return -1;
                 for (i = 0; i < length; ++i) {
                     unsigned int index;
+                    float current_uv[2] = {0, 0};
                     size_t bytes = stride + (i >= 2 ? attributes * 2 : 0);
                     if (bytes > end - position)
                         return -1;
                     index = u16(reader->bytes + position);
                     if (index < first || index - first >= count)
                         return -1;
+                    if (type != 64) {
+                        float divisor = type == 65 ? 255.0f : 1023.0f;
+                        current_uv[0] = u16(reader->bytes + position + 2) / divisor;
+                        current_uv[1] = u16(reader->bytes + position + 4) / divisor;
+                        if (flip & 1)
+                            current_uv[0] = 1 - current_uv[0];
+                        if (flip & 2)
+                            current_uv[1] = 1 - current_uv[1];
+                    }
                     if (i >= 2) {
                         unsigned int indices[3] = {previous[0], previous[1], index};
+                        float uv[3][2];
+                        memcpy(uv[0], previous_uv[0], sizeof(uv[0]));
+                        memcpy(uv[1], previous_uv[1], sizeof(uv[1]));
+                        memcpy(uv[2], current_uv, sizeof(uv[2]));
                         if (((i - 2) & 1) ^ ((encoded & 0x8000) != 0)) {
                             indices[0] = previous[1];
                             indices[1] = previous[0];
+                            memcpy(uv[0], previous_uv[1], sizeof(uv[0]));
+                            memcpy(uv[1], previous_uv[0], sizeof(uv[1]));
                         }
                         result = triangle(reader, vertex_chunk + 64, first, count,
-                                          indices, matrix, color);
+                                          indices, uv, matrix, color,
+                                          type == 64 ? UINT32_MAX : texture,
+                                          type == 64 ? 0 : sampler);
                         if (result != 0)
                             return result;
                     }
                     previous[0] = previous[1];
                     previous[1] = index;
+                    memcpy(previous_uv[0], previous_uv[1], sizeof(previous_uv[0]));
+                    memcpy(previous_uv[1], current_uv, sizeof(previous_uv[1]));
                     position += bytes;
                 }
             }
-            /* The exporter optionally pads strip chunks by one zero word. */
+            // The exporter optionally pads strips by one zero word
             if (end - position > 2 || (end > position && u16(reader->bytes + position) != 0))
                 return -1;
         }
@@ -390,18 +444,24 @@ int recvxBuildRoomMesh(const void *room, size_t size, RecvxRoomMesh *mesh)
             reader.maximum[axis] = -INFINITY;
         }
         reader.mesh.model_count = reader.mesh.vertex_count = reader.mesh.triangle_count = 0;
+        reader.mesh.batch_count = 0;
         result = tree(&reader, 0, &identity, 0);
         if (result != 0)
             goto done;
         if (pass == 0 && reader.mesh.vertex_count != 0) {
-            reader.mesh.storage = malloc(reader.mesh.vertex_count * 3 * sizeof(RecvxSceneVertex) + 15);
+            reader.mesh.storage_bytes = reader.mesh.vertex_count *
+                (3 * sizeof(RecvxSceneVertex) + sizeof(RecvxTexturedVertex)) +
+                reader.mesh.batch_count * sizeof(RecvxMeshBatch);
+            reader.mesh.storage = malloc(reader.mesh.storage_bytes + 63);
             if (reader.mesh.storage == NULL) {
                 result = -3;
                 goto done;
             }
             reader.mesh.vertices = (RecvxSceneVertex *)
-                (((uintptr_t)reader.mesh.storage + 15) & ~(uintptr_t)15);
+                (((uintptr_t)reader.mesh.storage + 63) & ~(uintptr_t)63);
             reader.mesh.wire_vertices = reader.mesh.vertices + reader.mesh.vertex_count;
+            reader.mesh.textured_vertices = (RecvxTexturedVertex *)(reader.mesh.vertices + reader.mesh.vertex_count * 3);
+            reader.mesh.batches = (RecvxMeshBatch *)(reader.mesh.textured_vertices + reader.mesh.vertex_count);
         }
     }
     if (reader.mesh.vertex_count) {
@@ -420,4 +480,16 @@ done:
     free(reader.visited);
     recvxMeshFree(&reader.mesh);
     return result;
+}
+
+int recvxValidateMeshTextures(const RecvxRoomMesh *mesh, const RecvxTextureSet *textures)
+{
+    uint32_t i;
+    if (!mesh || !textures || (textures->count && !textures->textures))
+        return -1;
+    for (i = 0; i < mesh->batch_count; ++i)
+        if (mesh->batches[i].texture_index != UINT32_MAX &&
+            mesh->batches[i].texture_index >= textures->count)
+            return -1;
+    return 0;
 }

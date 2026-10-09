@@ -9,12 +9,13 @@
 #include "psp/renderer.h"
 #include "psp/selftest.h"
 
-PSP_MODULE_INFO("RECVX PSP", PSP_MODULE_USER, 0, 4);
+PSP_MODULE_INFO("RECVX PSP", PSP_MODULE_USER, 0, 5);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);
-PSP_HEAP_SIZE_KB(16 * 1024);
+PSP_HEAP_SIZE_KB(18 * 1024);
 
 static RecvxScene scene;
 static RecvxRoomMesh mesh;
+static RecvxTextureSet textures;
 static char room_name[17];
 
 static int exit_callback(int arg1, int arg2, void *common)
@@ -34,6 +35,7 @@ static void show_checks(const char *data_directory)
 
     recvxSceneFree(&scene);
     recvxMeshFree(&mesh);
+    recvxTexturesFree(&textures);
 
     pspDebugScreenClear();
     pspDebugScreenPrintf("Resident Evil: Code Veronica X\n");
@@ -79,6 +81,17 @@ static void show_checks(const char *data_directory)
                                      (unsigned int)mesh.model_count, (unsigned int)mesh.triangle_count);
             else
                 pspDebugScreenPrintf("Model geometry: FAIL (%d)\n\n", result);
+            result = recvxBuildRoomTextures(room_data, info.expanded_size, &textures);
+            if (result == 0)
+                result = recvxValidateMeshTextures(&mesh, &textures);
+            if (result == 0)
+                pspDebugScreenPrintf("Room textures: READY (%u, %u KiB)\n\n",
+                                     (unsigned int)textures.count,
+                                     (unsigned int)(textures.storage_bytes / 1024));
+            else {
+                recvxTexturesFree(&textures);
+                pspDebugScreenPrintf("Room textures: FAIL (%d)\n\n", result);
+            }
         }
         free(room_data);
     }
@@ -126,7 +139,7 @@ int main(int argc, char **argv)
                     viewing = 0;
                     show_checks(data_directory);
                 } else if (scene.vertices != NULL) {
-                    if (recvxRendererStart(&scene, &mesh) == 0)
+                    if (recvxRendererStart(&scene, &mesh, &textures) == 0)
                         viewing = 1;
                     else
                         pspDebugScreenPrintf("Could not initialize the renderer.\n");
@@ -135,7 +148,7 @@ int main(int argc, char **argv)
             if (!viewing && (pressed & PSP_CTRL_CROSS))
                 show_checks(data_directory);
             if (viewing)
-                recvxRendererFrame(&scene, &mesh, room_name, &pad, pressed);
+                recvxRendererFrame(&scene, &mesh, &textures, room_name, &pad, pressed);
         }
         if (!viewing)
             sceKernelDelayThreadCB(16667);
@@ -146,6 +159,7 @@ int main(int argc, char **argv)
     recvxRendererStop();
     recvxSceneFree(&scene);
     recvxMeshFree(&mesh);
+    recvxTexturesFree(&textures);
     sceKernelExitGame();
     return 0;
 }
