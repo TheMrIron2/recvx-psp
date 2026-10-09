@@ -1,8 +1,6 @@
 #ifndef _EXPAND_H_
 #define _EXPAND_H_
 
-#include "types.h"
-
 // TODO: these structs need to be refactored, some of them are actually unions
 typedef struct BUF_QUEUE 
 {
@@ -47,6 +45,8 @@ typedef struct EXPAND_CTRL_BUF
     unsigned char* destination; // offset 0x18, size 0x4
     BUF_QUEUE que[2];           // offset 0x1C, size 0x10       
 } EXPAND_CTRL_BUF;
+
+extern EXPAND_CTRL_BUF ExpandCtrlBuf;
 
 void Init_Expand();
 int Expand(register char* s, register unsigned char* d);

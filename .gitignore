@@ -39,3 +39,4 @@ config/undefined_syms_auto.txt
 !iso/.gitkeep
 !include/recvx-decomp-ps2_sdk/.gitkeep
 !include/recvx-decomp-ps2_sdk303/.gitkeep
+*.iso
