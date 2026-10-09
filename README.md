@@ -1,3 +1,9 @@
+# RECVX-PSP
+
+A port of Resident Evil: Code Veronica X to the PSP based on the matching PS2 decomp.
+
+The original README continues below.
+
 # recvx-decomp
 
 [![Build Status]][actions] [![Code Progress]][progress] [![Data Progress]][progress] 
