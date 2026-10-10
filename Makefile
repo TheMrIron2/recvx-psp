@@ -14,7 +14,7 @@ PSP_FW_VERSION := 600
 PSP_LARGE_MEMORY := 0
 
 # Keep the source list explicit as systems are ported to PSP.
-PORT_SOURCES := src/psp/expand.c src/psp/selftest.c src/psp/room.c src/psp/room_check.c src/psp/scene.c src/psp/mesh.c src/psp/texture.c src/psp/player.c
+PORT_SOURCES := src/psp/expand.c src/psp/selftest.c src/psp/room.c src/psp/room_check.c src/psp/scene.c src/psp/mesh.c src/psp/texture.c src/psp/player.c src/psp/player_asset.c
 GAME_SOURCES := src/ps2/veronica/prog/flag.c src/ps2/veronica/prog/ps2_NaMem.c
 SOURCES := src/psp/main.c src/psp/renderer.c $(PORT_SOURCES) $(GAME_SOURCES)
 OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SOURCES))
@@ -55,7 +55,7 @@ HOST_CC ?= cc
 HOST_TEST := build/host/port-test
 HOST_SHARED := build/host/librecvx-test.so
 HOST_FLAGS := -std=c11 -O1 -g -Wall -Wextra -Werror -Iinclude -Iinclude/ps2/veronica/prog
-HOST_HEADERS := include/psp/expand.h include/psp/selftest.h include/psp/room.h include/psp/scene.h include/psp/mesh.h include/psp/texture.h include/psp/player.h \
+HOST_HEADERS := include/psp/expand.h include/psp/selftest.h include/psp/room.h include/psp/scene.h include/psp/mesh.h include/psp/texture.h include/psp/player.h include/psp/player_asset.h \
 	include/ps2/veronica/prog/expand.h include/ps2/veronica/prog/flag.h \
 	include/ps2/veronica/prog/ps2_NaMem.h include/ps2/veronica/prog/override_katana.h
 
@@ -94,7 +94,7 @@ assets: $(HOST_SHARED)
 
 player-assets:
 	python3 tools/extract_psp_player_assets.py --iso "$(ISO)" \
-		--output $(BUILD_DIR)/original-player
+		--output $(BUILD_DIR)/data/player-assets
 
 route-audit: $(HOST_SHARED)
 	python3 tools/inspect_psp_start_route.py --iso "$(ISO)" \

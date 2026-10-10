@@ -9,6 +9,7 @@
 #include "psp/room.h"
 #include "psp/renderer.h"
 #include "psp/selftest.h"
+#include "psp/player_asset.h"
 
 PSP_MODULE_INFO("RECVX PSP", PSP_MODULE_USER, 0, 6);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);
@@ -19,6 +20,9 @@ static RecvxRoomMesh mesh;
 static RecvxTextureSet textures;
 static RecvxPlayerRoom player_room;
 static RecvxPlayer player;
+static RecvxPlayerAssets player_assets;
+static unsigned char *player_model_data, *player_motion_data;
+static int player_asset_status = 1;
 static char room_name[RECVX_ROOM_NAME_SIZE];
 static char room_catalog[RECVX_MAX_ROOM_CATALOG][RECVX_ROOM_NAME_SIZE];
 static size_t room_catalog_count, current_room;
@@ -28,6 +32,63 @@ static int player_ready;
 static int clock_set_result;
 static int door_exit_lock;
 static char room_note[64];
+
+static int read_player_asset(const char *data_directory, const char *name,
+                             unsigned char **bytes, size_t *size)
+{
+    char path[512];
+    FILE *file;
+    long length;
+    if (snprintf(path, sizeof(path), "%s/player-assets/%s",
+                 data_directory, name) >= (int)sizeof(path))
+        return -1;
+    file = fopen(path, "rb");
+    if (file == NULL)
+        return 1;
+    if (fseek(file, 0, SEEK_END) != 0 || (length = ftell(file)) <= 0 ||
+        fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return -1;
+    }
+    *bytes = malloc((size_t)length);
+    if (*bytes == NULL) {
+        fclose(file);
+        return -1;
+    }
+    if (fread(*bytes, 1, (size_t)length, file) != (size_t)length) {
+        free(*bytes);
+        *bytes = NULL;
+        fclose(file);
+        return -1;
+    }
+    fclose(file);
+    *size = (size_t)length;
+    return 0;
+}
+
+static void load_player_assets(const char *data_directory)
+{
+    size_t model_size = 0, motion_size = 0;
+    int result = read_player_asset(data_directory,
+                                   "player_0_costume_0_models.bin",
+                                   &player_model_data, &model_size);
+    if (result == 0)
+        result = read_player_asset(data_directory,
+                                   "player_0_costume_0_motions.bin",
+                                   &player_motion_data, &motion_size);
+    if (result == 0)
+        result = recvxPlayerAssetsParse(player_model_data, model_size,
+                                       player_motion_data, motion_size,
+                                       &player_assets);
+    if (result != 0) {
+        free(player_model_data);
+        free(player_motion_data);
+        player_model_data = NULL;
+        player_motion_data = NULL;
+        memset(&player_assets, 0, sizeof(player_assets));
+    }
+    player_asset_status = result;
+}
 
 static int exit_callback(int arg1, int arg2, void *common)
 {
@@ -67,6 +128,17 @@ static void show_checks(const char *data_directory)
                          memory ? "FAIL" : "PASS", memory);
     pspDebugScreenPrintf("Portable asset decompression: %s (%d)\n\n",
                          expand ? "FAIL" : "PASS", expand);
+    if (player_asset_status == 0)
+        pspDebugScreenPrintf("Original actor data: %u models, %u skins, %u/%u motions\n\n",
+                             (unsigned int)player_assets.model_count,
+                             (unsigned int)player_assets.skin_count,
+                             (unsigned int)player_assets.populated_motions,
+                             (unsigned int)player_assets.motion_slots);
+    else if (player_asset_status == 1)
+        pspDebugScreenPrintf("Original actor data: copy player-assets/ from make player-assets\n\n");
+    else
+        pspDebugScreenPrintf("Original actor data: invalid records (%d)\n\n",
+                             player_asset_status);
     if (room_note[0] != '\0') {
         pspDebugScreenPrintf("%s\n\n", room_note);
         room_note[0] = '\0';
@@ -177,6 +249,7 @@ int main(int argc, char **argv)
     room_catalog_status = recvxLoadRoomCatalog(data_directory, room_catalog,
                                                 RECVX_MAX_ROOM_CATALOG,
                                                 &room_catalog_count);
+    load_player_assets(data_directory);
 
     pspDebugScreenInit();
     callback = sceKernelCreateCallback("Exit", exit_callback, NULL);
@@ -277,6 +350,8 @@ int main(int argc, char **argv)
     recvxMeshFree(&mesh);
     recvxTexturesFree(&textures);
     recvxPlayerRoomFree(&player_room);
+    free(player_model_data);
+    free(player_motion_data);
     sceKernelExitGame();
     return 0;
 }

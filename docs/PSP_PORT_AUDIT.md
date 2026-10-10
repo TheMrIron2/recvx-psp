@@ -55,8 +55,13 @@ extra, texture payloads, and default weapon by the entry formulas used in
 53,872 bytes of model records (including three `SKIN` records), 251,472 bytes
 of motion records (60 populated entries and 40 empty slots), 2,264 bytes of
 player extra data, and 986,820 bytes of texture payload. Default weapon entry
-20 is 267,536 bytes. The streams have been split and indexed, but the model,
-motion, and texture payloads are not yet decoded into PSP runtime objects.
+20 is 267,536 bytes. A portable PSP reader now indexes the split model and
+motion streams with bounds checks, preserving model indices, skin associations,
+model object counts, motion slots, and frame counts. The PSP status screen
+reports the parsed inventory when `player-assets/` is copied alongside the room
+data. The reader retains the model and motion source buffers for future
+rendering work; the app does not yet build actor geometry, apply skin weights,
+sample motion keys, or load the player texture tail.
 
 [The Makefile](../Makefile) links only `flag.c` and `ps2_NaMem.c` from the original game.
 The original game directory contains 154 C files and about 248,000 lines, excluding CRI and SDK sources. This measures integration scope, not remaining development effort.
