@@ -1,5 +1,6 @@
 // PSP GU renderer for room geometry
 #include <math.h>
+#include <limits.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -8,6 +9,7 @@
 #include <pspgu.h>
 #include <pspgum.h>
 #include <pspkernel.h>
+#include <pspmodulemgr.h>
 #include <pspthreadman.h>
 #include <pspsysmem.h>
 
@@ -24,12 +26,19 @@ static ScePspFVector3 center, focus;
 static float yaw, pitch, distance, radius;
 static uint64_t previous_time;
 static uint64_t frame_elapsed_us, cpu_submit_us, ge_wait_us;
+static size_t command_list_bytes, command_list_high_water;
+static size_t module_text_bytes, module_data_bytes, module_bss_bytes;
+static size_t player_source_bytes;
 static int initialized;
 static int display_mode;
 static uint32_t camera_cut;
 static uint32_t camera_variant;
 static int player_mode;
 static const RecvxRoomMesh *player_model_mesh;
+static RecvxRoomMesh *player_actor_mesh;
+static const RecvxPlayerAssets *player_actor_assets;
+static unsigned int player_animation_slot;
+static float player_animation_frame;
 static int fixed_camera_active;
 static ScePspFVector3 fixed_eye_offset, fixed_camera_forward, fixed_camera_up;
 static float fixed_camera_fov;
@@ -42,6 +51,31 @@ typedef struct PlayerVertex {
 static PlayerVertex player_vertices[256] __attribute__((aligned(16)));
 static unsigned int player_vertex_count;
 static float player_sine, player_cosine;
+
+static void update_command_list_usage(void)
+{
+    int used = sceGuCheckList();
+    if (used < 0)
+        return;
+    command_list_bytes = (size_t)used + 8;
+    if (command_list_bytes > command_list_high_water)
+        command_list_high_water = command_list_bytes;
+}
+
+static void read_module_footprint(void)
+{
+    SceKernelModuleInfo info;
+    SceUID module_id = sceKernelGetModuleIdByAddress(command_list);
+    if (module_id < 0)
+        return;
+    memset(&info, 0, sizeof(info));
+    info.size = sizeof(info);
+    if (sceKernelQueryModuleInfo(module_id, &info) == 0) {
+        module_text_bytes = info.text_size;
+        module_data_bytes = info.data_size;
+        module_bss_bytes = info.bss_size;
+    }
+}
 
 static int set_wireframe(RecvxRoomMesh *mesh, int enabled)
 {
@@ -70,8 +104,12 @@ static void draw_memory_hud(const RecvxScene *scene, const RecvxRoomMesh *mesh,
         (size_t)player_room->wall_count * sizeof(*player_room->walls) : 0;
     size_t door_bytes = player_room != NULL ?
         (size_t)player_room->door_count * sizeof(*player_room->doors) : 0;
-    size_t wire_bytes = mesh != NULL && mesh->wire_vertices != NULL ?
-        (size_t)mesh->triangle_count * 6 * sizeof(*mesh->wire_vertices) : 0;
+    size_t wire_capacity = mesh != NULL ?
+        (size_t)mesh->triangle_count * 6 * sizeof(RecvxSceneVertex) : 0;
+    size_t wire_bytes = mesh != NULL && mesh->wire_vertices != NULL ? wire_capacity : 0;
+    size_t wire_saved = wire_capacity - wire_bytes;
+    size_t player_mesh_bytes = player_model_mesh != NULL ?
+        player_model_mesh->storage_bytes : 0;
 
     pspDebugScreenSetXY(1, 4);
     pspDebugScreenPrintf("Heap %uK  Largest %uK  Stack %uK",
@@ -79,14 +117,19 @@ static void draw_memory_hud(const RecvxScene *scene, const RecvxRoomMesh *mesh,
                          (unsigned int)(largest_block / 1024),
                          stack_free > 0 ? (unsigned int)stack_free / 1024 : 0);
     pspDebugScreenSetXY(1, 5);
-    pspDebugScreenPrintf("Mesh %uK Tex %uK Scene %uK Wall %uK Door %uK Wire %uK",
+    pspDebugScreenPrintf("Scene %uK Mesh %uK Tex %uK Wire %uK Avoid %uK",
+                         (unsigned int)(scene_bytes / 1024),
                          (unsigned int)(mesh_bytes / 1024),
                          (unsigned int)(texture_bytes / 1024),
-                         (unsigned int)(scene_bytes / 1024),
-                         (unsigned int)(wall_bytes / 1024),
-                         (unsigned int)(door_bytes / 1024),
-                         (unsigned int)(wire_bytes / 1024));
+                         (unsigned int)(wire_bytes / 1024),
+                         (unsigned int)(wire_saved / 1024));
     pspDebugScreenSetXY(1, 6);
+    pspDebugScreenPrintf("Player data %uK mesh %uK walls %uK doors %uK",
+                         (unsigned int)(player_source_bytes / 1024),
+                         (unsigned int)(player_mesh_bytes / 1024),
+                         (unsigned int)(wall_bytes / 1024),
+                         (unsigned int)(door_bytes / 1024));
+    pspDebugScreenSetXY(1, 7);
     pspDebugScreenPrintf("Frame %u.%02u CPU+submit %u.%02u GE wait %u.%02u ms",
                          (unsigned int)(frame_elapsed_us / 1000),
                          (unsigned int)((frame_elapsed_us / 10) % 100),
@@ -94,6 +137,14 @@ static void draw_memory_hud(const RecvxScene *scene, const RecvxRoomMesh *mesh,
                          (unsigned int)((cpu_submit_us / 10) % 100),
                          (unsigned int)(ge_wait_us / 1000),
                          (unsigned int)((ge_wait_us / 10) % 100));
+    pspDebugScreenSetXY(1, 8);
+    pspDebugScreenPrintf("ELF T/D/B %u/%u/%uK  GU %u/%uK max %uK",
+                         (unsigned int)(module_text_bytes / 1024),
+                         (unsigned int)(module_data_bytes / 1024),
+                         (unsigned int)(module_bss_bytes / 1024),
+                         (unsigned int)(command_list_bytes / 1024),
+                         (unsigned int)(sizeof(command_list) / 1024),
+                         (unsigned int)(command_list_high_water / 1024));
 }
 
 static int object_hidden(const RecvxRoomMesh *mesh, uint32_t object_index)
@@ -446,13 +497,18 @@ static void reset_camera(const RecvxScene *scene, const RecvxRoomMesh *mesh,
 
 int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
                        const RecvxTextureSet *textures, const RecvxPlayer *player,
-                       const RecvxRoomMesh *actor_mesh)
+                       const RecvxPlayerAssets *actor_assets,
+                       RecvxRoomMesh *actor_mesh,
+                       size_t actor_source_bytes)
 {
     if (scene == NULL || scene->vertices == NULL || initialized)
         return -1;
     if (sceGuInit() < 0)
         return -1;
     initialized = 1;
+    read_module_footprint();
+    command_list_bytes = command_list_high_water = 0;
+    player_source_bytes = actor_source_bytes;
     draw_buffer = NULL;
     sceGuStart(GU_DIRECT, command_list);
     sceGuDrawBuffer(GU_PSM_8888, draw_buffer, BUFFER_WIDTH);
@@ -471,6 +527,7 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
     sceGuDisable(GU_TEXTURE_2D);
     sceGuDisable(GU_LIGHTING);
     sceGuShadeModel(GU_FLAT);
+    update_command_list_usage();
     sceGuFinish();
     sceGuSync(GU_SYNC_FINISH, GU_SYNC_WHAT_DONE);
     sceKernelDcacheWritebackRange(scene->vertices,
@@ -488,11 +545,13 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
     sceGuDisplay(GU_TRUE);
     pspDebugScreenSetColorMode(GU_PSM_8888);
     pspDebugScreenEnableBackColor(0);
-    display_mode = mesh && mesh->vertices ? (textures && textures->count ? 4 : 1) : 3;
-    if (display_mode == 1 && set_wireframe(mesh, 1) != 0)
-        display_mode = 0;
+    display_mode = mesh && mesh->vertices ? (textures && textures->count ? 4 : 0) : 3;
     player_mode = player != NULL;
     player_model_mesh = actor_mesh;
+    player_actor_mesh = actor_mesh;
+    player_actor_assets = actor_assets;
+    player_animation_slot = UINT_MAX;
+    player_animation_frame = 0.0f;
     camera_cut = 0;
     camera_variant = 0;
     if (player_mode)
@@ -558,6 +617,27 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
         else if (pad->Buttons & PSP_CTRL_RIGHT)
             turn = 1.0f;
         recvxPlayerUpdate(player, player_room, forward, turn, dt);
+        if (player_actor_assets != NULL && player_actor_mesh != NULL &&
+            player_actor_assets->model_count != 0) {
+            unsigned int motion_slot = forward != 0.0f ? 39 : 42;
+            if (motion_slot < player_actor_assets->motion_count &&
+                player_actor_assets->motions[motion_slot].present) {
+                const RecvxPlayerMotionAsset *motion =
+                    &player_actor_assets->motions[motion_slot];
+                if (player_animation_slot != motion_slot) {
+                    player_animation_slot = motion_slot;
+                    player_animation_frame = 0.0f;
+                } else {
+                    player_animation_frame += dt * 30.0f;
+                }
+                if (player_animation_frame >= motion->frame_count)
+                    player_animation_frame = fmodf(player_animation_frame,
+                                                   (float)motion->frame_count);
+                recvxPosePlayerMesh(&player_actor_assets->models[0], motion,
+                                    (uint32_t)player_animation_frame,
+                                    player_actor_mesh);
+            }
+        }
         if (update_player_culling(mesh, player, (int)camera_cut) > 0) {
             lighting_changed = 1;
         }
@@ -715,12 +795,16 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
         sceGuEnable(GU_DEPTH_TEST);
     }
     if (player_mode && player != NULL) {
-        if (player_model_mesh != NULL && player_model_mesh->vertices != NULL)
+        if (player_model_mesh != NULL && player_model_mesh->vertices != NULL) {
+            if (player_actor_mesh != NULL)
+                sceKernelDcacheWritebackRange(player_actor_mesh->vertices,
+                                              player_actor_mesh->storage_bytes);
             draw_player_model(player, player_model_mesh);
-        else
+        } else
             draw_player(player);
     }
-    sceGuFinish();
+        update_command_list_usage();
+        sceGuFinish();
     {
         uint64_t submit_done = sceKernelGetSystemTimeWide();
         sceGuSync(GU_SYNC_FINISH, GU_SYNC_WHAT_DONE);
@@ -747,13 +831,17 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
                          (unsigned int)(scene->vertex_count / 2));
     pspDebugScreenSetXY(1, 3);
     if (player_mode && player != NULL && mesh != NULL && mesh->cut_count != 0)
-        pspDebugScreenPrintf("Cut %u/%u  Cam %c  Player %.1f,%.1f F%d %s",
+        pspDebugScreenPrintf("Cut %u/%u  Cam %c  Player %.1f,%.1f F%d %s M%u:%02u",
                              (unsigned int)(camera_cut + 1), (unsigned int)mesh->cut_count,
                              camera_variant ? 'B' : 'A', player->x, player->z,
-                             (int)player->floor, player->blocked ? "Wall" : "");
+                             (int)player->floor, player->blocked ? "Wall" : "",
+                             player_animation_slot == UINT_MAX ? 0 : player_animation_slot,
+                             (unsigned int)player_animation_frame);
     else if (player_mode && player != NULL)
-        pspDebugScreenPrintf("Player %.1f,%.1f F%d %s", player->x, player->z,
-                             (int)player->floor, player->blocked ? "Wall" : "");
+        pspDebugScreenPrintf("Player %.1f,%.1f F%d %s M%u:%02u", player->x, player->z,
+                             (int)player->floor, player->blocked ? "Wall" : "",
+                             player_animation_slot == UINT_MAX ? 0 : player_animation_slot,
+                             (unsigned int)player_animation_frame);
     else if (mesh && mesh->cut_count)
         pspDebugScreenPrintf("Cut %u/%u  Camera %c  Hidden objects %u",
                              (unsigned int)(camera_cut + 1), (unsigned int)mesh->cut_count,
@@ -783,6 +871,10 @@ void recvxRendererStop(void)
     initialized = 0;
     player_mode = 0;
     player_model_mesh = NULL;
+    player_actor_mesh = NULL;
+    player_actor_assets = NULL;
+    player_animation_slot = UINT_MAX;
+    player_animation_frame = 0.0f;
     pspDebugScreenSetOffset(0);
     pspDebugScreenEnableBackColor(1);
     pspDebugScreenInit();

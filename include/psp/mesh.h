@@ -80,6 +80,9 @@ typedef struct RecvxRoomMesh {
 
 int recvxBuildRoomMesh(const void *room, size_t size, RecvxRoomMesh *mesh);
 int recvxBuildPlayerMesh(const RecvxPlayerModelAsset *model, RecvxRoomMesh *mesh);
+int recvxPosePlayerMesh(const RecvxPlayerModelAsset *model,
+                       const RecvxPlayerMotionAsset *motion, uint32_t frame,
+                       RecvxRoomMesh *mesh);
 int recvxMeshSetWireframe(RecvxRoomMesh *mesh, int enabled);
 int recvxApplyRoomLighting(RecvxRoomMesh *mesh, uint32_t cut, uint32_t camera);
 int recvxRoomCutForPosition(const RecvxRoomMesh *mesh, float x, float z,

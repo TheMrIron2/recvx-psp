@@ -25,6 +25,12 @@ typedef struct MeshReader {
     size_t size, body, objects;
     unsigned int object_count;
     unsigned char *visited;
+    uint32_t vertex_limit, batch_limit, motion_frame;
+    const RecvxPlayerMotionAsset *motion;
+    const RecvxPlayerModelAsset *player_model;
+    const uint8_t *skin_weights;
+    uint32_t skin_weight_count;
+    const Matrix *bind_matrices, *skin_parent_matrices, *skin_matrices;
     uint32_t current_object, last_object, last_texture, last_flags, last_blend_state;
     RecvxRoomMesh mesh;
     float minimum[3], maximum[3];
@@ -80,10 +86,47 @@ static void rotate(Matrix *matrix, unsigned int axis, unsigned int angle)
     }
 }
 
-static int object_matrix(const unsigned char *object, uint32_t flags,
+static int motion_angles(const MeshReader *reader, unsigned int object_index,
+                         unsigned int angles[3])
+{
+    const RecvxPlayerMotionAsset *motion = reader->motion;
+    uint32_t base, reference, frame;
+    size_t object_data, key_data;
+    if (motion == NULL || object_index >= motion->object_count)
+        return 0;
+    if (motion->data == NULL || motion->size < 16 ||
+        motion->frame_count == 0 || motion->object_count != reader->object_count)
+        return -1;
+    base = (uint32_t)u16(motion->data + 4);
+    if (base > motion->size || motion->data_offset > motion->size - base ||
+        (size_t)object_index * 8 > motion->size - base - motion->data_offset ||
+        motion->size - base - motion->data_offset - object_index * 8 < 8)
+        return -1;
+    object_data = (size_t)base + motion->data_offset + object_index * 8;
+    reference = u32(motion->data + object_data + 4);
+    if (reference == UINT32_MAX)
+        return 0;
+    frame = reader->motion_frame % motion->frame_count;
+    if (reference > motion->size - base ||
+        (size_t)frame > (motion->size - base - reference) / 6 ||
+        motion->size - base - reference - (size_t)frame * 6 < 6)
+        return -1;
+    key_data = (size_t)base + reference + (size_t)frame * 6;
+    angles[0] = u16(motion->data + key_data);
+    angles[1] = u16(motion->data + key_data + 2);
+    angles[2] = u16(motion->data + key_data + 4);
+    return 1;
+}
+
+static int object_matrix(const MeshReader *reader, const unsigned char *object,
+                         unsigned int object_index, uint32_t flags,
                          const Matrix *parent, Matrix *matrix)
 {
     unsigned int row, axis;
+    unsigned int angles[3];
+    int has_motion_angles = motion_angles(reader, object_index, angles);
+    if (has_motion_angles < 0)
+        return -1;
     *matrix = *parent;
     if (!(flags & 1)) {
         float position[3];
@@ -96,11 +139,13 @@ static int object_matrix(const unsigned char *object, uint32_t flags,
             for (axis = 0; axis < 3; ++axis)
                 matrix->value[row][3] += matrix->value[row][axis] * position[axis];
     }
-    if (!(flags & 2)) {
+    if (has_motion_angles || !(flags & 2)) {
         static const unsigned int orders[2][3] = {{2, 1, 0}, {1, 0, 2}};
         for (axis = 0; axis < 3; ++axis) {
             unsigned int rotation_axis = orders[(flags & 0x20) != 0][axis];
-            rotate(matrix, rotation_axis, u32(object + 20 + rotation_axis * 4));
+            uint32_t angle = has_motion_angles ? angles[rotation_axis] :
+                             u32(object + 20 + rotation_axis * 4);
+            rotate(matrix, rotation_axis, angle);
         }
     }
     if (!(flags & 4))
@@ -123,6 +168,12 @@ static int point(const MeshReader *reader, size_t vertex_data, unsigned int firs
 {
     float local[3];
     unsigned int axis, row;
+    int skinned = reader->skin_parent_matrices != NULL &&
+                  reader->skin_matrices != NULL && reader->skin_weights != NULL &&
+                  reader->player_model != NULL &&
+                  reader->current_object < reader->object_count &&
+                  reader->current_object < reader->player_model->object_count &&
+                  index >= first && index - first < reader->skin_weight_count;
     if (index < first || index - first >= count)
         return -1;
     for (axis = 0; axis < 3; ++axis) {
@@ -130,12 +181,41 @@ static int point(const MeshReader *reader, size_t vertex_data, unsigned int firs
         if (!coordinate(local[axis]))
             return -1;
     }
-    for (row = 0; row < 3; ++row) {
-        result[row] = matrix->value[row][3];
-        for (axis = 0; axis < 3; ++axis)
-            result[row] += matrix->value[row][axis] * local[axis];
-        if (!coordinate(result[row]))
+    if (skinned) {
+        uint32_t influence = u32(reader->skin_weights + (index - first) * 4);
+        unsigned int bone = influence >> 24;
+        unsigned int weight_code = (influence >> 16) & 0xff;
+        float weight = (weight_code + 1) * 0.1f;
+        float parent_skinned[3], skinned[3];
+        if (bone >= reader->object_count || weight_code >= 10)
             return -1;
+        for (axis = 0; axis < 3; ++axis)
+            local[axis] += reader->bind_matrices[reader->current_object].value[axis][3] -
+                           reader->bind_matrices[bone].value[axis][3];
+        for (axis = 0; axis < 3; ++axis)
+            if (!coordinate(local[axis]))
+                return -1;
+        for (row = 0; row < 3; ++row) {
+            parent_skinned[row] = reader->skin_parent_matrices[bone].value[row][3];
+            skinned[row] = reader->skin_matrices[bone].value[row][3];
+            for (axis = 0; axis < 3; ++axis) {
+                parent_skinned[row] +=
+                    reader->skin_parent_matrices[bone].value[row][axis] * local[axis];
+                skinned[row] += reader->skin_matrices[bone].value[row][axis] * local[axis];
+            }
+            result[row] = parent_skinned[row] +
+                          (skinned[row] - parent_skinned[row]) * weight;
+            if (!coordinate(result[row]))
+                return -1;
+        }
+    } else {
+        for (row = 0; row < 3; ++row) {
+            result[row] = matrix->value[row][3];
+            for (axis = 0; axis < 3; ++axis)
+                result[row] += matrix->value[row][axis] * local[axis];
+            if (!coordinate(result[row]))
+                return -1;
+        }
     }
     return 0;
 }
@@ -189,6 +269,9 @@ static int triangle(MeshReader *reader, size_t vertices, unsigned int first,
         object_index != reader->last_object || blend_state != reader->last_blend_state) {
         if (reader->mesh.batch_count == MAX_BATCHES)
             return -2;
+        if (reader->mesh.vertices != NULL && reader->batch_limit != 0 &&
+            reader->mesh.batch_count >= reader->batch_limit)
+            return -2;
         if (reader->mesh.batches) {
             RecvxMeshBatch *batch = &reader->mesh.batches[reader->mesh.batch_count];
             batch->first_vertex = reader->mesh.vertex_count;
@@ -206,6 +289,10 @@ static int triangle(MeshReader *reader, size_t vertices, unsigned int first,
     }
     if (reader->mesh.vertices != NULL) {
         uint32_t base_color = diffuse_color(color);
+        if (reader->vertex_limit != 0 &&
+            (reader->vertex_limit < 3 ||
+             reader->mesh.vertex_count > reader->vertex_limit - 3))
+            return -2;
         for (i = 0; i < 3; ++i) {
             RecvxMeshVertex *vertex = &reader->mesh.vertices[reader->mesh.vertex_count + i];
             vertex->u = uv[i][0];
@@ -257,6 +344,18 @@ static int model(MeshReader *reader, uint32_t offset, const Matrix *matrix)
         u16(reader->bytes + vertex_chunk + 2) * 4u + 4u != 64u + count * 32u ||
         !range(reader, vertex_chunk, 64u + count * 32u))
         return -1;
+    reader->skin_weights = NULL;
+    reader->skin_weight_count = 0;
+    if (reader->player_model != NULL && reader->skin_matrices != NULL) {
+        int skin_result = recvxPlayerSkinWeights(reader->player_model,
+                                                 reader->current_object,
+                                                 reader->mesh.model_count,
+                                                 &reader->skin_weights,
+                                                 &reader->skin_weight_count);
+        if (skin_result < 0 || (skin_result > 0 &&
+            reader->skin_weight_count != count))
+            return -1;
+    }
     ++reader->mesh.model_count;
     for (;;) {
         unsigned int type, words;
@@ -384,6 +483,72 @@ static int object_index(const MeshReader *reader, uint32_t offset, unsigned int 
     return *index < reader->object_count ? 0 : -1;
 }
 
+static int object_matrix_without_rotation(const unsigned char *object,
+                                          uint32_t flags, const Matrix *parent,
+                                          Matrix *matrix)
+{
+    unsigned int row, axis;
+    *matrix = *parent;
+    if (!(flags & 1)) {
+        float position[3];
+        for (axis = 0; axis < 3; ++axis) {
+            position[axis] = f32(object + 8 + axis * 4);
+            if (!coordinate(position[axis]))
+                return -1;
+        }
+        for (row = 0; row < 3; ++row)
+            for (axis = 0; axis < 3; ++axis)
+                matrix->value[row][3] += matrix->value[row][axis] * position[axis];
+    }
+    if (!(flags & 4))
+        for (axis = 0; axis < 3; ++axis) {
+            float scale = f32(object + 32 + axis * 4);
+            if (!coordinate(scale))
+                return -1;
+            for (row = 0; row < 3; ++row)
+                matrix->value[row][axis] *= scale;
+        }
+    return 0;
+}
+
+static int hierarchy_matrices(MeshReader *reader, unsigned int index,
+                              const Matrix *parent, unsigned int depth,
+                              Matrix *matrices, Matrix *parent_matrices)
+{
+    if (depth >= MAX_DEPTH)
+        return -2;
+    for (;;) {
+        const unsigned char *object = reader->bytes + reader->objects + index * 52;
+        uint32_t flags = u32(object), child = u32(object + 44);
+        uint32_t sibling = u32(object + 48);
+        Matrix matrix;
+        unsigned int next;
+        int result;
+        if (reader->visited[index])
+            return -1;
+        reader->visited[index] = 1;
+        if (object_matrix(reader, object, index, flags, parent, &matrix) != 0)
+            return -1;
+        matrices[index] = matrix;
+        if (parent_matrices != NULL &&
+            object_matrix_without_rotation(object, flags, parent,
+                                           &parent_matrices[index]) != 0)
+            return -1;
+        if (!(flags & 16) && child != UINT32_MAX) {
+            if (object_index(reader, child, &next) != 0)
+                return -1;
+            result = hierarchy_matrices(reader, next, &matrix, depth + 1,
+                                        matrices, parent_matrices);
+            if (result != 0)
+                return result;
+        }
+        if (sibling == UINT32_MAX)
+            return 0;
+        if (object_index(reader, sibling, &index) != 0)
+            return -1;
+    }
+}
+
 static int tree(MeshReader *reader, unsigned int index, const Matrix *parent, unsigned int depth)
 {
     if (depth >= MAX_DEPTH)
@@ -398,7 +563,7 @@ static int tree(MeshReader *reader, unsigned int index, const Matrix *parent, un
         if (reader->visited[index])
             return -1;
         reader->visited[index] = 1;
-        if (object_matrix(object, flags, parent, &matrix) != 0)
+        if (object_matrix(reader, object, index, flags, parent, &matrix) != 0)
             return -1;
         if (!(flags & 8) && model_offset != UINT32_MAX) {
             reader->current_object = index;
@@ -486,6 +651,8 @@ int recvxBuildPlayerMesh(const RecvxPlayerModelAsset *model, RecvxRoomMesh *mesh
             reader.mesh.batches = (RecvxMeshBatch *)
                 ((unsigned char *)reader.mesh.material_colors +
                  reader.mesh.vertex_count * sizeof(*reader.mesh.material_colors));
+            reader.vertex_limit = reader.mesh.vertex_count;
+            reader.batch_limit = reader.mesh.batch_count;
         }
     }
     if (reader.mesh.vertex_count != 0) {
@@ -504,6 +671,86 @@ int recvxBuildPlayerMesh(const RecvxPlayerModelAsset *model, RecvxRoomMesh *mesh
 done:
     free(reader.visited);
     recvxMeshFree(&reader.mesh);
+    return result;
+}
+
+int recvxPosePlayerMesh(const RecvxPlayerModelAsset *model,
+                        const RecvxPlayerMotionAsset *motion, uint32_t frame,
+                        RecvxRoomMesh *mesh)
+{
+    MeshReader reader = {0};
+    unsigned char visited[MAX_OBJECTS];
+    Matrix identity = {{{1,0,0,0}, {0,1,0,0}, {0,0,1,0}}};
+    size_t object_bytes;
+    unsigned int axis;
+    int result;
+    if (model == NULL || motion == NULL || mesh == NULL || model->data == NULL ||
+        !model->chunk_model || model->object_count == 0 ||
+        model->object_count > MAX_OBJECTS || model->header_offset > model->size ||
+        mesh->storage == NULL || mesh->vertices == NULL || motion->present == 0 ||
+        motion->object_count != model->object_count || motion->frame_count == 0 ||
+        motion->size == 0)
+        return -1;
+    Matrix bind_matrices[model->object_count];
+    Matrix posed_matrices[model->object_count];
+    Matrix posed_parent_matrices[model->object_count];
+    Matrix skin_parent_matrices[model->object_count];
+    Matrix skin_matrices[model->object_count];
+    reader.bytes = model->data;
+    reader.size = model->size;
+    reader.body = model->header_offset;
+    reader.object_count = model->object_count;
+    object_bytes = (size_t)reader.object_count * 52;
+    if (relative(&reader, model->object_offset, object_bytes, &reader.objects) != 0)
+        return -1;
+    reader.visited = visited;
+    memset(visited, 0, reader.object_count);
+    reader.motion = motion;
+    reader.motion_frame = frame % motion->frame_count;
+    reader.player_model = model;
+    reader.vertex_limit = mesh->vertex_count;
+    reader.batch_limit = mesh->batch_count;
+    {
+        unsigned int bone;
+        reader.bind_matrices = bind_matrices;
+        memset(visited, 0, reader.object_count);
+        reader.motion = NULL;
+        result = hierarchy_matrices(&reader, 0, &identity, 0, bind_matrices,
+                                    NULL);
+        if (result != 0)
+            return result;
+        memset(visited, 0, reader.object_count);
+        reader.motion = motion;
+        result = hierarchy_matrices(&reader, 0, &identity, 0, posed_matrices,
+                                    posed_parent_matrices);
+        if (result != 0)
+            return result;
+        for (bone = 0; bone < reader.object_count; ++bone) {
+            skin_parent_matrices[bone] = posed_parent_matrices[bone];
+            skin_matrices[bone] = posed_matrices[bone];
+        }
+        reader.skin_parent_matrices = skin_parent_matrices;
+        reader.skin_matrices = skin_matrices;
+    }
+    memset(visited, 0, reader.object_count);
+    reader.mesh = *mesh;
+    reader.mesh.model_count = 0;
+    reader.mesh.vertex_count = 0;
+    reader.mesh.triangle_count = 0;
+    reader.mesh.batch_count = 0;
+    for (axis = 0; axis < 3; ++axis) {
+        reader.minimum[axis] = INFINITY;
+        reader.maximum[axis] = -INFINITY;
+    }
+    result = tree(&reader, 0, &identity, 0);
+    if (result == 0 &&
+        (reader.mesh.vertex_count != mesh->vertex_count ||
+         reader.mesh.triangle_count != mesh->triangle_count ||
+         reader.mesh.batch_count != mesh->batch_count ||
+         reader.mesh.model_count != mesh->model_count))
+        result = -1;
+    if (result == 0)
+        *mesh = reader.mesh;
     return result;
 }
 

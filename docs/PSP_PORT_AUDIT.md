@@ -62,14 +62,19 @@ reports the parsed inventory when `player-assets/` is copied alongside the room
 data. The reader retains the model and motion source buffers for future
 rendering work. The first Claire chunk model now goes through the room mesh
 decoder's hierarchy and triangle path and preserves its native room-unit scale
-for an untextured static preview in walking mode. The model keeps its facing
-while reverse input moves it backward. It does not apply skin weights, sample
-motion keys, or load the player texture tail, so this is not an animated or
-faithful Claire render yet.
+for an untextured preview in walking mode. The model keeps its facing while
+reverse input moves it backward. The PSP renderer now samples the original
+normal idle and walk motion slots (42 and 39) for per-object rotation keys.
+It retains model-local translations so the provisional controller owns root
+movement. Motion key arrays are extent-checked, and posing reuses the existing
+mesh storage without frame-time allocation. The extracted skin table blends
+parent and bone transforms for the single body mesh; this approximation needs
+pose comparison against the original. The player texture tail is still not
+rendered.
 
 [The Makefile](../Makefile) links only `flag.c` and `ps2_NaMem.c` from the original game.
 The original game directory contains 154 C files and about 248,000 lines, excluding CRI and SDK sources. This measures integration scope, not remaining development effort.
-The current PSP ELF has 192,732 bytes of text, 4,912 bytes of data, and 108,248 bytes of BSS; the complete game will have a substantially different executable footprint.
+The current PSP ELF has 211,244 bytes of text, 4,912 bytes of data, and 115,160 bytes of BSS; the complete game will have a substantially different executable footprint.
 
 ## Architectural findings
 
@@ -195,27 +200,42 @@ Fresh static-room measurements:
 | Largest static triangle count | `RM_2030` | 13,639 |
 | Largest static batch count | `RM_0050` | 219 |
 
+The user supplied a real-PSP walking-mode capture for `RM_0030` before motion
+playback was added. It reports 112 models, 8,732 room triangles, 5,553 KiB
+free heap, a 5,297 KiB largest block, 251 KiB stack, 19 KiB scene, 1,027 KiB
+mesh, 4,329 KiB textures, 818 KiB of avoided wireframe storage, 298 KiB
+player model/motion source, and 163 KiB player mesh. Frame time is 16.68 ms,
+CPU plus submission is 0.33 ms, GE wait is 0.01 ms, and the GU list peaks at
+8 KiB of 64 KiB.
+This is a user-reported screen capture, not a repeatable stress-room or room
+transition baseline; the runtime clock is set to 333 MHz CPU and 166 MHz bus.
+
 The construction payload reported by `prepare_psp_assets.py` sums expanded
 RDX, scene vertices, mesh storage, and texture storage. It excludes some
 auxiliary allocations: camera/cut/light arrays, scene metadata, player walls,
 allocator overhead, and other runtime state. Compressed plus expanded data
 has a separate peak earlier in loading; the compressed input is freed before
-geometry construction. Neither sum is a complete PSP high-water measurement.
+geometry construction. The runtime HUD now adds stage-boundary free-memory
+samples, but it does not instrument allocations inside each stage, so these
+samples are not exact transient peaks.
 
 The largest reported construction payload leaves only about 1.75 MiB of the
 configured heap before those omissions. Keeping the full RDX resident for
 gameplay would also keep that major allocation live during play. This needs
 resolution before loading player, weapons, enemies, persistent UI, and audio.
 
-Implement the following in order:
+Implementation status, in order:
 
-1. Add allocation accounting by lifetime, largest-free-block reporting, stack
-   margins, executable/BSS accounting, command-list usage, and stage timings.
-   Track both steady-state play and door/movie/save transition peaks.
-2. Make wireframe and spatial-debug geometry optional/lazy. Current mesh
-   construction allocates six 16-byte wire vertices per triangle regardless
-   of display mode: 528,192 bytes for `RM_0000`, and 1,309,344 for the largest
-   static mesh. This is a concrete saving without changing game art.
+1. The runtime HUD reports free and largest heap blocks, stack margin, known
+   room/player allocation categories, module text/data/BSS, current and maximum
+   GU-list use, and frame/CPU/GE timing. The room check screen reports file,
+   scene, mesh, texture, collision, total-load, and door-transition times, plus
+   free-memory samples at stage boundaries. Hardware stress-room baselines and
+   allocation-level peak tracking remain outstanding.
+2. Wireframe geometry is generated only after selecting wireframe mode. The HUD
+   reports its current cost and the memory avoided while it is unused: six
+   16-byte vertices per triangle, 528,192 bytes for `RM_0000`, and 1,309,344
+   bytes for the largest static mesh.
 3. Expand the extractor into a versioned asset manifest covering all archives,
    models, motion/skin data, scripts, UI, audio, and movies. `SYSTEM.AFS` is
    an immediate dependency: `system.c` selects player/costume entries there
@@ -261,7 +281,8 @@ For performance work:
   Reduce redundant adjacent texture/palette/state submissions without
   reordering transparency or breaking object identity. Benchmark strips,
   compact vertex formats, and state batching against the existing path.
-  The guide specifically warns against assuming indexed geometry is faster.
+  The [PSP Survival Guide optimization notes](https://github.com/TheMrIron2/psp-survival-guide/blob/main/optimisation.md)
+  specifically warn against assuming indexed geometry is faster.
 - Track command-list capacity before adding actors/effects. The renderer has
   one 64 KiB list and waits for GE completion each frame. Consider two command
   lists after profiling, with matching lifetime rules for dynamic vertices,
@@ -330,18 +351,21 @@ flag changes in the production path.
 
 ## First implementation backlog
 
-1. Finish the profiling work with executable/BSS, command-list high-water,
-   load/transition timings, then establish stress-room hardware baselines.
-   The HUD already reports heap/stack margins, payload estimates, frame,
-   CPU/submission, and GE wait times. Make debug geometry optional and record
-   the savings.
+1. Capture remaining stress-room hardware baselines for steady play and room
+   transitions. The user-reported `RM_0030` walking capture records an initial
+   runtime memory and frame baseline. Runtime reporting is in place, including
+   module and command-list size; use the wireframe savings line to compare
+   debug and normal views. Improve allocation-level peak tracking if stage-
+   boundary samples miss load spikes.
 2. Introduce portable types and the minimum Ninja math/platform boundary.
    Assert disk layouts and produce a compile/link dependency inventory for
    the original player, motion, camera, collision, and event modules.
 3. Decode the extracted initial player model, skin, motion, and texture
    entries from `SYSTEM.AFS`; document model formats and resident costs. The
    initial stream extraction and size inventory now exist as `make
-   player-assets`.
+   player-assets`. The PSP preview samples authored idle and walk rotation
+   tracks and applies the extracted skin weights; root motion and pose
+   comparison against the original are still pending.
 4. Implement owned gameplay room data and connect the original initialization
    and timing path, keeping the current viewer available for diagnosis.
 5. Drive the real player and cameras, then the first real script interaction

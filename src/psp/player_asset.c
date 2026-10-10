@@ -65,6 +65,88 @@ static int parse_model(const uint8_t *data, uint32_t size,
     return 0;
 }
 
+static int validate_skin(const RecvxPlayerModelAsset *model)
+{
+    size_t offset = 0;
+    unsigned int object;
+    if (model->skin == NULL)
+        return 0;
+    if ((model->skin_size & 3) != 0)
+        return -1;
+    for (object = 0; object < model->object_count; ++object) {
+        uint32_t flags;
+        if (!span(model->skin_size, offset, 4))
+            return -1;
+        flags = read_u32(model->skin + offset);
+        offset += 4;
+        if (flags & 2) {
+            uint32_t model_index, vertex_count, vertex;
+            if (!span(model->skin_size, offset, 8))
+                return -1;
+            model_index = read_u32(model->skin + offset);
+            vertex_count = read_u32(model->skin + offset + 4);
+            offset += 8;
+            if (model_index >= RECVX_PLAYER_MODEL_LIMIT ||
+                offset > model->skin_size ||
+                vertex_count > (model->skin_size - offset) / 4)
+                return -1;
+            if (flags & 1)
+                for (vertex = 0; vertex < vertex_count; ++vertex) {
+                    uint32_t influence = read_u32(model->skin + offset + vertex * 4);
+                    if ((influence >> 24) >= model->object_count ||
+                        ((influence >> 16) & 0xff) >= 10)
+                        return -1;
+                }
+            offset += (size_t)vertex_count * 4;
+        } else if (flags != 0) {
+            if (!span(model->skin_size, offset, 4) ||
+                read_u32(model->skin + offset) >= RECVX_PLAYER_MODEL_LIMIT)
+                return -1;
+            offset += 4;
+        }
+    }
+    while (span(model->skin_size, offset, 4)) {
+        uint32_t padding = read_u32(model->skin + offset);
+        if (padding != 0 && padding != UINT32_MAX)
+            return -1;
+        offset += 4;
+    }
+    return offset == model->skin_size ? 0 : -1;
+}
+
+int recvxPlayerSkinWeights(const RecvxPlayerModelAsset *model,
+                           uint32_t object_index, uint32_t model_index,
+                           const uint8_t **weights, uint32_t *weight_count)
+{
+    size_t offset = 0;
+    unsigned int object;
+    if (model == NULL || weights == NULL || weight_count == NULL ||
+        object_index >= model->object_count || validate_skin(model) != 0)
+        return -1;
+    *weights = NULL;
+    *weight_count = 0;
+    if (model->skin == NULL)
+        return 0;
+    for (object = 0; object < model->object_count; ++object) {
+        uint32_t flags = read_u32(model->skin + offset);
+        offset += 4;
+        if (flags & 2) {
+            uint32_t skin_model = read_u32(model->skin + offset);
+            uint32_t vertices = read_u32(model->skin + offset + 4);
+            offset += 8;
+            if ((flags & 1) && object == object_index && skin_model == model_index) {
+                *weights = model->skin + offset;
+                *weight_count = vertices;
+                return 1;
+            }
+            offset += (size_t)vertices * 4;
+        } else if (flags != 0) {
+            offset += 4;
+        }
+    }
+    return 0;
+}
+
 static int parse_model_stream(const uint8_t *data, size_t size,
                               RecvxPlayerAssets *assets)
 {
@@ -104,7 +186,8 @@ static int parse_model_stream(const uint8_t *data, size_t size,
             model->model_index = assets->model_count;
             model->skin = pending_skin;
             model->skin_size = pending_skin_size;
-            if (parse_model(record, record_size, model) != 0)
+            if (parse_model(record, record_size, model) != 0 ||
+                validate_skin(model) != 0)
                 return -1;
             ++assets->model_count;
             pending_skin = NULL;
@@ -138,16 +221,19 @@ static int parse_motion(const uint8_t *data, uint32_t size,
     if (data_offset > size - base ||
         (size_t)object_count * 8 > size - base - data_offset)
         return -1;
-    for (i = 0; i < (uint32_t)object_count * 2; ++i) {
-        uint32_t reference = read_u32(data + base + data_offset + i * 4);
-        if (reference != UINT32_MAX && reference >= size - base)
-            return -1;
-    }
     motion->frame_count = read_u32(motion_data + 4);
     motion->motion_type = read_u16(motion_data + 8);
     motion->interpolation = read_u16(motion_data + 10);
     if (motion->frame_count == 0)
         return -1;
+    for (i = 0; i < (uint32_t)object_count * 2; ++i) {
+        uint32_t reference = read_u32(data + base + data_offset + i * 4);
+        size_t key_size = (i & 1) ? 6 : 12;
+        if (reference != UINT32_MAX &&
+            (reference > size - base ||
+             motion->frame_count > (size - base - reference) / key_size))
+            return -1;
+    }
     if (attribute_offset != UINT32_MAX &&
         (attribute_offset > size - base ||
          (size_t)motion->frame_count * 2 > size - base - attribute_offset))

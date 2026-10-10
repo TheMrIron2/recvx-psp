@@ -36,5 +36,8 @@ typedef struct RecvxPlayerAssets {
 int recvxPlayerAssetsParse(const void *model_stream, size_t model_size,
                            const void *motion_stream, size_t motion_size,
                            RecvxPlayerAssets *assets);
+int recvxPlayerSkinWeights(const RecvxPlayerModelAsset *model,
+                           uint32_t object_index, uint32_t model_index,
+                           const uint8_t **weights, uint32_t *weight_count);
 
 #endif
