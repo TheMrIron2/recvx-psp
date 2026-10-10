@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "psp/expand.h"
+#include "psp/file.h"
 #include "psp/room.h"
 
 static uint32_t read_u32(const unsigned char *data)
@@ -28,9 +29,11 @@ int recvxLoadRoomCatalog(const char *directory,
                          size_t *count)
 {
     char path[512], line[64];
-    FILE *file;
+    RecvxFile file = {0};
     size_t used = 0;
+    size_t line_length;
     int path_size;
+    int line_result;
     if (count == NULL)
         return 2;
     *count = 0;
@@ -39,31 +42,28 @@ int recvxLoadRoomCatalog(const char *directory,
     path_size = snprintf(path, sizeof(path), "%s/rooms.txt", directory);
     if (path_size < 0 || (size_t)path_size >= sizeof(path))
         return 2;
-    file = fopen(path, "rb");
-    if (file == NULL)
+    if (recvxFileOpenRead(&file, path) != 0)
         return 1;
-    while (fgets(line, sizeof(line), file) != NULL) {
-        size_t length = strcspn(line, "\r\n"), i;
-        if (line[length] == '\0' && !feof(file) && length == sizeof(line) - 1)
-            goto invalid;
-        line[length] = '\0';
-        if (length == 0)
+    while ((line_result = recvxFileReadLine(&file, line, sizeof(line),
+                                             &line_length)) > 0) {
+        size_t i;
+        if (line_length == 0)
             continue;
         if (!valid_room_name(line) || used == capacity)
             goto invalid;
         for (i = 0; i < used; ++i)
             if (strcmp(names[i], line) == 0)
                 goto invalid;
-        memcpy(names[used++], line, length + 1);
+        memcpy(names[used++], line, line_length + 1);
     }
-    if (ferror(file) || used == 0)
+    if (line_result < 0 || used == 0)
         goto invalid;
-    fclose(file);
+    recvxFileClose(&file);
     *count = used;
     return 0;
 
 invalid:
-    fclose(file);
+    recvxFileClose(&file);
     return 2;
 }
 
@@ -73,8 +73,9 @@ static int load_room_file(const char *directory, const char *name,
     char path[512];
     unsigned char metadata[32];
     unsigned char *packed = NULL, *expanded = NULL;
-    FILE *file = NULL;
-    size_t consumed, written;
+    RecvxFile file = {0};
+    size_t consumed, written, read_count;
+    unsigned char extra;
     int result = 2;
     int path_size;
 
@@ -90,14 +91,14 @@ static int load_room_file(const char *directory, const char *name,
         path_size = snprintf(path, sizeof(path), "%s/room.meta", directory);
     if (path_size < 0 || (size_t)path_size >= sizeof(path))
         return 2;
-    file = fopen(path, "rb");
-    if (file == NULL)
+    if (recvxFileOpenRead(&file, path) != 0)
         return 1;
-    if (fread(metadata, 1, sizeof(metadata), file) != sizeof(metadata) ||
-        fgetc(file) != EOF || ferror(file) || memcmp(metadata, "RCV1", 4) != 0)
+    if (recvxFileRead(&file, metadata, sizeof(metadata), &read_count) != 0 ||
+        read_count != sizeof(metadata) ||
+        recvxFileRead(&file, &extra, 1, &read_count) != 0 || read_count != 0 ||
+        memcmp(metadata, "RCV1", 4) != 0)
         goto done;
-    fclose(file);
-    file = NULL;
+    recvxFileClose(&file);
     info->packed_size = read_u32(metadata + 4);
     info->expanded_size = read_u32(metadata + 8);
     info->crc32 = read_u32(metadata + 12);
@@ -124,10 +125,12 @@ static int load_room_file(const char *directory, const char *name,
     result = 3;
     if (path_size < 0 || (size_t)path_size >= sizeof(path))
         goto done;
-    file = fopen(path, "rb");
-    if (file == NULL || fread(packed, 1, info->packed_size, file) != info->packed_size ||
-        fgetc(file) != EOF || ferror(file))
+    if (recvxFileOpenRead(&file, path) != 0 ||
+        recvxFileRead(&file, packed, info->packed_size, &read_count) != 0 ||
+        read_count != info->packed_size ||
+        recvxFileRead(&file, &extra, 1, &read_count) != 0 || read_count != 0)
         goto done;
+    recvxFileClose(&file);
     result = 5;
     if (recvxExpandBounded(packed, info->packed_size, expanded, info->expanded_size,
                           &consumed, &written) != RECVX_EXPAND_OK ||
@@ -142,8 +145,7 @@ static int load_room_file(const char *directory, const char *name,
     result = 0;
 
 done:
-    if (file != NULL)
-        fclose(file);
+    recvxFileClose(&file);
     if (result == 0) {
         *data = expanded;
         expanded = NULL;
@@ -163,6 +165,41 @@ int recvxLoadNamedRoomFile(const char *directory, const char *name,
                            RecvxRoomFileInfo *info, unsigned char **data)
 {
     return load_room_file(directory, name, info, data);
+}
+
+static int load_room_data(const char *directory, const char *name,
+                          RecvxRoomFileInfo *info, RecvxRoomData *data)
+{
+    int result;
+    if (data == NULL)
+        return 2;
+    data->bytes = NULL;
+    data->size = 0;
+    result = load_room_file(directory, name, info, &data->bytes);
+    if (result == 0)
+        data->size = info->expanded_size;
+    return result;
+}
+
+int recvxLoadRoomData(const char *directory, RecvxRoomFileInfo *info,
+                      RecvxRoomData *data)
+{
+    return load_room_data(directory, NULL, info, data);
+}
+
+int recvxLoadNamedRoomData(const char *directory, const char *name,
+                           RecvxRoomFileInfo *info, RecvxRoomData *data)
+{
+    return load_room_data(directory, name, info, data);
+}
+
+void recvxRoomDataFree(RecvxRoomData *data)
+{
+    if (data == NULL)
+        return;
+    free(data->bytes);
+    data->bytes = NULL;
+    data->size = 0;
 }
 
 int recvxCheckRoomFile(const char *directory, RecvxRoomFileInfo *info)

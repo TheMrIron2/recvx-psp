@@ -1,13 +1,14 @@
 #ifndef RECVX_PSP_ROOM_H
 #define RECVX_PSP_ROOM_H
 
+#include "psp/abi.h"
 #include <stddef.h>
 #include <stdint.h>
 
 typedef struct RecvxRoomInfo {
     float version;
     uint32_t rom_offset;
-    uint32_t counts[14];
+    uint32_t counts[RECVX_ROOM_COUNT_TOTAL];
 } RecvxRoomInfo;
 
 /* Validate the room header and counted arrays without relocating pointers.
@@ -23,6 +24,11 @@ typedef struct RecvxRoomFileInfo {
     uint32_t crc32;
     RecvxRoomInfo room;
 } RecvxRoomFileInfo;
+
+typedef struct RecvxRoomData {
+    unsigned char *bytes;
+    size_t size;
+} RecvxRoomData;
 
 #define RECVX_ROOM_NAME_SIZE 17
 #define RECVX_MAX_ROOM_CATALOG 205
@@ -44,5 +50,12 @@ int recvxLoadRoomFile(const char *directory, RecvxRoomFileInfo *info,
                       unsigned char **data);
 int recvxLoadNamedRoomFile(const char *directory, const char *name,
                            RecvxRoomFileInfo *info, unsigned char **data);
+
+/* Initialize with {0}; release owned bytes with recvxRoomDataFree */
+int recvxLoadRoomData(const char *directory, RecvxRoomFileInfo *info,
+                      RecvxRoomData *data);
+int recvxLoadNamedRoomData(const char *directory, const char *name,
+                           RecvxRoomFileInfo *info, RecvxRoomData *data);
+void recvxRoomDataFree(RecvxRoomData *data);
 
 #endif

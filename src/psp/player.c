@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "psp/player.h"
+#include "psp/abi.h"
 #include "psp/room.h"
 
 #define PLAYER_RADIUS 0.28f
@@ -250,33 +251,39 @@ int recvxPlayerRoomLoad(const void *data, size_t size, RecvxPlayerRoom *room)
     if (room == NULL || recvxInspectRoom(data, size, &info) != 0)
         return -1;
     memset(room, 0, sizeof(*room));
-    if (info.counts[6] > 4096 || info.counts[7] > 4096)
+    if (info.counts[RECVX_ROOM_COUNT_WALL] > 4096 ||
+        info.counts[RECVX_ROOM_COUNT_ETC] > 4096)
         return -2;
-    wall_offset = read_u32(bytes + info.rom_offset + 0x18);
-    if (info.counts[6] != 0) {
-        walls = calloc(info.counts[6], sizeof(*walls));
+    wall_offset = read_u32(bytes + info.rom_offset +
+                           RECVX_ROOM_ARRAY_DISK_OFFSET(RECVX_ROOM_ARRAY_WALL));
+    if (info.counts[RECVX_ROOM_COUNT_WALL] != 0) {
+        walls = calloc(info.counts[RECVX_ROOM_COUNT_WALL], sizeof(*walls));
         if (walls == NULL)
             return -3;
     }
-    for (i = 0; i < info.counts[6]; ++i) {
-        const unsigned char *source = bytes + wall_offset + i * 0x24;
+    for (i = 0; i < info.counts[RECVX_ROOM_COUNT_WALL]; ++i) {
+        const unsigned char *source = bytes + wall_offset +
+                                      i * sizeof(RecvxRoomDiskAttribute);
         RecvxPlayerWall *wall = &walls[i];
-        wall->active = source[0] & 1;
-        wall->type = source[1];
-        wall->id = source[2];
-        wall->floor = source[3];
-        wall->attr = read_u32(source + 4);
-        wall->px = read_f32(source + 8);
-        wall->py = read_f32(source + 12);
-        wall->pz = read_f32(source + 16);
-        wall->w = read_f32(source + 20);
-        wall->h = read_f32(source + 24);
-        wall->d = read_f32(source + 28);
+        wall->active = source[offsetof(RecvxRoomDiskAttribute, flags)] & 1;
+        wall->type = source[offsetof(RecvxRoomDiskAttribute, type)];
+        wall->id = source[offsetof(RecvxRoomDiskAttribute, id)];
+        wall->floor = (uint8_t)source[offsetof(RecvxRoomDiskAttribute, floor)];
+        wall->attr = read_u32(source + offsetof(RecvxRoomDiskAttribute, attributes));
+        wall->px = read_f32(source + offsetof(RecvxRoomDiskAttribute, x));
+        wall->py = read_f32(source + offsetof(RecvxRoomDiskAttribute, y));
+        wall->pz = read_f32(source + offsetof(RecvxRoomDiskAttribute, z));
+        wall->w = read_f32(source + offsetof(RecvxRoomDiskAttribute, width));
+        wall->h = read_f32(source + offsetof(RecvxRoomDiskAttribute, height));
+        wall->d = read_f32(source + offsetof(RecvxRoomDiskAttribute, depth));
     }
-    etc_offset = read_u32(bytes + info.rom_offset + 0x1C);
-    for (i = 0; i < info.counts[7]; ++i) {
-        const unsigned char *source = bytes + etc_offset + i * 0x24;
-        if ((source[0] & 1) && source[1] == 0)
+    etc_offset = read_u32(bytes + info.rom_offset +
+                          RECVX_ROOM_ARRAY_DISK_OFFSET(RECVX_ROOM_ARRAY_ETC));
+    for (i = 0; i < info.counts[RECVX_ROOM_COUNT_ETC]; ++i) {
+        const unsigned char *source = bytes + etc_offset +
+                                      i * sizeof(RecvxRoomDiskAttribute);
+        if ((source[offsetof(RecvxRoomDiskAttribute, flags)] & 1) &&
+            source[offsetof(RecvxRoomDiskAttribute, type)] == 0)
             ++door_capacity;
     }
     if (door_capacity != 0) {
@@ -286,33 +293,38 @@ int recvxPlayerRoomLoad(const void *data, size_t size, RecvxPlayerRoom *room)
             return -3;
         }
     }
-    for (i = 0; i < info.counts[7]; ++i) {
-        const unsigned char *source = bytes + etc_offset + i * 0x24;
+    for (i = 0; i < info.counts[RECVX_ROOM_COUNT_ETC]; ++i) {
+        const unsigned char *source = bytes + etc_offset +
+                                      i * sizeof(RecvxRoomDiskAttribute);
         RecvxPlayerDoor *door;
-        if (!(source[0] & 1) || source[1] != 0)
+        if (!(source[offsetof(RecvxRoomDiskAttribute, flags)] & 1) ||
+            source[offsetof(RecvxRoomDiskAttribute, type)] != 0)
             continue;
         door = &doors[door_count++];
-        door->id = source[2];
-        door->floor = source[3];
-        door->attr = read_u32(source + 4);
-        door->x = read_f32(source + 8);
-        door->y = read_f32(source + 12);
-        door->z = read_f32(source + 16);
-        door->width = read_f32(source + 20);
-        door->height = read_f32(source + 24);
-        door->depth = read_f32(source + 28);
-        door->target_stage = source[32];
-        door->target_room = source[33];
-        door->target_pos = source[34];
-        door->door_type = source[35];
+        door->id = source[offsetof(RecvxRoomDiskAttribute, id)];
+        door->floor = (uint8_t)source[offsetof(RecvxRoomDiskAttribute, floor)];
+        door->attr = read_u32(source + offsetof(RecvxRoomDiskAttribute, attributes));
+        door->x = read_f32(source + offsetof(RecvxRoomDiskAttribute, x));
+        door->y = read_f32(source + offsetof(RecvxRoomDiskAttribute, y));
+        door->z = read_f32(source + offsetof(RecvxRoomDiskAttribute, z));
+        door->width = read_f32(source + offsetof(RecvxRoomDiskAttribute, width));
+        door->height = read_f32(source + offsetof(RecvxRoomDiskAttribute, height));
+        door->depth = read_f32(source + offsetof(RecvxRoomDiskAttribute, depth));
+        door->target_stage = source[offsetof(RecvxRoomDiskAttribute, parameters)];
+        door->target_room = source[offsetof(RecvxRoomDiskAttribute, parameters) + 1];
+        door->target_pos = source[offsetof(RecvxRoomDiskAttribute, parameters) + 2];
+        door->door_type = source[offsetof(RecvxRoomDiskAttribute, parameters) + 3];
     }
     room->walls = walls;
-    room->wall_count = info.counts[6];
+    room->wall_count = info.counts[RECVX_ROOM_COUNT_WALL];
     room->doors = doors;
     room->door_count = door_count;
-    room->wall_height = read_f32(bytes + info.rom_offset + 0x118);
+    room->wall_height = read_f32(bytes + info.rom_offset +
+                                 offsetof(RecvxRoomDiskWork, wall_height));
     for (i = 0; i < 32; ++i)
-        room->floor_heights[i] = read_f32(bytes + info.rom_offset + 0x120 + i * 4);
+        room->floor_heights[i] = read_f32(bytes + info.rom_offset +
+                                          offsetof(RecvxRoomDiskWork, floor_heights) +
+                                          i * sizeof(float));
     return 0;
 }
 
@@ -332,14 +344,16 @@ int recvxPlayerSpawn(RecvxPlayer *player, const RecvxPlayerRoom *room,
     RecvxRoomInfo info;
     uint32_t offset;
     if (player == NULL || room == NULL || recvxInspectRoom(data, size, &info) != 0 ||
-        position_index >= info.counts[9])
+        position_index >= info.counts[RECVX_ROOM_COUNT_POSITION])
         return -1;
-    offset = read_u32(bytes + info.rom_offset + 0x24) + position_index * 0x10;
+    offset = read_u32(bytes + info.rom_offset +
+                      RECVX_ROOM_ARRAY_DISK_OFFSET(RECVX_ROOM_ARRAY_POSITION)) +
+             position_index * sizeof(RecvxRoomDiskPosition);
     memset(player, 0, sizeof(*player));
-    player->x = read_f32(bytes + offset);
-    player->y = read_f32(bytes + offset + 4);
-    player->z = read_f32(bytes + offset + 8);
-    player->yaw = (int32_t)read_u32(bytes + offset + 12) *
+    player->x = read_f32(bytes + offset + offsetof(RecvxRoomDiskPosition, x));
+    player->y = read_f32(bytes + offset + offsetof(RecvxRoomDiskPosition, y));
+    player->z = read_f32(bytes + offset + offsetof(RecvxRoomDiskPosition, z));
+    player->yaw = (int32_t)read_u32(bytes + offset + offsetof(RecvxRoomDiskPosition, yaw)) *
                   (6.283185307f / 65536.0f);
     player->floor = floor_number(room, player->y);
     player->grounded = 1;

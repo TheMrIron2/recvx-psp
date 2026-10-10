@@ -1,6 +1,8 @@
 # PSP full-game port audit
 
-Audited 10 October 2026 against `86de5c39` plus the existing working-tree changes.
+Initial audit: 10 October 2026, against `86de5c39` plus the then-existing
+working-tree changes. Follow-up PSP measurements below were recorded against
+`e5fda38b` on the same date.
 This is an architectural audit and implementation roadmap, not a claim of full-game compatibility or a line-by-line correctness review.
 
 The next milestone should be an original scripted gameplay sequence on PSP: an animated player, original movement and collision, automatic camera cuts, an interaction, and a door transition with persistent state.
@@ -8,7 +10,7 @@ Build this by bringing the original game logic onto a small PSP platform layer. 
 
 ## Evidence and current scope
 
-The user reports three rooms rendering correctly on real hardware. This audit did not perform additional hardware testing.
+The user has now supplied PSP captures for the four connected opening-route rooms. This audit did not perform independent hardware testing.
 The working tree also contains a walking prototype and automatic camera selection that go beyond the status in [PSP_PORT.md](PSP_PORT.md); their full gameplay correctness is not established by the room-rendering result.
 
 Checks performed during this audit:
@@ -68,9 +70,9 @@ normal idle and walk motion slots (42 and 39) for per-object rotation keys.
 It retains model-local translations so the provisional controller owns root
 movement. Motion key arrays are extent-checked, and posing reuses the existing
 mesh storage without frame-time allocation. The extracted skin table blends
-parent and bone transforms for the single body mesh; this approximation needs
-pose comparison against the original. The player texture tail is still not
-rendered.
+parent and bone transforms for the single body mesh; user hardware checks now
+confirm the animated skin retains visible arms. Pose comparison against the
+original is still pending. The player texture tail is still not rendered.
 
 [The Makefile](../Makefile) links only `flag.c` and `ps2_NaMem.c` from the original game.
 The original game directory contains 154 C files and about 248,000 lines, excluding CRI and SDK sources. This measures integration scope, not remaining development effort.
@@ -97,9 +99,29 @@ Retain original object IDs and indices when converting render assets because gam
 [types.h](../include/ps2/veronica/prog/types.h) directly includes Ninja, PS2 graphics, DMA, pad, memory-card, sound, and CRI headers.
 Game headers inherit this dependency. The existing two portable modules largely avoid this problem.
 
-Create portable game/Ninja type declarations and PSP service interfaces.
+Continue adding portable game/Ninja type declarations and PSP service interfaces.
 Implement the subset used by the next milestone, expanding it as real callers are integrated.
 Keep the explicit source list and a record of unresolved functions; do not pull the entire PS2 SDK surface into the PSP build.
+
+The first portable slice now lives in `include/psp/abi.h` and
+`include/psp/ninja_math.h`: fixed-width game/Ninja values, core vector/matrix
+shapes, and Ninja angle conversion are independent of the PS2 SDK. Initial
+`ROM_WORK`, room header, cut prefix, actor placement, effect, collision, and
+spawn disk layouts have compile-time size/offset assertions. Light, motion,
+event, model, and save records still need equivalent checks.
+`include/psp/platform.h` provides normalized button edges and monotonic time;
+the PSP adapter contains the controller, clock, and kernel calls.
+`include/psp/file.h`
+now separates read, line, size, and close operations from the stdio adapter.
+Room loads return a `RecvxRoomData` owner with a matching release function.
+`include/psp/timing.h` advances provisional player simulation at a rational
+30 Hz and records dropped ticks after stalls longer than four catch-up steps;
+presentation and viewer camera input retain measured frame time.
+The viewer releases room data after derived geometry and collision data are built;
+retaining the expanded RDX for gameplay would exceed the measured
+PSP-1000 free heap, so pointer-bearing original room data still needs a compact
+resident representation or a budgeted streaming design. The broader original
+ABI remains to be separated.
 
 The binary readers and original relocation code assume 32-bit pointers and specific layouts. `bhSetRoom` copies 1,004 bytes of `ROM_WORK` and relocates offsets in place.
 `bhMlbBinRealize` and `bhMnbBinRealize` also modify their inputs. PSP's 32-bit pointers help, but do not prove compiler ABI equivalence.
@@ -111,6 +133,34 @@ Audit pointer-to-integer casts and type punning; any transitional aliasing flags
 
 Keep disk offsets separate from host pointers. Use explicit disk records and native runtime records for 64-bit host tests, or an intentionally configured
 32-bit reference harness. Directly compiling the original relocators into a 64-bit host executable is not a valid compatibility test.
+
+#### Initial original-module compile and link inventory
+
+This first pass records source include dependencies and the service families
+they pull in. Most headers include `types.h`, which imports PS2 SDK, graphics,
+pad, sound, CD/DVD, memory-card, and CRI declarations; direct source edits
+alone will not make these modules compile for PSP.
+
+| Source group | Direct dependencies | PSP boundary still needed |
+| --- | --- | --- |
+| `Motion.c` | `Motion.h`, `ps2_NaMath.h`, `ps2_NaMatrix.h` | Split actor/motion ABI from `types.h`; portable angle and matrix services |
+| `player.c`, `playpch.c`, `playpch2.c` | `player.h`, motion, cut, effect, flag, collision helpers, weapon, sound, room, and global `main.h` state | Actor/work-record ABI, game globals, input/task state, rendering, sound, and unsupported-call diagnostics |
+| `pwksub.c`, `hitchk.c`, `hitchkl.c`, `rutchk.c` | Player state, `ps2_NaColi.h`, math/matrix, view, room and camera globals | Portable collision primitives, room-array ownership, camera/view contract |
+| `camera.c` | `camera.h`, `njplus.h`, `ps2_dummy.h`, `main.h` | Camera work records, projection/view calls, global runtime state |
+| `pl_evt.c`, `event.c` | Player/collision, room, effects, flags, messages, screen, sound, enemy dispatch, system state | Scenario pointer lifetime, event opcode services, presentation/audio and progression state |
+| `MdlPut.c` | `MdlPut.h`, `njplus.h`, Ninja Cnk, texture functions, matrix and `main.h` | Object/hierarchy ABI and PSP draw/texture adapter |
+
+`Makefile` currently links only `flag.c` and `ps2_NaMem.c` from the original
+game. This is an include-level map, not yet a complete undefined-symbol map:
+the listed gameplay modules have not been compiled against a PSP header shim.
+Collect their compiler and linker diagnostics as each dependency group is
+isolated, rather than filling unresolved symbols with success stubs.
+
+The reference loop in `main.c::njUserMain` dispatches active, unpaused task
+slots 0 through 22 in order, then calls `PS2_jikken` and the soft-reset check.
+Within each `bhMainSequence` loop, game updates run enemy, player, effect,
+object/item, camera, and light work before the final draw passes. These orders
+are recorded here; the PSP prototype has not imported those callbacks yet.
 
 ### 3. Room ownership must change for gameplay
 
@@ -207,8 +257,32 @@ mesh, 4,329 KiB textures, 818 KiB of avoided wireframe storage, 298 KiB
 player model/motion source, and 163 KiB player mesh. Frame time is 16.68 ms,
 CPU plus submission is 0.33 ms, GE wait is 0.01 ms, and the GU list peaks at
 8 KiB of 64 KiB.
-This is a user-reported screen capture, not a repeatable stress-room or room
-transition baseline; the runtime clock is set to 333 MHz CPU and 166 MHz bus.
+This earlier user-reported capture establishes the initial runtime baseline;
+the runtime clock is set to 333 MHz CPU and 166 MHz bus.
+
+The user later supplied five immediate-spawn captures for `RM_0000`,
+`RM_0010`, `RM_0020`, and `RM_0030` in the ignored build directory
+`build/psp/M0/`. The software clock setting is 333 MHz CPU and 166 MHz bus;
+the PSP model is not recorded. Values below are read from the HUD. Memory and
+GPU command-list sizes are KiB; frame timings are milliseconds. “Avoid” is
+wireframe storage avoided in the current display mode.
+
+| Capture | Room | Models / triangles | Heap / largest / stack | Scene / mesh / textures | Avoid | Frame / CPU+submit / GE wait | GU current / high-water |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `snap106.bmp` | `RM_0000` | 67 / 5,502 | 5,548 / 5,292 / 245 | 22 / 646 / 1,537 | 515 | 33.37 / 18.46 / 5.30 | 4 / 4 |
+| `snap107.bmp` | `RM_0010` | 58 / 4,366 | 5,548 / 5,292 / 245 | 17 / 513 / 1,368 | 409 | 33.37 / 18.51 / 3.24 | 4 / 4 |
+| `snap108.bmp` | `RM_0020` | 85 / 5,795 | 5,548 / 5,292 / 245 | 28 / 681 / 3,719 | 543 | 33.36 / 18.46 / 0.27 | 3 / 3 |
+| `snap110.bmp` | `RM_0030` | 112 / 8,732 | 5,548 / 5,292 / 245 | 19 / 1,027 / 4,329 | 818 | 33.36 / 18.41 / 0.14 | 3 / 3 |
+| `snap111.bmp` | `RM_0030` | 112 / 8,732 | 5,548 / 5,292 / 245 | 19 / 1,027 / 4,329 | 818 | 50.05 / 18.67 / 15.41 | 8 / 8 |
+
+The four immediate room samples are about 30 FPS. The extra `RM_0030` capture
+shows one 50.05 ms frame interval (about 20 FPS), with GE wait rising to
+15.41 ms while CPU plus submission remains near 18.7 ms. This is evidence of
+a single missed presentation deadline, not sustained 20 FPS. All five HUDs
+report ELF T/D/B of 205/4/112 KiB, player source data of 298 KiB, player mesh
+of 163 KiB, and zero separately allocated walls and doors. These captures are
+the current prototype baseline for the four connected opening-route rooms. The
+PSP model is not recorded, but that does not block this scope's baseline.
 
 The construction payload reported by `prepare_psp_assets.py` sums expanded
 RDX, scene vertices, mesh storage, and texture storage. It excludes some
@@ -219,10 +293,11 @@ geometry construction. The runtime HUD now adds stage-boundary free-memory
 samples, but it does not instrument allocations inside each stage, so these
 samples are not exact transient peaks.
 
-The largest reported construction payload leaves only about 1.75 MiB of the
-configured heap before those omissions. Keeping the full RDX resident for
-gameplay would also keep that major allocation live during play. This needs
-resolution before loading player, weapons, enemies, persistent UI, and audio.
+The offline largest-room construction payload leaves only about 1.75 MiB of
+the configured heap before those omissions. This is a planning signal for
+future large-room and full-game memory work; it is not a current-route blocker.
+Revisit the complete room budget as gameplay systems and broader room coverage
+are added.
 
 Implementation status, in order:
 
@@ -230,8 +305,12 @@ Implementation status, in order:
    room/player allocation categories, module text/data/BSS, current and maximum
    GU-list use, and frame/CPU/GE timing. The room check screen reports file,
    scene, mesh, texture, collision, total-load, and door-transition times, plus
-   free-memory samples at stage boundaries. Hardware stress-room baselines and
-   allocation-level peak tracking remain outstanding.
+   free-memory samples at stage boundaries. Milestone 0 is closed for the
+   current prototype scope: four connected route rooms have immediate-spawn
+   PSP captures with memory, frame, and GE telemetry at the enforced 333/166
+   MHz clock. No representative stress, steady-play, or transition workload
+   exists yet; defer those profiles and allocation-level peak tracking until
+   gameplay creates one.
 2. Wireframe geometry is generated only after selecting wireframe mode. The HUD
    reports its current cost and the memory avoided while it is unused: six
    16-byte vertices per triangle, 528,192 bytes for `RM_0000`, and 1,309,344
@@ -330,8 +409,8 @@ Per PPSSPP dev hrydgard: "sceSas doesn't have native midi support ... there migh
 
 | Milestone | Deliverable | Acceptance gate |
 | --- | --- | --- |
-| 0: Measured baseline | Reproducible build, current viewer, memory/frame/GE instrumentation, content inventory | Three known-good rooms plus the largest-memory, largest-geometry, and largest-batch rooms have hardware measurements with device model and clock settings recorded |
-| 1: Game foundation | Portable ABI, math/input/file services, explicit room ownership, original task/timing skeleton | Required modules compile without PS2 SDK imports; disk-layout assertions pass; original initialization and scripted state can run with explicit unsupported-service diagnostics |
+| 0: Measured baseline (closed for prototype scope) | Reproducible build, current viewer, memory/frame/GE instrumentation, content inventory | Four connected opening-route rooms have immediate-spawn PSP measurements for memory, frame, and GE use at the enforced 333 MHz CPU / 166 MHz bus clock; one missed-deadline `RM_0030` sample is recorded. No representative stress, steady-play, or transition workload exists yet; profile them when gameplay provides one |
+| 1: Game foundation (in progress) | Portable ABI, math/input/file services, explicit room ownership, original task/timing skeleton | Required modules compile without PS2 SDK imports; disk-layout assertions pass; original initialization and scripted state can run with explicit unsupported-service diagnostics |
 | 2: Original player | Player assets from `SYSTEM.AFS`, motion/skin support, original movement/collision and camera control | Animated Claire can idle, turn, walk/run and navigate a representative room with reference-matching poses, collision, and cuts |
 | 3: Playable sequence | Original events, interactions, messages, object state, doors, and basic audio | A contiguous original sequence includes a pickup or puzzle interaction, a scripted event, correct room transition, and persistent state on return |
 | 4: Game systems | Combat/enemy families, inventory/item box/map/files, save/load, menus, effects, complete audio/movie lifecycle | A representative chapter is completable with sound, combat, saving, cold-boot loading, death/retry, and cutscenes |
@@ -351,30 +430,36 @@ flag changes in the production path.
 
 ## First implementation backlog
 
-1. Capture remaining stress-room hardware baselines for steady play and room
-   transitions. The user-reported `RM_0030` walking capture records an initial
-   runtime memory and frame baseline. Runtime reporting is in place, including
-   module and command-list size; use the wireframe savings line to compare
-   debug and normal views. Improve allocation-level peak tracking if stage-
-   boundary samples miss load spikes.
-2. Introduce portable types and the minimum Ninja math/platform boundary.
-   Assert disk layouts and produce a compile/link dependency inventory for
-   the original player, motion, camera, collision, and event modules.
+1. Milestone 0 is closed for the current prototype scope. Five user captures
+   record immediate spawns in the first four connected route rooms, including
+   one `RM_0030` missed-deadline frame. Runtime reporting covers memory, frame,
+   GE, module, and command-list use. No representative stress, steady-play, or
+   transition workload exists yet. Defer those profiles, offline-maxima
+   captures, and allocation-level peak tracking until gameplay creates one.
+2. Continue Milestone 1's portable types and Ninja/platform boundary. Fixed-
+   width game values, initial room disk-layout assertions, Ninja angle math,
+   PSP input and clock adapters, a rational 30 Hz simulation tick, a
+   stdio-backed file service, and scoped room-data ownership are now in place.
+   An initial source-level compile/link dependency map identifies the ABI and
+   service groups for motion, player, collision, camera, event, and model
+   drawing. Broaden disk-layout assertions and turn this include map into
+   compiler/linker diagnostics while isolating modules.
 3. Decode the extracted initial player model, skin, motion, and texture
    entries from `SYSTEM.AFS`; document model formats and resident costs. The
    initial stream extraction and size inventory now exist as `make
    player-assets`. The PSP preview samples authored idle and walk rotation
    tracks and applies the extracted skin weights; root motion and pose
    comparison against the original are still pending.
-4. Implement owned gameplay room data and connect the original initialization
-   and timing path, keeping the current viewer available for diagnosis.
+4. Extend scoped room-data ownership into a budgeted gameplay lifetime, then
+   connect the original initialization and timing path while keeping the
+   current viewer available for diagnosis.
 5. Drive the real player and cameras, then the first real script interaction
    and door. Add reference traces for position, animation, camera, flags,
    script position, and asynchronous completion at each integration step.
 
 This sequence exposes the expensive unknowns before expanding art coverage
 or polishing presentation. No reliable completion estimate follows from
-three successful rooms; ABI integration, actor rendering, audio banks, and
+four successful rooms; ABI integration, actor rendering, audio banks, and
 the first original scripted sequence are the milestones that will support one.
 
 ## Release-quality definition

@@ -14,6 +14,8 @@
 #include <pspsysmem.h>
 
 #include "psp/renderer.h"
+#include "psp/ninja_math.h"
+#include "psp/timing.h"
 
 #define SCREEN_WIDTH 480
 #define SCREEN_HEIGHT 272
@@ -26,6 +28,7 @@ static ScePspFVector3 center, focus;
 static float yaw, pitch, distance, radius;
 static uint64_t previous_time;
 static uint64_t frame_elapsed_us, cpu_submit_us, ge_wait_us;
+static RecvxGameClock simulation_clock;
 static size_t command_list_bytes, command_list_high_water;
 static size_t module_text_bytes, module_data_bytes, module_bss_bytes;
 static size_t player_source_bytes;
@@ -176,10 +179,9 @@ static void apply_room_lighting(const RecvxRoomMesh *mesh)
 static void rotate_camera_vector(ScePspFVector3 *vector, unsigned int axis,
                                  int32_t angle)
 {
-    float radians = ((uint32_t)angle & 0xffffu) *
-                    (6.283185307179586f / 65536.0f);
-    float sine = sinf(radians), cosine = cosf(radians);
+    float sine, cosine;
     float x = vector->x, y = vector->y, z = vector->z;
+    recvxNinjaSinCos(angle, &sine, &cosine);
     if (axis == 0) {
         vector->y = cosine * y - sine * z;
         vector->z = sine * y + cosine * z;
@@ -558,27 +560,68 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
         update_player_culling(mesh, player, -1);
     apply_room_lighting(mesh);
     reset_camera(scene, mesh, player);
-    previous_time = sceKernelGetSystemTimeWide();
+    previous_time = recvxPlatformTimeUs();
+    recvxGameClockReset(&simulation_clock, previous_time);
     frame_elapsed_us = cpu_submit_us = ge_wait_us = 0;
     return 0;
+}
+
+static void update_player_simulation(RecvxPlayer *player,
+                                    const RecvxPlayerRoom *player_room,
+                                    float forward, float turn,
+                                    uint32_t ticks)
+{
+    const RecvxPlayerMotionAsset *motion;
+    unsigned int motion_slot;
+    uint32_t tick;
+
+    if (player == NULL || player_room == NULL)
+        return;
+    for (tick = 0; tick < ticks; ++tick)
+        recvxPlayerUpdate(player, player_room, forward, turn,
+                          1.0f / RECVX_GAME_TICKS_PER_SECOND);
+
+    if (player_actor_assets == NULL || player_actor_mesh == NULL ||
+        player_actor_assets->model_count == 0)
+        return;
+    motion_slot = forward != 0.0f ? 39 : 42;
+    if (motion_slot >= player_actor_assets->motion_count ||
+        !player_actor_assets->motions[motion_slot].present ||
+        player_actor_assets->motions[motion_slot].frame_count == 0)
+        return;
+    motion = &player_actor_assets->motions[motion_slot];
+    if (player_animation_slot != motion_slot) {
+        player_animation_slot = motion_slot;
+        player_animation_frame = 0.0f;
+    } else {
+        player_animation_frame += (float)ticks;
+    }
+    if (player_animation_frame >= motion->frame_count)
+        player_animation_frame = fmodf(player_animation_frame,
+                                       (float)motion->frame_count);
+    recvxPosePlayerMesh(&player_actor_assets->models[0], motion,
+                        (uint32_t)player_animation_frame,
+                        player_actor_mesh);
 }
 
 void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const RecvxTextureSet *textures,
                         RecvxPlayer *player, const RecvxPlayerRoom *player_room,
                         const char *room_name,
-                        const SceCtrlData *pad, unsigned int pressed)
+                        const RecvxInputState *input)
 {
-    uint64_t now = sceKernelGetSystemTimeWide();
-    float dt = fminf(0.05f, (float)(now - previous_time) * 0.000001f);
-    float analog_x = ((int)pad->Lx - 128) / 128.0f;
-    float analog_y = ((int)pad->Ly - 128) / 128.0f;
+    uint64_t now = recvxPlatformTimeUs();
+    float frame_dt = fminf(0.05f, (float)(now - previous_time) * 0.000001f);
+    float analog_x = ((int)input->analog_x - 128) / 128.0f;
+    float analog_y = ((int)input->analog_y - 128) / 128.0f;
+    uint32_t pressed = input->pressed;
+    uint32_t simulation_ticks = recvxGameClockAdvance(&simulation_clock, now);
     float near_plane, far_plane;
     ScePspFVector3 eye, up = {0, 1, 0};
     int lighting_changed = 0;
     frame_elapsed_us = now - previous_time;
     previous_time = now;
 
-    if ((pressed & PSP_CTRL_SELECT) && mesh && mesh->vertices) {
+    if ((pressed & RECVX_BUTTON_SELECT) && mesh && mesh->vertices) {
         display_mode = (display_mode + 1) % (textures && textures->count ? 5 : 4);
         if (display_mode == 1) {
             if (set_wireframe(mesh, 1) != 0)
@@ -588,56 +631,36 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
         }
         reset_camera(scene, mesh, player_mode ? player : NULL);
     }
-    if (!player_mode && (pressed & PSP_CTRL_CIRCLE) && mesh && mesh->cut_count) {
+    if (!player_mode && (pressed & RECVX_BUTTON_CIRCLE) && mesh && mesh->cut_count) {
         camera_cut = (camera_cut + 1) % mesh->cut_count;
         lighting_changed = 1;
     }
-    if (!player_mode && (pressed & PSP_CTRL_CROSS) && mesh && mesh->cut_count) {
+    if (!player_mode && (pressed & RECVX_BUTTON_CROSS) && mesh && mesh->cut_count) {
         camera_variant ^= 1;
         lighting_changed = 1;
     }
-    if (pressed & PSP_CTRL_TRIANGLE)
+    if (pressed & RECVX_BUTTON_TRIANGLE)
         reset_camera(scene, mesh, player_mode ? player : NULL);
-    if (!player_mode && (pad->Buttons & PSP_CTRL_LTRIGGER))
-        distance *= 1.0f + dt;
-    if (!player_mode && (pad->Buttons & PSP_CTRL_RTRIGGER))
-        distance *= 1.0f - dt;
+    if (!player_mode && (input->buttons & RECVX_BUTTON_LTRIGGER))
+        distance *= 1.0f + frame_dt;
+    if (!player_mode && (input->buttons & RECVX_BUTTON_RTRIGGER))
+        distance *= 1.0f - frame_dt;
     if (player_mode && player != NULL && player_room != NULL) {
         float forward = -analog_y, turn = analog_x;
         if (fabsf(forward) < 0.16f)
             forward = 0.0f;
         if (fabsf(turn) < 0.16f)
             turn = 0.0f;
-        if (pad->Buttons & PSP_CTRL_UP)
+        if (input->buttons & RECVX_BUTTON_UP)
             forward = 1.0f;
-        else if (pad->Buttons & PSP_CTRL_DOWN)
+        else if (input->buttons & RECVX_BUTTON_DOWN)
             forward = -1.0f;
-        if (pad->Buttons & PSP_CTRL_LEFT)
+        if (input->buttons & RECVX_BUTTON_LEFT)
             turn = -1.0f;
-        else if (pad->Buttons & PSP_CTRL_RIGHT)
+        else if (input->buttons & RECVX_BUTTON_RIGHT)
             turn = 1.0f;
-        recvxPlayerUpdate(player, player_room, forward, turn, dt);
-        if (player_actor_assets != NULL && player_actor_mesh != NULL &&
-            player_actor_assets->model_count != 0) {
-            unsigned int motion_slot = forward != 0.0f ? 39 : 42;
-            if (motion_slot < player_actor_assets->motion_count &&
-                player_actor_assets->motions[motion_slot].present) {
-                const RecvxPlayerMotionAsset *motion =
-                    &player_actor_assets->motions[motion_slot];
-                if (player_animation_slot != motion_slot) {
-                    player_animation_slot = motion_slot;
-                    player_animation_frame = 0.0f;
-                } else {
-                    player_animation_frame += dt * 30.0f;
-                }
-                if (player_animation_frame >= motion->frame_count)
-                    player_animation_frame = fmodf(player_animation_frame,
-                                                   (float)motion->frame_count);
-                recvxPosePlayerMesh(&player_actor_assets->models[0], motion,
-                                    (uint32_t)player_animation_frame,
-                                    player_actor_mesh);
-            }
-        }
+        update_player_simulation(player, player_room, forward, turn,
+                                 simulation_ticks);
         if (update_player_culling(mesh, player, (int)camera_cut) > 0) {
             lighting_changed = 1;
         }
@@ -656,22 +679,22 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
         focus = center;
         pitch = fmaxf(0.16f, fminf(0.58f, pitch));
     } else {
-        if (pad->Buttons & PSP_CTRL_LEFT)
-            yaw -= dt * 1.7f;
-        if (pad->Buttons & PSP_CTRL_RIGHT)
-            yaw += dt * 1.7f;
-        if (pad->Buttons & PSP_CTRL_UP)
-            pitch += dt;
-        if (pad->Buttons & PSP_CTRL_DOWN)
-            pitch -= dt;
+        if (input->buttons & RECVX_BUTTON_LEFT)
+            yaw -= frame_dt * 1.7f;
+        if (input->buttons & RECVX_BUTTON_RIGHT)
+            yaw += frame_dt * 1.7f;
+        if (input->buttons & RECVX_BUTTON_UP)
+            pitch += frame_dt;
+        if (input->buttons & RECVX_BUTTON_DOWN)
+            pitch -= frame_dt;
         pitch = fmaxf(0.12f, fminf(1.4f, pitch));
         yaw = fmodf(yaw, 6.283185307f);
         if (fabsf(analog_x) < 0.16f)
             analog_x = 0;
         if (fabsf(analog_y) < 0.16f)
             analog_y = 0;
-        center.x += (analog_x * cosf(yaw) + analog_y * sinf(yaw)) * radius * dt;
-        center.z += (-analog_x * sinf(yaw) + analog_y * cosf(yaw)) * radius * dt;
+        center.x += (analog_x * cosf(yaw) + analog_y * sinf(yaw)) * radius * frame_dt;
+        center.z += (-analog_x * sinf(yaw) + analog_y * cosf(yaw)) * radius * frame_dt;
         center.x = fmaxf(focus.x - radius * 4, fminf(focus.x + radius * 4, center.x));
         center.z = fmaxf(focus.z - radius * 4, fminf(focus.z + radius * 4, center.z));
     }
@@ -806,9 +829,9 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
         update_command_list_usage();
         sceGuFinish();
     {
-        uint64_t submit_done = sceKernelGetSystemTimeWide();
+        uint64_t submit_done = recvxPlatformTimeUs();
         sceGuSync(GU_SYNC_FINISH, GU_SYNC_WHAT_DONE);
-        ge_wait_us = sceKernelGetSystemTimeWide() - submit_done;
+        ge_wait_us = recvxPlatformTimeUs() - submit_done;
         cpu_submit_us = submit_done - now;
     }
 

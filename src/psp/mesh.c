@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "psp/mesh.h"
+#include "psp/ninja_math.h"
 #include "psp/room.h"
 
 #define MAX_OBJECTS 512
@@ -76,9 +77,9 @@ static int coordinate(float value)
 static void rotate(Matrix *matrix, unsigned int axis, unsigned int angle)
 {
     unsigned int row;
-    float rad = (angle & 0xffff) * (6.283185307179586f / 65536.0f);
-    float sine = sinf(rad), cosine = cosf(rad);
+    float sine, cosine;
     unsigned int a = (axis + 1) % 3, b = (axis + 2) % 3;
+    recvxNinjaSinCos((RecvxNinjaAngle)angle, &sine, &cosine);
     for (row = 0; row < 3; ++row) {
         float old_a = matrix->value[row][a], old_b = matrix->value[row][b];
         matrix->value[row][a] = old_a * cosine + old_b * sine;
@@ -817,7 +818,7 @@ int recvxBuildRoomMesh(const void *room, size_t size, RecvxRoomMesh *mesh)
         return -1;
     reader.bytes = room;
     reader.size = size;
-    reader.mesh.cut_count = info.counts[0];
+    reader.mesh.cut_count = info.counts[RECVX_ROOM_COUNT_CUT];
     if (reader.mesh.cut_count > MAX_CAMERA_CUTS)
         return -2;
     if (reader.mesh.cut_count != 0) {
@@ -946,7 +947,7 @@ int recvxBuildRoomMesh(const void *room, size_t size, RecvxRoomMesh *mesh)
             }
         }
     }
-    reader.mesh.light_count = info.counts[1];
+    reader.mesh.light_count = info.counts[RECVX_ROOM_COUNT_LIGHT];
     if (reader.mesh.light_count > MAX_ROOM_LIGHTS) {
         result = -2;
         goto done;
@@ -988,16 +989,23 @@ int recvxBuildRoomMesh(const void *room, size_t size, RecvxRoomMesh *mesh)
     reader.mesh.ambient[0] = 0.3f;
     reader.mesh.ambient[1] = 0.3f;
     reader.mesh.ambient[2] = 0.3f;
-    ambient_index = reader.bytes[info.rom_offset + 0x3b8];
+    ambient_index = reader.bytes[info.rom_offset +
+                                 offsetof(RecvxRoomDiskWork, ambient_type)];
     if (ambient_index < 4) {
-        const unsigned int offsets[3] = {0x3bc, 0x3cc, 0x3dc};
+        const size_t offsets[3] = {
+            offsetof(RecvxRoomDiskWork, ambient_red),
+            offsetof(RecvxRoomDiskWork, ambient_green),
+            offsetof(RecvxRoomDiskWork, ambient_blue)
+        };
         for (axis = 0; axis < 3; ++axis) {
-            float value = f32(reader.bytes + info.rom_offset + offsets[axis] + ambient_index * 4);
+            float value = f32(reader.bytes + info.rom_offset + offsets[axis] +
+                               ambient_index * sizeof(float));
             if (isfinite(value) && fabsf(value) <= 16.0f)
                 reader.mesh.ambient[axis] = value;
         }
     }
-    directory = u32(reader.bytes + 20);
+    directory = u32(reader.bytes +
+                     offsetof(RecvxRoomDiskHeaderPrefix, model_directory_offset));
     if (directory == 0) {
         recvxMeshFree(mesh);
         *mesh = reader.mesh;

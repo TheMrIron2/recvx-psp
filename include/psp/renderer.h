@@ -2,7 +2,7 @@
 #define RECVX_PSP_RENDERER_H
 
 #include <stddef.h>
-#include <pspctrl.h>
+#include "psp/platform.h"
 #include "psp/player.h"
 #include "psp/scene.h"
 #include "psp/mesh.h"
@@ -15,7 +15,7 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
 void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const RecvxTextureSet *textures,
                         RecvxPlayer *player, const RecvxPlayerRoom *player_room,
                         const char *room_name,
-                        const SceCtrlData *pad, unsigned int pressed);
+                        const RecvxInputState *input);
 void recvxRendererStop(void);
 
 #endif
