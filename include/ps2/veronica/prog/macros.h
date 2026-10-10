@@ -1,6 +1,16 @@
 #ifndef	_MACROS_H_
 #define	_MACROS_H_
 
+#if defined(__PSP__)
+#undef MIN
+#undef MAX
+#undef RAND_MAX
+#undef NJM_RAD_ANG
+#undef NJM_ANG_DEG
+#undef NJM_DEG_ANG
+#undef njRandom
+#endif
+
 #define PI 3.141592f
 #define PI_2 (PI * 2.0f)
 

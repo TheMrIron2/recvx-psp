@@ -36,15 +36,15 @@
 #include "../../../ps2/veronica/prog/sync.h"
 #include "../../../ps2/veronica/prog/main.h"
 
-//#include <string.h>
+#include <string.h>
+#if defined(__PSP__)
+#include "psp/platform.h"
+#include "psp/services.h"
+#endif
 
 static unsigned char FileWait;
 static unsigned char VibWait;
-unsigned char pl_sleep_cnt;
-unsigned char Pause_Flag;
-unsigned char NowLoadDisp;
-unsigned char PauseBtn;
-const unsigned short pause_mes[6] = { 0x30, 0x41, 0x55, 0x53, 0x45, 0xFFFF };
+unsigned short pause_mes[6] = { 0x30, 0x41, 0x55, 0x53, 0x45, 0xFFFF };
 
 // 100% matching!
 int bhCalcVtxBuffer()
@@ -55,6 +55,11 @@ int bhCalcVtxBuffer()
 // 100% matching! 
 void bhChangeHWSetting()
 { 
+#if defined(__PSP__)
+    sys->ss_flg ^= 2;
+    recvxUnsupportedServiceRecord(RECVX_UNSUPPORTED_DISPLAY_MODE,
+                                  "bhChangeHWSetting");
+#else
     sys->ss_flg ^= 2; 
     
     if ((sys->ss_flg & 0x2)) 
@@ -108,72 +113,8 @@ void bhChangeHWSetting()
     mwPlySetDispMode(hws->mode, hws->frame, hws->count, (hws->vtx_opq_a < 0) ? 2 : (hws->vtx_opq_b < 0) ? 2 : (hws->vtx_trs_a < 0) ? 2 : (hws->vtx_trs_b < 0) ? 2 : (hws->vtx_punch < 0) ? 2 : 3); 
     
     sys->endp = njpmemp; 
+#endif
 } 
-
-// 99.93% matching
-void bhInitSystem()
-{ 
-    unsigned int free;
-    unsigned int size;
-    
-    bhClearVSync(); 
-    
-    sys->ss_flg &= ~0x40440; 
-    
-    npSetMemory((unsigned char*)&sys->tk_flg, 175260, 0); 
-    
-    sys->memp = freemem; 
-    sys->endp = njpmemp;
-    
-    sys->memp += (int)&sys->save_end - (int)&sys->version;
-    
-    TypewriterKeepMemory();
-    
-    keepmem = sys->mempb = sys->memp; 
-    
-    sys->loop_ct = 1; 
-    
-    sys->p1per = NULL; 
-        
-    sys->pt_flg |= ~0x0; 
-    
-    sys->sp_flg |= ~0x0;
-    
-    sys->ss_flg &= ~0x300; 
-    
-    plp = &ply; 
-    
-    sys->plp = plp; 
-    
-    sys->ef_pbnk = 32; 
-    
-    syMallocStat(&free, &size); 
-    
-    sys->fsize = free; 
-    
-    njClipZ(-2.0f, -20000.0f); 
-    
-    if ((sys->ss_flg & 0x2)) 
-    { 
-        sys->fog_cngct = 3; 
-    } 
-    else 
-    {
-        sys->fog_cngct = 2; 
-    }
-
-    bhInitVSync(); 
-
-    pl_sleep_cnt = 0; 
-    
-    bhFontScaleSet(1.0f, 1.0f, 1.0f); 
-    
-    Pause_Flag = 0; 
-    
-    NowLoadDisp = 0; 
-    
-    PauseBtn = 0;
-}
 
 // 99.92% matching
 void bhInitRoomChangeSystem()
@@ -283,14 +224,6 @@ void bhInitRoomChangeSystem()
         sys->fog_cngct = 2;
     }
 }
-
-// 100% matching!
-void bhSysCallInit() 
-{ 
-    bhInitSystem(); 
-
-    sys->tk_flg = 0x300002; 
-} 
 
 // 100% matching! 
 void bhSysCallDiscChange()
@@ -1686,7 +1619,11 @@ void bhSysCallMonitor()
 
                 if (((vibflg == 0) || (--VibWait == 0)) && (GetReadFileStatus() == 0)) 
                 {
+#if defined(__PSP__)
+                    recvxPlatformFlushCaches();
+#else
                     FlushCache(0);
+#endif
                     
                     sys->rdtsz = Expand((char*)sys->rdtp, sys->memp);
                     

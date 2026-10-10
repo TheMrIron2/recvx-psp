@@ -22,19 +22,19 @@ int recvxInspectRoom(const void *data, size_t size, RecvxRoomInfo *info)
     /* Disk offsets stay 32-bit and are never cast to native pointers */
     static const size_t strides[RECVX_ROOM_COUNT_TOTAL] = {
         [RECVX_ROOM_COUNT_CUT] = sizeof(RecvxRoomDiskCutWorkPrefix),
-        [RECVX_ROOM_COUNT_LIGHT] = 0xe0,
+        [RECVX_ROOM_COUNT_LIGHT] = sizeof(RecvxRoomDiskLightWork),
         [RECVX_ROOM_COUNT_ENEMY] = sizeof(RecvxRoomDiskActorPlacement),
         [RECVX_ROOM_COUNT_OBJECT] = sizeof(RecvxRoomDiskActorPlacement),
         [RECVX_ROOM_COUNT_ITEM] = sizeof(RecvxRoomDiskActorPlacement),
         [RECVX_ROOM_COUNT_EFFECT] = sizeof(RecvxRoomDiskEffect),
         [RECVX_ROOM_COUNT_WALL] = sizeof(RecvxRoomDiskAttribute),
         [RECVX_ROOM_COUNT_ETC] = sizeof(RecvxRoomDiskAttribute),
-        [RECVX_ROOM_COUNT_FLOOR] = 0x24,
+        [RECVX_ROOM_COUNT_FLOOR] = sizeof(RecvxRoomDiskAttribute),
         [RECVX_ROOM_COUNT_POSITION] = sizeof(RecvxRoomDiskPosition),
-        [RECVX_ROOM_COUNT_ROUTE] = 0x24,
-        [RECVX_ROOM_COUNT_EVENT_CONDITION] = 0x808,
+        [RECVX_ROOM_COUNT_ROUTE] = sizeof(RecvxRoomDiskAttribute),
+        [RECVX_ROOM_COUNT_EVENT_CONDITION] = sizeof(RecvxRoomDiskEventCamera),
         [RECVX_ROOM_COUNT_MESSAGE] = 4,
-        [RECVX_ROOM_COUNT_EVENT_LIGHT] = 0xe0
+        [RECVX_ROOM_COUNT_EVENT_LIGHT] = sizeof(RecvxRoomDiskLightWork)
     };
     static const unsigned int slots[RECVX_ROOM_COUNT_TOTAL] = {
         [RECVX_ROOM_COUNT_CUT] = RECVX_ROOM_ARRAY_CUT,

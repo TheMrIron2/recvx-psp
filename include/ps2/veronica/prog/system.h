@@ -71,5 +71,7 @@ void EasyDispMessage(float PosY, unsigned int MessageNo);
 
 extern unsigned char pl_sleep_cnt;
 extern unsigned char Pause_Flag;
+extern unsigned char NowLoadDisp;
+extern unsigned char PauseBtn;
 
 #endif

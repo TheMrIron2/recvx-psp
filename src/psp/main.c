@@ -10,6 +10,11 @@
 #include "psp/renderer.h"
 #include "psp/selftest.h"
 #include "psp/player_asset.h"
+#include "psp/event_data.h"
+#include "psp/game_tasks.h"
+#include "psp/input.h"
+#include "psp/legacy_runtime.h"
+#include "psp/services.h"
 
 PSP_MODULE_INFO("RECVX PSP", PSP_MODULE_USER, 0, 6);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);
@@ -19,9 +24,14 @@ static RecvxScene scene;
 static RecvxRoomMesh mesh;
 static RecvxTextureSet textures;
 static RecvxPlayerRoom player_room;
+static RecvxEventData event_data;
 static RecvxPlayer player;
 static RecvxRoomMesh player_mesh;
 static RecvxPlayerAssets player_assets;
+static RecvxGameTaskDispatcher game_tasks;
+static RecvxInputState game_task_input;
+static uint32_t unsupported_task_mask;
+static int game_task_playing;
 static unsigned char *player_model_data, *player_motion_data;
 static int player_asset_status = 1;
 static int player_mesh_status = 1;
@@ -32,7 +42,11 @@ static size_t room_catalog_count, current_room;
 static unsigned int room_spawn;
 static int room_catalog_status;
 static int player_ready;
+static int event_data_status = 1;
 static int clock_set_result;
+static int legacy_init_status = -1;
+static int legacy_scenario_attempted;
+static RecvxLegacyScriptResult legacy_scenario_result;
 static int door_exit_lock;
 static char room_note[64];
 static uint64_t player_asset_load_us;
@@ -41,6 +55,51 @@ static uint64_t room_texture_build_us, room_collision_load_us, room_load_total_u
 static uint64_t door_transition_started_us, last_door_transition_us;
 static SceSize room_load_min_free_bytes;
 static int door_transition_timing;
+
+static void render_game_task(void *context)
+{
+    (void)context;
+    recvxRendererFrame(&scene, &mesh, &textures,
+                       game_task_playing ? &player : NULL,
+                       game_task_playing ? &player_room : NULL,
+                       room_name, &game_task_input);
+}
+
+static void init_original_system_task(void *context)
+{
+    int *status = context;
+    *status = recvxLegacySystemInit();
+}
+
+static void show_unsupported_tasks(void)
+{
+    unsigned int slot;
+    if (unsupported_task_mask == 0)
+        return;
+    pspDebugScreenPrintf("Unsupported active task slots:");
+    for (slot = 0; slot < RECVX_GAME_TASK_COUNT; ++slot) {
+        if (unsupported_task_mask & RECVX_GAME_TASK_MASK(slot))
+            pspDebugScreenPrintf("\n%u: %s", slot, recvxGameTaskName(slot));
+    }
+    pspDebugScreenPrintf("\n\n");
+    unsupported_task_mask = 0;
+}
+
+static void show_unsupported_services(void)
+{
+    unsigned int service;
+    for (service = 0; service < RECVX_UNSUPPORTED_SERVICE_COUNT; ++service) {
+        const RecvxUnsupportedServiceRecord *record =
+            recvxUnsupportedServiceGet((enum RecvxUnsupportedServiceId)service);
+        if (record->calls != 0)
+            pspDebugScreenPrintf("Unsupported %s: %u calls, last %s\n",
+                                 recvxUnsupportedServiceName(
+                                     (enum RecvxUnsupportedServiceId)service),
+                                 (unsigned int)record->calls,
+                                 record->last_caller != NULL ?
+                                     record->last_caller : "unknown caller");
+    }
+}
 
 static void sample_room_load_heap(void)
 {
@@ -148,6 +207,9 @@ static void show_checks(const char *data_directory)
     recvxMeshFree(&mesh);
     recvxTexturesFree(&textures);
     recvxPlayerRoomFree(&player_room);
+    recvxLegacyEventReset();
+    recvxEventDataFree(&event_data);
+    event_data_status = 1;
     player_ready = 0;
     room_name[0] = '\0';
 
@@ -165,6 +227,8 @@ static void show_checks(const char *data_directory)
                          memory ? "FAIL" : "PASS", memory);
     pspDebugScreenPrintf("Portable asset decompression: %s (%d)\n\n",
                          expand ? "FAIL" : "PASS", expand);
+    show_unsupported_tasks();
+    show_unsupported_services();
     if (player_asset_status == 0)
         pspDebugScreenPrintf("Original actor data: %u models, %u skins, %u/%u motions\n\n",
                              (unsigned int)player_assets.model_count,
@@ -212,6 +276,21 @@ static void show_checks(const char *data_directory)
                 pspDebugScreenPrintf("Room catalog is invalid.\n\n");
         } else {
             pspDebugScreenPrintf("Room %s: PASS\n", info.name);
+            event_data_status = recvxEventDataLoad(room_data.bytes,
+                                                   room_data.size,
+                                                   &event_data);
+            if (event_data_status == 0 && !legacy_scenario_attempted &&
+                strcmp(info.name, "RM_0000.RDX") == 0) {
+                size_t script_size;
+                const unsigned char *script =
+                    recvxEventDataScript(&event_data, 0, &script_size);
+                if (script != NULL)
+                    legacy_scenario_result = recvxLegacyScenarioRun(
+                        script, script_size, &event_data);
+                else
+                    legacy_scenario_result.status = RECVX_LEGACY_SCRIPT_INVALID;
+                legacy_scenario_attempted = 1;
+            }
             pspDebugScreenPrintf("Expanded %u -> %u bytes; CRC32 %08x\n",
                                  (unsigned int)info.packed_size,
                                  (unsigned int)info.expanded_size,
@@ -311,12 +390,65 @@ static void show_checks(const char *data_directory)
                          (unsigned int)(player_asset_load_us / 1000),
                          (unsigned int)((player_asset_load_us / 100) % 10),
                          (unsigned int)(room_load_min_free_bytes / 1024));
+    if (legacy_init_status == 0) {
+        float near_plane, far_plane;
+        recvxLegacyGetClip(&near_plane, &far_plane);
+        pspDebugScreenPrintf("bhSysCallInit PASS %uB, tasks %06X\n",
+                             (unsigned int)recvxLegacyArenaUsed(),
+                             (unsigned int)recvxLegacyTaskMask());
+        pspDebugScreenPrintf("Ninja clip %0.f / %0.f\n", near_plane, far_plane);
+    } else {
+        pspDebugScreenPrintf("bhSysCallInit FAIL (%d)\n", legacy_init_status);
+    }
+    if (event_data_status == 0) {
+        size_t scd0_size, scd1_size;
+        recvxEventDataScript(&event_data, 0, &scd0_size);
+        recvxEventDataScript(&event_data, 1, &scd1_size);
+        pspDebugScreenPrintf("Original event data %u scripts, SCD %u/%uB\n",
+                             event_data.script_count > 2 ?
+                                 (unsigned int)(event_data.script_count - 2) : 0,
+                             (unsigned int)scd0_size,
+                             (unsigned int)scd1_size);
+    } else if (event_data_status == 1) {
+        pspDebugScreenPrintf("Original event data unavailable\n");
+    } else {
+        pspDebugScreenPrintf("Original event data invalid (%d)\n",
+                             event_data_status);
+    }
+    if (legacy_scenario_attempted) {
+        if (legacy_scenario_result.status == RECVX_LEGACY_SCRIPT_COMPLETE)
+            pspDebugScreenPrintf("Original RM_0000 SCD0 complete, %u ops, %u writes\n",
+                                 (unsigned int)legacy_scenario_result.instructions,
+                                 (unsigned int)legacy_scenario_result.writes);
+        else if (legacy_scenario_result.status == RECVX_LEGACY_SCRIPT_YIELDED)
+            pspDebugScreenPrintf("RM_0000 SCD0 yielded at %04X (%u ops, %u writes)\n",
+                                 (unsigned int)legacy_scenario_result.stop_offset,
+                                 (unsigned int)legacy_scenario_result.instructions,
+                                 (unsigned int)legacy_scenario_result.writes);
+        else if (legacy_scenario_result.status == RECVX_LEGACY_SCRIPT_UNSUPPORTED)
+            pspDebugScreenPrintf("RM_0000 SCD0 unsupported %02X at %04X (%u ops, %u writes)\n",
+                                 legacy_scenario_result.stop_opcode,
+                                 (unsigned int)legacy_scenario_result.stop_offset,
+                                 (unsigned int)legacy_scenario_result.instructions,
+                                 (unsigned int)legacy_scenario_result.writes);
+        else
+            pspDebugScreenPrintf("RM_0000 SCD0 invalid at %04X (%u ops, %u writes)\n",
+                                 (unsigned int)legacy_scenario_result.stop_offset,
+                                 (unsigned int)legacy_scenario_result.instructions,
+                                 (unsigned int)legacy_scenario_result.writes);
+        if (legacy_scenario_result.events_queued != 0)
+            pspDebugScreenPrintf("SCD0 queued event %u/task %u (%uB body pending)\n",
+                                 (unsigned int)legacy_scenario_result.last_event_id,
+                                 (unsigned int)legacy_scenario_result.last_event_task,
+                                 (unsigned int)legacy_scenario_result.last_event_bytes);
+    }
     pspDebugScreenPrintf("Press START or HOME to exit.\n");
 }
 
 int main(int argc, char **argv)
 {
     RecvxInputState input;
+    RecvxInputRepeat input_repeat;
     int callback;
     int viewing = 0;
     int playing = 0;
@@ -342,18 +474,33 @@ int main(int argc, char **argv)
         pspDebugScreenPrintf("Could not register HOME callback.\n");
     }
     recvxPlatformInputInit();
+    recvxInputRepeatReset(&input_repeat);
+    recvxGameTaskDispatcherInit(&game_tasks);
+    if (recvxLegacyRuntimePrepare() == 0) {
+        recvxGameTaskBind(&game_tasks, RECVX_GAME_TASK_INIT,
+                          init_original_system_task, &legacy_init_status);
+        recvxGameTaskSetMasks(&game_tasks,
+                              RECVX_GAME_TASK_MASK(RECVX_GAME_TASK_INIT), 0);
+        unsupported_task_mask |= recvxGameTaskDispatch(&game_tasks);
+    }
+    recvxGameTaskBind(&game_tasks, RECVX_GAME_TASK_GAME, render_game_task, NULL);
+    recvxGameTaskSetMasks(&game_tasks, recvxLegacyTaskMask(),
+                          recvxLegacyPausedTaskMask());
+    unsupported_task_mask |= recvxGameTaskDispatch(&game_tasks);
 
     show_checks(data_directory);
 
     for (;;) {
         int walking_started_this_frame = 0;
         if (recvxPlatformReadInput(&input) > 0) {
+            recvxInputRepeatAdvance(&input_repeat, &input,
+                                    recvxPlatformTimeUs());
             uint32_t pressed = input.pressed;
             if (pressed & RECVX_BUTTON_START)
                 break;
             if (!viewing && room_catalog_count > 1 &&
-                (pressed & (RECVX_BUTTON_LEFT | RECVX_BUTTON_RIGHT))) {
-                if (pressed & RECVX_BUTTON_LEFT)
+                (input.repeat & (RECVX_BUTTON_LEFT | RECVX_BUTTON_RIGHT))) {
+                if (input.repeat & RECVX_BUTTON_LEFT)
                     current_room = (current_room + room_catalog_count - 1) % room_catalog_count;
                 else
                     current_room = (current_room + 1) % room_catalog_count;
@@ -422,16 +569,18 @@ int main(int argc, char **argv)
                     show_checks(data_directory);
                 }
             }
-            if (viewing)
-                recvxRendererFrame(&scene, &mesh, &textures,
-                                   playing ? &player : NULL,
-                                   playing ? &player_room : NULL,
-                                   room_name, &input);
+            game_task_input = input;
+            game_task_playing = playing;
+            recvxGameTaskSetMasks(&game_tasks,
+                                  recvxLegacyTaskMask() |
+                                      (viewing ? RECVX_GAME_TASK_MASK(RECVX_GAME_TASK_GAME) : 0),
+                                  recvxLegacyPausedTaskMask());
+            unsupported_task_mask |= recvxGameTaskDispatch(&game_tasks);
         }
-        if (!viewing)
-            recvxPlatformDelayUs(16667);
-        else
+        if (viewing)
             recvxPlatformCheckCallbacks();
+        recvxPlatformWaitVblank();
+        recvxLegacyVsyncTick();
     }
 
     recvxRendererStop();
@@ -439,9 +588,11 @@ int main(int argc, char **argv)
     recvxMeshFree(&mesh);
     recvxTexturesFree(&textures);
     recvxPlayerRoomFree(&player_room);
+    recvxEventDataFree(&event_data);
     recvxMeshFree(&player_mesh);
     free(player_model_data);
     free(player_motion_data);
+    recvxLegacyRuntimeShutdown();
     sceKernelExitGame();
     return 0;
 }

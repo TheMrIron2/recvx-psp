@@ -2,13 +2,17 @@
 //#include <string.h>
 
 // EE library
+#ifndef __PSP__
 #include <PREFIX_PS2_DEBUG.h>
 #include <eeregs.h>
+#endif
 
 #include "../../../ps2/veronica/prog/override_katana.h"
 // KATANA library
 #include <ninja.h>
+#ifndef __PSP__
 #include <../../../ps2/veronica/prog/katana_extra.h>
+#endif
 
 #include "../../../ps2/veronica/prog/types.h"
 #include "../../../ps2/veronica/prog/enums.h"

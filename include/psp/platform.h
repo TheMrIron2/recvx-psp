@@ -21,6 +21,8 @@ enum RecvxButton {
 typedef struct RecvxInputState {
     uint32_t buttons;
     uint32_t pressed;
+    uint32_t released;
+    uint32_t repeat;
     uint8_t analog_x;
     uint8_t analog_y;
 } RecvxInputState;
@@ -32,6 +34,8 @@ int recvxPlatformGetCpuClockFrequency(void);
 int recvxPlatformGetBusClockFrequency(void);
 uint64_t recvxPlatformTimeUs(void);
 void recvxPlatformDelayUs(uint32_t duration_us);
+void recvxPlatformWaitVblank(void);
 void recvxPlatformCheckCallbacks(void);
+void recvxPlatformFlushCaches(void);
 
 #endif

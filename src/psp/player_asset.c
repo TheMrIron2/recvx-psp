@@ -33,21 +33,25 @@ static int parse_model(const uint8_t *data, uint32_t size,
 {
     uint32_t base, texture_offset;
     uint16_t object_count;
-    if (size < 16 || memcmp(data, "MDL", 3) != 0)
+    if (size < sizeof(RecvxPlayerModelDiskHeader) ||
+        memcmp(data, "MDL", 3) != 0)
         return -1;
-    base = read_u16(data + 4);
-    object_count = read_u16(data + 6);
-    texture_offset = read_u32(data + 8);
+    base = read_u16(data + offsetof(RecvxPlayerModelDiskHeader, header_size));
+    object_count = read_u16(data + offsetof(RecvxPlayerModelDiskHeader, object_count));
+    texture_offset = read_u32(data + offsetof(RecvxPlayerModelDiskHeader, texture_offset));
     if (base < 16 || base > size)
         return -1;
     if (object_count != 0) {
-        uint32_t object_offset = read_u32(data + 12);
+        uint32_t object_offset = read_u32(data +
+            offsetof(RecvxPlayerModelDiskHeader, object_offset));
         if (object_offset == UINT32_MAX || object_offset > size - base ||
-            (size_t)object_count * 52 > size - base - object_offset)
+            (size_t)object_count * sizeof(RecvxChunkObjectDisk) >
+                size - base - object_offset)
             return -1;
         model->object_offset = object_offset;
     } else {
-        model->object_offset = read_u32(data + 12);
+        model->object_offset = read_u32(data +
+            offsetof(RecvxPlayerModelDiskHeader, object_offset));
         if (model->object_offset != UINT32_MAX &&
             model->object_offset > size - base)
             return -1;
@@ -207,28 +211,38 @@ static int parse_motion(const uint8_t *data, uint32_t size,
     uint16_t object_count;
     const uint8_t *motion_data;
     uint32_t i;
-    if (size < 16 || memcmp(data, "MTN", 3) != 0)
+    if (size < sizeof(RecvxPlayerMotionDiskHeader) ||
+        memcmp(data, "MTN", 3) != 0)
         return -1;
-    base = read_u16(data + 4);
-    object_count = read_u16(data + 6);
-    motion_offset = read_u32(data + 8);
-    attribute_offset = read_u32(data + 12);
+    base = read_u16(data + offsetof(RecvxPlayerMotionDiskHeader, header_size));
+    object_count = read_u16(data + offsetof(RecvxPlayerMotionDiskHeader, object_count));
+    motion_offset = read_u32(data +
+        offsetof(RecvxPlayerMotionDiskHeader, motion_offset));
+    attribute_offset = read_u32(data +
+        offsetof(RecvxPlayerMotionDiskHeader, attribute_offset));
     if (base < 16 || base > size || motion_offset > size - base ||
-        size - base - motion_offset < 12)
+        size - base - motion_offset < sizeof(RecvxMotionDiskHeader))
         return -1;
     motion_data = data + base + motion_offset;
-    data_offset = read_u32(motion_data);
+    data_offset = read_u32(motion_data +
+        offsetof(RecvxMotionDiskHeader, object_tracks_offset));
     if (data_offset > size - base ||
-        (size_t)object_count * 8 > size - base - data_offset)
+        (size_t)object_count * sizeof(RecvxMotionObjectDiskTrack) >
+            size - base - data_offset)
         return -1;
-    motion->frame_count = read_u32(motion_data + 4);
-    motion->motion_type = read_u16(motion_data + 8);
-    motion->interpolation = read_u16(motion_data + 10);
+    motion->frame_count = read_u32(motion_data +
+        offsetof(RecvxMotionDiskHeader, frame_count));
+    motion->motion_type = read_u16(motion_data +
+        offsetof(RecvxMotionDiskHeader, motion_type));
+    motion->interpolation = read_u16(motion_data +
+        offsetof(RecvxMotionDiskHeader, interpolation));
     if (motion->frame_count == 0)
         return -1;
     for (i = 0; i < (uint32_t)object_count * 2; ++i) {
-        uint32_t reference = read_u32(data + base + data_offset + i * 4);
-        size_t key_size = (i & 1) ? 6 : 12;
+        uint32_t reference = read_u32(data + base + data_offset +
+                                      i * sizeof(RecvxDiskOffset32));
+        size_t key_size = (i & 1) ? sizeof(RecvxMotionAngleDiskKey) :
+                                    sizeof(RecvxMotionPositionDiskKey);
         if (reference != UINT32_MAX &&
             (reference > size - base ||
              motion->frame_count > (size - base - reference) / key_size))
@@ -236,7 +250,8 @@ static int parse_motion(const uint8_t *data, uint32_t size,
     }
     if (attribute_offset != UINT32_MAX &&
         (attribute_offset > size - base ||
-         (size_t)motion->frame_count * 2 > size - base - attribute_offset))
+         (size_t)motion->frame_count * sizeof(uint16_t) >
+             size - base - attribute_offset))
         return -1;
     motion->data = data;
     motion->size = size;

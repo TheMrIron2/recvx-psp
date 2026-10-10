@@ -4,6 +4,13 @@
 #include "types.h"
 
 // TODO: move the defines below somewhere else
+#if defined(__PSP__)
+#undef NJD_PI
+#undef NJM_RAD_ANG
+#undef NJM_ANG_DEG
+#undef NJM_DEG_ANG
+#undef njArcTan2
+#endif
 #define NJD_PI  3.141592f
 #define NJM_RAD_ANG(n)  ((Angle)((n) * (65536.0f / (2 * NJD_PI))))
 #define NJM_ANG_DEG(n)  ((n) * (360.0f / 65536.0f))

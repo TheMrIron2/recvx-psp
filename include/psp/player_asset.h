@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "psp/abi.h"
+
 #define RECVX_PLAYER_MODEL_LIMIT 32
 #define RECVX_PLAYER_MOTION_LIMIT 128
 

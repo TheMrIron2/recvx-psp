@@ -1,5 +1,6 @@
 #include <stddef.h>
 #include <pspctrl.h>
+#include <pspdisplay.h>
 #include <pspkernel.h>
 #include <psppower.h>
 
@@ -41,6 +42,8 @@ int recvxPlatformReadInput(RecvxInputState *input)
 
     input->buttons = buttons;
     input->pressed = buttons & ~previous_buttons;
+    input->released = previous_buttons & ~buttons;
+    input->repeat = input->pressed;
     input->analog_x = pad.Lx;
     input->analog_y = pad.Ly;
     previous_buttons = buttons;
@@ -72,7 +75,18 @@ void recvxPlatformDelayUs(uint32_t duration_us)
     sceKernelDelayThreadCB(duration_us);
 }
 
+void recvxPlatformWaitVblank(void)
+{
+    sceDisplayWaitVblankStart();
+}
+
 void recvxPlatformCheckCallbacks(void)
 {
     sceKernelCheckCallback();
+}
+
+void recvxPlatformFlushCaches(void)
+{
+    sceKernelDcacheWritebackInvalidateAll();
+    sceKernelIcacheInvalidateAll();
 }

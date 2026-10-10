@@ -1,6 +1,10 @@
 #ifndef _TYPES_H_
 #define _TYPES_H_
 
+#if defined(__PSP__)
+#include "override_katana.h"
+#include "psp/legacy_types.h"
+#else
 #include "override_katana.h"
 #include <ninja.h>
 #include <sg_gd.h>
@@ -30,6 +34,7 @@
 #include <../../../recvx-decomp-cri/cri/mwlib/include/cri_adxf.h>
 #include "../../../cri/mwlib/ee/lib/libadxe/override_adxt.h"
 #include <../../../recvx-decomp-cri/cri/mwlib/include/cri_adxt.h>
+#endif
 
 typedef struct {
 	// total size: 0x8
@@ -2307,6 +2312,7 @@ typedef struct {
 
 #define bound(val, x) ((((val) + (x) - 1) / (x))*(x))
 
+#ifndef __PSP__
 typedef struct {
     u_char v[MAX_WIDTH * MAX_HEIGHT * 4];
 } VoData;
@@ -2404,6 +2410,7 @@ typedef struct {
     int hid_vblank;	// vlbank handler
 
 } VideoDec;
+#endif
 
 #define SCE_GS_ALPHA_AS         (0)
 #define SCE_GS_ALPHA_AD         (1)

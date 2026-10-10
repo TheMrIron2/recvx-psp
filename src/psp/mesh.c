@@ -13,6 +13,7 @@
 #define MAX_CAMERA_CUTS 64
 #define MAX_CUT_AREAS 16384
 #define MAX_ROOM_LIGHTS 256
+#define CHUNK_OBJECT_SIZE sizeof(RecvxChunkObjectDisk)
 
 _Static_assert(sizeof(RecvxMeshVertex) == 36, "GU mesh vertex layout");
 _Static_assert(offsetof(RecvxMeshVertex, nx) == 12, "GU normal follows color");
@@ -98,21 +99,30 @@ static int motion_angles(const MeshReader *reader, unsigned int object_index,
     if (motion->data == NULL || motion->size < 16 ||
         motion->frame_count == 0 || motion->object_count != reader->object_count)
         return -1;
-    base = (uint32_t)u16(motion->data + 4);
+    base = (uint32_t)u16(motion->data +
+        offsetof(RecvxPlayerMotionDiskHeader, header_size));
     if (base > motion->size || motion->data_offset > motion->size - base ||
-        (size_t)object_index * 8 > motion->size - base - motion->data_offset ||
-        motion->size - base - motion->data_offset - object_index * 8 < 8)
+        (size_t)object_index * sizeof(RecvxMotionObjectDiskTrack) >
+            motion->size - base - motion->data_offset ||
+        motion->size - base - motion->data_offset -
+            object_index * sizeof(RecvxMotionObjectDiskTrack) <
+                sizeof(RecvxMotionObjectDiskTrack))
         return -1;
-    object_data = (size_t)base + motion->data_offset + object_index * 8;
-    reference = u32(motion->data + object_data + 4);
+    object_data = (size_t)base + motion->data_offset +
+                  object_index * sizeof(RecvxMotionObjectDiskTrack);
+    reference = u32(motion->data + object_data +
+        offsetof(RecvxMotionObjectDiskTrack, angle_offset));
     if (reference == UINT32_MAX)
         return 0;
     frame = reader->motion_frame % motion->frame_count;
     if (reference > motion->size - base ||
         (size_t)frame > (motion->size - base - reference) / 6 ||
-        motion->size - base - reference - (size_t)frame * 6 < 6)
+        motion->size - base - reference -
+            (size_t)frame * sizeof(RecvxMotionAngleDiskKey) <
+                sizeof(RecvxMotionAngleDiskKey))
         return -1;
-    key_data = (size_t)base + reference + (size_t)frame * 6;
+    key_data = (size_t)base + reference +
+               (size_t)frame * sizeof(RecvxMotionAngleDiskKey);
     angles[0] = u16(motion->data + key_data);
     angles[1] = u16(motion->data + key_data + 2);
     angles[2] = u16(motion->data + key_data + 4);
@@ -132,7 +142,8 @@ static int object_matrix(const MeshReader *reader, const unsigned char *object,
     if (!(flags & 1)) {
         float position[3];
         for (axis = 0; axis < 3; ++axis) {
-            position[axis] = f32(object + 8 + axis * 4);
+            position[axis] = f32(object +
+                offsetof(RecvxChunkObjectDisk, position) + axis * sizeof(float));
             if (!coordinate(position[axis]))
                 return -1;
         }
@@ -145,13 +156,15 @@ static int object_matrix(const MeshReader *reader, const unsigned char *object,
         for (axis = 0; axis < 3; ++axis) {
             unsigned int rotation_axis = orders[(flags & 0x20) != 0][axis];
             uint32_t angle = has_motion_angles ? angles[rotation_axis] :
-                             u32(object + 20 + rotation_axis * 4);
+                u32(object + offsetof(RecvxChunkObjectDisk, angles) +
+                    rotation_axis * sizeof(uint32_t));
             rotate(matrix, rotation_axis, angle);
         }
     }
     if (!(flags & 4))
         for (axis = 0; axis < 3; ++axis) {
-            float scale = f32(object + 32 + axis * 4);
+            float scale = f32(object +
+                offsetof(RecvxChunkObjectDisk, scale) + axis * sizeof(float));
             if (!coordinate(scale))
                 return -1;
             for (row = 0; row < 3; ++row)
@@ -477,10 +490,11 @@ static int model(MeshReader *reader, uint32_t offset, const Matrix *matrix)
 static int object_index(const MeshReader *reader, uint32_t offset, unsigned int *index)
 {
     size_t absolute;
-    if (relative(reader, offset, 52, &absolute) != 0 || absolute < reader->objects ||
-        (absolute - reader->objects) % 52 != 0)
+    if (relative(reader, offset, CHUNK_OBJECT_SIZE, &absolute) != 0 ||
+        absolute < reader->objects ||
+        (absolute - reader->objects) % CHUNK_OBJECT_SIZE != 0)
         return -1;
-    *index = (unsigned int)((absolute - reader->objects) / 52);
+    *index = (unsigned int)((absolute - reader->objects) / CHUNK_OBJECT_SIZE);
     return *index < reader->object_count ? 0 : -1;
 }
 
@@ -493,7 +507,8 @@ static int object_matrix_without_rotation(const unsigned char *object,
     if (!(flags & 1)) {
         float position[3];
         for (axis = 0; axis < 3; ++axis) {
-            position[axis] = f32(object + 8 + axis * 4);
+            position[axis] = f32(object +
+                offsetof(RecvxChunkObjectDisk, position) + axis * sizeof(float));
             if (!coordinate(position[axis]))
                 return -1;
         }
@@ -503,7 +518,8 @@ static int object_matrix_without_rotation(const unsigned char *object,
     }
     if (!(flags & 4))
         for (axis = 0; axis < 3; ++axis) {
-            float scale = f32(object + 32 + axis * 4);
+            float scale = f32(object +
+                offsetof(RecvxChunkObjectDisk, scale) + axis * sizeof(float));
             if (!coordinate(scale))
                 return -1;
             for (row = 0; row < 3; ++row)
@@ -519,9 +535,13 @@ static int hierarchy_matrices(MeshReader *reader, unsigned int index,
     if (depth >= MAX_DEPTH)
         return -2;
     for (;;) {
-        const unsigned char *object = reader->bytes + reader->objects + index * 52;
-        uint32_t flags = u32(object), child = u32(object + 44);
-        uint32_t sibling = u32(object + 48);
+        const unsigned char *object = reader->bytes + reader->objects +
+                                      index * CHUNK_OBJECT_SIZE;
+        uint32_t flags = u32(object + offsetof(RecvxChunkObjectDisk, flags));
+        uint32_t child = u32(object +
+            offsetof(RecvxChunkObjectDisk, child_offset));
+        uint32_t sibling = u32(object +
+            offsetof(RecvxChunkObjectDisk, sibling_offset));
         Matrix matrix;
         unsigned int next;
         int result;
@@ -555,9 +575,15 @@ static int tree(MeshReader *reader, unsigned int index, const Matrix *parent, un
     if (depth >= MAX_DEPTH)
         return -2;
     for (;;) {
-        const unsigned char *object = reader->bytes + reader->objects + index * 52;
-        uint32_t flags = u32(object), model_offset = u32(object + 4);
-        uint32_t child = u32(object + 44), sibling = u32(object + 48);
+        const unsigned char *object = reader->bytes + reader->objects +
+                                      index * CHUNK_OBJECT_SIZE;
+        uint32_t flags = u32(object + offsetof(RecvxChunkObjectDisk, flags));
+        uint32_t model_offset = u32(object +
+            offsetof(RecvxChunkObjectDisk, model_offset));
+        uint32_t child = u32(object +
+            offsetof(RecvxChunkObjectDisk, child_offset));
+        uint32_t sibling = u32(object +
+            offsetof(RecvxChunkObjectDisk, sibling_offset));
         Matrix matrix;
         unsigned int next;
         int result;
@@ -614,7 +640,7 @@ int recvxBuildPlayerMesh(const RecvxPlayerModelAsset *model, RecvxRoomMesh *mesh
     reader.size = model->size;
     reader.body = model->header_offset;
     reader.object_count = model->object_count;
-    object_bytes = (size_t)reader.object_count * 52;
+    object_bytes = (size_t)reader.object_count * CHUNK_OBJECT_SIZE;
     if (relative(&reader, model->object_offset, object_bytes, &reader.objects) != 0)
         return -1;
     reader.visited = calloc(reader.object_count, 1);
@@ -701,7 +727,7 @@ int recvxPosePlayerMesh(const RecvxPlayerModelAsset *model,
     reader.size = model->size;
     reader.body = model->header_offset;
     reader.object_count = model->object_count;
-    object_bytes = (size_t)reader.object_count * 52;
+    object_bytes = (size_t)reader.object_count * CHUNK_OBJECT_SIZE;
     if (relative(&reader, model->object_offset, object_bytes, &reader.objects) != 0)
         return -1;
     reader.visited = visited;
@@ -1017,17 +1043,21 @@ int recvxBuildRoomMesh(const void *room, size_t size, RecvxRoomMesh *mesh)
         goto done;
     }
     blob = u32(reader.bytes + directory);
-    if (!range(&reader, blob, 16) || memcmp(reader.bytes + blob, "MDL", 3) != 0) {
+    if (!range(&reader, blob, sizeof(RecvxPlayerModelDiskHeader)) ||
+        memcmp(reader.bytes + blob, "MDL", 3) != 0) {
         result = -1;
         goto done;
     }
-    if (!(reader.bytes[blob + 3] & 0x80)) {
+    if (!(reader.bytes[blob + offsetof(RecvxPlayerModelDiskHeader, flags)] & 0x80)) {
         result = -4;
         goto done;
     }
-    reader.body = blob + u16(reader.bytes + blob + 4);
-    reader.object_count = u16(reader.bytes + blob + 6);
-    if (u16(reader.bytes + blob + 4) < 16 || reader.body > size || reader.object_count == 0) {
+    reader.body = blob + u16(reader.bytes + blob +
+        offsetof(RecvxPlayerModelDiskHeader, header_size));
+    reader.object_count = u16(reader.bytes + blob +
+        offsetof(RecvxPlayerModelDiskHeader, object_count));
+    if (reader.body - blob < sizeof(RecvxPlayerModelDiskHeader) ||
+        reader.body > size || reader.object_count == 0) {
         result = -1;
         goto done;
     }
@@ -1035,8 +1065,10 @@ int recvxBuildRoomMesh(const void *room, size_t size, RecvxRoomMesh *mesh)
         result = -2;
         goto done;
     }
-    object_offset = u32(reader.bytes + blob + 12);
-    if (relative(&reader, object_offset, reader.object_count * 52, &reader.objects) != 0) {
+    object_offset = u32(reader.bytes + blob +
+        offsetof(RecvxPlayerModelDiskHeader, object_offset));
+    if (relative(&reader, object_offset,
+                 reader.object_count * CHUNK_OBJECT_SIZE, &reader.objects) != 0) {
         result = -1;
         goto done;
     }

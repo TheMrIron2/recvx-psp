@@ -5,8 +5,8 @@ working-tree changes. Follow-up PSP measurements below were recorded against
 `e5fda38b` on the same date.
 This is an architectural audit and implementation roadmap, not a claim of full-game compatibility or a line-by-line correctness review.
 
-The next milestone should be an original scripted gameplay sequence on PSP: an animated player, original movement and collision, automatic camera cuts, an interaction, and a door transition with persistent state.
-Build this by bringing the original game logic onto a small PSP platform layer. Keep the viewer as a diagnostic tool and its validated asset readers as a foundation.
+The next gameplay milestone is original player movement and camera control on PSP, followed by a scripted interaction and door transition with persistent state.
+Build this by bringing original game logic onto a small PSP platform layer. Keep the viewer as a diagnostic tool and its validated asset readers as a foundation.
 
 ## Evidence and current scope
 
@@ -34,6 +34,22 @@ ASAN_OPTIONS=detect_leaks=0 build/host/port-test /tmp/recvx-port-audit-data
 These checks cover the static-room path. They do not validate every embedded actor, animation, script, texture group, audio bank, or playable room state.
 The Python tests and all-room scan use the unsanitized shared library; the separate C runner supplies the sanitizer coverage.
 There are currently no direct player-controller tests in `tests/`.
+
+The rebuilt EBOOT was also smoke-run in PPSSPP 1.19.3. The room checks pass
+for `RM_0000`, `RM_0020`, and `RM_0030`; `RM_0020` enters walking mode and
+responds to forward input. In `RM_0030`, the walking model responds to forward
+input at the jail gate but remains at the boundary reported by the user on
+hardware. This reproduces the known room collision limit. The current EBOOT
+also runs the original `bhSysCallInit`/`bhInitSystem` path through task slot 0.
+PPSSPP reports success, 2,912 bytes of arena use, task mask
+`0x00300002`, and the original `-2`/`-20000` clip request. It then loads the
+room and retains viewer behavior. Its bounded core interpreter executes 22
+RM_0000 SCD0 commands, performs 18 original flag writes, and queues event 38
+in task 7 (352-byte event body). It stops with an explicit unsupported-command
+diagnostic at enemy-dependent opcode `0x24`, offset `0x7A`; that event body is
+not yet executed. This closes M1's initialization and scripted-state gate, not
+the playable-gameplay gates. Captures are in the ignored
+`build/psp/ppsspp-smoke/` directory.
 
 Since this audit, the initial new-game route and its player archive dependency
 have been traced from the supplied USA ISO. The `route-audit` tool follows
@@ -107,10 +123,12 @@ The first portable slice now lives in `include/psp/abi.h` and
 `include/psp/ninja_math.h`: fixed-width game/Ninja values, core vector/matrix
 shapes, and Ninja angle conversion are independent of the PS2 SDK. Initial
 `ROM_WORK`, room header, cut prefix, actor placement, effect, collision, and
-spawn disk layouts have compile-time size/offset assertions. Light, motion,
-event, model, and save records still need equivalent checks.
-`include/psp/platform.h` provides normalized button edges and monotonic time;
-the PSP adapter contains the controller, clock, and kernel calls.
+spawn disk layouts have compile-time size/offset assertions. These now also
+cover room lights, event cameras, player model/motion records, and save records.
+`include/psp/platform.h` provides normalized button levels and edges; the PSP
+adapter contains the controller, clock, and kernel calls. The portable input
+service adds PS2-style 30 Hz D-pad repeat timing with the original 10-tick
+initial delay and 4-tick interval.
 `include/psp/file.h`
 now separates read, line, size, and close operations from the stdio adapter.
 Room loads return a `RecvxRoomData` owner with a matching release function.
@@ -141,6 +159,35 @@ they pull in. Most headers include `types.h`, which imports PS2 SDK, graphics,
 pad, sound, CD/DVD, memory-card, and CRI declarations; direct source edits
 alone will not make these modules compile for PSP.
 
+The `__PSP__` branch in `types.h` now skips the Sony PS2 EE, graphics, pad,
+sound, CD/DVD, memory-card, and CRI headers. `psp/legacy_types.h` supplies the
+fixed-width aliases and incomplete SDK records shared by the game headers,
+with the vendored Ninja declarations included after PSP system headers. The
+original `main.c`, `system.c`, `system_init.c`, and `game.c` pass PSP syntax
+compilation via `make legacy-portable-check`. The original `bhInitSystem` and
+`bhSysCallInit` bodies now live in the isolated `system_init.c` translation
+unit and are linked into the EBOOT. The PSP runtime supplies the game globals,
+a bounded 256 KiB arena, aligned game allocations, memory statistics, font
+scale state, and the `njClipZ` request. The VBlank adapter advances the original
+counter fields after `sceDisplayWaitVblankStart`; it does not yet call the
+original audio/event work in `bhControlVSync`. The viewer's GU projection
+remains independent of the stored clip request.
+
+The PSP dispatcher invokes `bhSysCallInit` from slot 0. Its output task mask
+activates warning, monitor, and sound-monitor slots; unported slots remain
+visible by name. `system.c` still records its unsupported display-mode change
+instead of calling the PS2 movie/display library. The service registry reports
+service name, call count, and last caller on the PSP status screen.
+
+`make legacy-link-inventory` compiles `main.c`, `system_init.c`, `system.c`, and
+`game.c` and prints unresolved symbols per object. The remaining `main.c`,
+`system.c`, and `game.c` dependencies span full startup, room and actor loading,
+Ninja drawing, pad/timing, events, audio, saves, and movies. The EBOOT uses the
+PSP task dispatcher and viewer for slot 7, owns the original room event data,
+and runs a bounded subset of SCD0 flag, comparison, and event-queue commands.
+It does not link the full `event.c` opcode table or execute the queued event
+body; actor-dependent script operations remain explicit unsupported boundaries.
+
 | Source group | Direct dependencies | PSP boundary still needed |
 | --- | --- | --- |
 | `Motion.c` | `Motion.h`, `ps2_NaMath.h`, `ps2_NaMatrix.h` | Split actor/motion ABI from `types.h`; portable angle and matrix services |
@@ -150,17 +197,30 @@ alone will not make these modules compile for PSP.
 | `pl_evt.c`, `event.c` | Player/collision, room, effects, flags, messages, screen, sound, enemy dispatch, system state | Scenario pointer lifetime, event opcode services, presentation/audio and progression state |
 | `MdlPut.c` | `MdlPut.h`, `njplus.h`, Ninja Cnk, texture functions, matrix and `main.h` | Object/hierarchy ABI and PSP draw/texture adapter |
 
-`Makefile` currently links only `flag.c` and `ps2_NaMem.c` from the original
-game. This is an include-level map, not yet a complete undefined-symbol map:
-the listed gameplay modules have not been compiled against a PSP header shim.
-Collect their compiler and linker diagnostics as each dependency group is
-isolated, rather than filling unresolved symbols with success stubs.
+`Makefile` links `flag.c`, `ps2_NaMem.c`, and the isolated `system_init.c` from
+the original game. The include-level map for the source groups in the table is not yet a
+complete undefined-symbol map: the motion, player/collision, camera, event, and
+model-drawing groups have not been compiled against a PSP header shim. Collect
+their compiler and linker diagnostics as each dependency group is isolated,
+rather than filling unresolved symbols with success stubs.
 
 The reference loop in `main.c::njUserMain` dispatches active, unpaused task
 slots 0 through 22 in order, then calls `PS2_jikken` and the soft-reset check.
 Within each `bhMainSequence` loop, game updates run enemy, player, effect,
 object/item, camera, and light work before the final draw passes. These orders
 are recorded here; the PSP prototype has not imported those callbacks yet.
+
+`include/psp/game_tasks.h` and `src/psp/game_tasks.c` now provide the 23-slot
+active/unpaused dispatcher in ascending slot order. The prototype binds slot 7
+(`game`) to its existing renderer callback; this preserves a place to connect
+the original task loop while keeping the viewer usable. Active slots without
+handlers return a bitmask and are named on the diagnostic screen. This is a
+dispatcher skeleton only: original task callbacks, `PS2_jikken`, reset checks,
+and the `bhMainSequence` update/draw order remain unported.
+`include/psp/services.h` and `src/psp/services.c` record unsupported backend
+service calls for display mode, movies, audio, memory cards, disc streaming,
+and vibration; only the display-mode path is currently connected to an original
+caller.
 
 ### 3. Room ownership must change for gameplay
 
@@ -410,7 +470,7 @@ Per PPSSPP dev hrydgard: "sceSas doesn't have native midi support ... there migh
 | Milestone | Deliverable | Acceptance gate |
 | --- | --- | --- |
 | 0: Measured baseline (closed for prototype scope) | Reproducible build, current viewer, memory/frame/GE instrumentation, content inventory | Four connected opening-route rooms have immediate-spawn PSP measurements for memory, frame, and GE use at the enforced 333 MHz CPU / 166 MHz bus clock; one missed-deadline `RM_0030` sample is recorded. No representative stress, steady-play, or transition workload exists yet; profile them when gameplay provides one |
-| 1: Game foundation (in progress) | Portable ABI, math/input/file services, explicit room ownership, original task/timing skeleton | Required modules compile without PS2 SDK imports; disk-layout assertions pass; original initialization and scripted state can run with explicit unsupported-service diagnostics |
+| 1: Game foundation (closed) | Portable ABI, math/input/file services, explicit room ownership, original task/timing skeleton | Required modules compile without PS2 SDK imports; disk-layout assertions pass; original initialization and a real SCD0 state run with an explicit unsupported-command boundary |
 | 2: Original player | Player assets from `SYSTEM.AFS`, motion/skin support, original movement/collision and camera control | Animated Claire can idle, turn, walk/run and navigate a representative room with reference-matching poses, collision, and cuts |
 | 3: Playable sequence | Original events, interactions, messages, object state, doors, and basic audio | A contiguous original sequence includes a pickup or puzzle interaction, a scripted event, correct room transition, and persistent state on return |
 | 4: Game systems | Combat/enemy families, inventory/item box/map/files, save/load, menus, effects, complete audio/movie lifecycle | A representative chapter is completable with sound, combat, saving, cold-boot loading, death/retry, and cutscenes |
@@ -436,23 +496,28 @@ flag changes in the production path.
    GE, module, and command-list use. No representative stress, steady-play, or
    transition workload exists yet. Defer those profiles, offline-maxima
    captures, and allocation-level peak tracking until gameplay creates one.
-2. Continue Milestone 1's portable types and Ninja/platform boundary. Fixed-
-   width game values, initial room disk-layout assertions, Ninja angle math,
-   PSP input and clock adapters, a rational 30 Hz simulation tick, a
-   stdio-backed file service, and scoped room-data ownership are now in place.
-   An initial source-level compile/link dependency map identifies the ABI and
-   service groups for motion, player, collision, camera, event, and model
-   drawing. Broaden disk-layout assertions and turn this include map into
-   compiler/linker diagnostics while isolating modules.
+2. Milestone 1 is closed. Fixed-
+   width game values, room/model/motion/save disk-layout assertions, Ninja
+   angle math, PSP input and clock adapters, 30 Hz D-pad repeat timing, a
+   rational 30 Hz simulation tick, a stdio-backed file service, and scoped
+   room-data ownership are now in place. The PSP type boundary now lets original
+   `main.c`, `system.c`, `system_init.c`, and `game.c` pass a repeatable syntax
+   check. The original system initializer runs on PSP; the bounded SCD0 core
+   sets original flags and queues event 38 before stopping at unsupported
+   enemy-dependent opcode `0x24`. Keep that boundary visible while bringing
+   actor and event services across in the next milestones.
 3. Decode the extracted initial player model, skin, motion, and texture
    entries from `SYSTEM.AFS`; document model formats and resident costs. The
    initial stream extraction and size inventory now exist as `make
    player-assets`. The PSP preview samples authored idle and walk rotation
    tracks and applies the extracted skin weights; root motion and pose
    comparison against the original are still pending.
-4. Extend scoped room-data ownership into a budgeted gameplay lifetime, then
-   connect the original initialization and timing path while keeping the
-   current viewer available for diagnosis.
+4. Extend the M1 runtime bridge into gameplay. The 23-slot dispatcher and
+   provisional 30 Hz clock exist, the viewer remains bound to slot 7, and the
+   original initializer runs in slot 0 against a bounded PSP arena. Room event
+   data has explicit ownership, and the supported SCD0 prefix reaches the
+   original event-queue request. Next bring in the queued event body and the
+   actor/collision services it needs; keep unsupported operations visible.
 5. Drive the real player and cameras, then the first real script interaction
    and door. Add reference traces for position, animation, camera, flags,
    script position, and asynchronous completion at each integration step.
