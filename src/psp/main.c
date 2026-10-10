@@ -28,13 +28,15 @@ static RecvxEventData event_data;
 static RecvxPlayer player;
 static RecvxRoomMesh player_mesh;
 static RecvxPlayerAssets player_assets;
+static RecvxTextureSet player_textures;
 static RecvxGameTaskDispatcher game_tasks;
 static RecvxInputState game_task_input;
 static uint32_t unsupported_task_mask;
 static int game_task_playing;
-static unsigned char *player_model_data, *player_motion_data;
+static unsigned char *player_model_data, *player_motion_data, *player_extra_data;
 static int player_asset_status = 1;
 static int player_mesh_status = 1;
+static int player_texture_status = 1;
 static size_t player_source_bytes;
 static char room_name[RECVX_ROOM_NAME_SIZE];
 static char room_catalog[RECVX_MAX_ROOM_CATALOG][RECVX_ROOM_NAME_SIZE];
@@ -143,7 +145,8 @@ static int read_player_asset(const char *data_directory, const char *name,
 static void load_player_assets(const char *data_directory)
 {
     uint64_t started = recvxPlatformTimeUs();
-    size_t model_size = 0, motion_size = 0;
+    size_t model_size = 0, motion_size = 0, extra_size = 0, texture_size = 0;
+    unsigned char *texture_data = NULL;
     int result = read_player_asset(data_directory,
                                    "player_0_costume_0_models.bin",
                                    &player_model_data, &model_size);
@@ -151,9 +154,17 @@ static void load_player_assets(const char *data_directory)
         result = read_player_asset(data_directory,
                                    "player_0_costume_0_motions.bin",
                                    &player_motion_data, &motion_size);
+    if (result == 0) {
+        int extra_result = read_player_asset(data_directory,
+                                             "player_0_costume_0_extra.bin",
+                                             &player_extra_data, &extra_size);
+        if (extra_result != 0 && extra_result != 1)
+            result = extra_result;
+    }
     if (result == 0)
         result = recvxPlayerAssetsParse(player_model_data, model_size,
                                        player_motion_data, motion_size,
+                                       player_extra_data, extra_size,
                                        &player_assets);
     if (result == 0) {
         if (player_assets.model_count == 0)
@@ -164,18 +175,30 @@ static void load_player_assets(const char *data_directory)
             if (player_mesh_status != 0)
                 recvxMeshFree(&player_mesh);
         }
+        int texture_result = read_player_asset(data_directory,
+                                               "player_0_costume_0_textures.bin",
+                                               &texture_data, &texture_size);
+        if (texture_result == 0)
+            texture_result = recvxBuildPlayerTextures(texture_data, texture_size,
+                                                       &player_textures);
+        free(texture_data);
+        player_texture_status = texture_result;
     } else {
         player_mesh_status = result;
     }
     if (result != 0) {
         free(player_model_data);
         free(player_motion_data);
+        free(player_extra_data);
         player_model_data = NULL;
         player_motion_data = NULL;
+        player_extra_data = NULL;
         memset(&player_assets, 0, sizeof(player_assets));
     } else {
         player_source_bytes = player_assets.model_stream_size +
-                              player_assets.motion_stream_size;
+                              player_assets.motion_stream_size +
+                              player_assets.speed_stream_size +
+                              player_textures.storage_bytes;
     }
     player_asset_status = result;
     player_asset_load_us = recvxPlatformTimeUs() - started;
@@ -230,7 +253,7 @@ static void show_checks(const char *data_directory)
     show_unsupported_tasks();
     show_unsupported_services();
     if (player_asset_status == 0)
-        pspDebugScreenPrintf("Original actor data: %u models, %u skins, %u/%u motions\n\n",
+        pspDebugScreenPrintf("Original actor data: %u models, %u skins, %u/%u motions\n",
                              (unsigned int)player_assets.model_count,
                              (unsigned int)player_assets.skin_count,
                              (unsigned int)player_assets.populated_motions,
@@ -240,6 +263,10 @@ static void show_checks(const char *data_directory)
     else
         pspDebugScreenPrintf("Original actor data: invalid records (%d)\n\n",
                              player_asset_status);
+    if (player_asset_status == 0)
+        pspDebugScreenPrintf("Claire texture pages: %u, load %d\n\n",
+                             (unsigned int)player_textures.count,
+                             player_texture_status);
     if (player_asset_status == 0 && player_mesh_status == 0)
         pspDebugScreenPrintf("Player mesh: %u objects, %u triangles, static preview\n\n",
                              (unsigned int)player_mesh.object_count,
@@ -512,6 +539,7 @@ int main(int argc, char **argv)
                 if (recvxRendererStart(&scene, &mesh, &textures, &player,
                                        player_asset_status == 0 ? &player_assets : NULL,
                                        player_mesh_status == 0 ? &player_mesh : NULL,
+                                       player_texture_status == 0 ? &player_textures : NULL,
                                        player_source_bytes) == 0) {
                     viewing = 1;
                     playing = 1;
@@ -528,7 +556,7 @@ int main(int argc, char **argv)
                     show_checks(data_directory);
                 } else if (scene.vertices != NULL) {
                     if (recvxRendererStart(&scene, &mesh, &textures, NULL,
-                                           NULL, NULL, 0) == 0)
+                                           NULL, NULL, NULL, 0) == 0)
                         viewing = 1;
                     else
                         pspDebugScreenPrintf("Could not initialize the renderer.\n");
@@ -592,6 +620,7 @@ int main(int argc, char **argv)
     recvxMeshFree(&player_mesh);
     free(player_model_data);
     free(player_motion_data);
+    free(player_extra_data);
     recvxLegacyRuntimeShutdown();
     sceKernelExitGame();
     return 0;

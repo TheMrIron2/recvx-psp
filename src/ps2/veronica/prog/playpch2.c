@@ -7,6 +7,7 @@
 #include "../../../ps2/veronica/prog/ps2_NaMatrix.h"
 #include "../../../ps2/veronica/prog/pwksub.h"
 #include "../../../ps2/veronica/prog/sdfunc.h"
+#include "../../../ps2/veronica/prog/sub1.h"
 #include "../../../ps2/veronica/prog/weapon.h"
 
 // 100% matching!

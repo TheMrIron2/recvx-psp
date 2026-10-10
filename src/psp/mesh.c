@@ -27,8 +27,10 @@ typedef struct MeshReader {
     size_t size, body, objects;
     unsigned int object_count;
     unsigned char *visited;
-    uint32_t vertex_limit, batch_limit, motion_frame;
+    uint32_t vertex_limit, batch_limit, motion_frame, from_motion_frame;
     const RecvxPlayerMotionAsset *motion;
+    const RecvxPlayerMotionAsset *from_motion;
+    float motion_blend;
     const RecvxPlayerModelAsset *player_model;
     const uint8_t *skin_weights;
     uint32_t skin_weight_count;
@@ -88,11 +90,11 @@ static void rotate(Matrix *matrix, unsigned int axis, unsigned int angle)
     }
 }
 
-static int motion_angles(const MeshReader *reader, unsigned int object_index,
-                         unsigned int angles[3])
+static int motion_angles(const MeshReader *reader,
+                         const RecvxPlayerMotionAsset *motion, uint32_t frame,
+                         unsigned int object_index, unsigned int angles[3])
 {
-    const RecvxPlayerMotionAsset *motion = reader->motion;
-    uint32_t base, reference, frame;
+    uint32_t base, reference, key_frame;
     size_t object_data, key_data;
     if (motion == NULL || object_index >= motion->object_count)
         return 0;
@@ -114,19 +116,70 @@ static int motion_angles(const MeshReader *reader, unsigned int object_index,
         offsetof(RecvxMotionObjectDiskTrack, angle_offset));
     if (reference == UINT32_MAX)
         return 0;
-    frame = reader->motion_frame % motion->frame_count;
+    key_frame = frame % motion->frame_count;
     if (reference > motion->size - base ||
-        (size_t)frame > (motion->size - base - reference) / 6 ||
+        (size_t)key_frame > (motion->size - base - reference) / 6 ||
         motion->size - base - reference -
-            (size_t)frame * sizeof(RecvxMotionAngleDiskKey) <
+            (size_t)key_frame * sizeof(RecvxMotionAngleDiskKey) <
                 sizeof(RecvxMotionAngleDiskKey))
         return -1;
     key_data = (size_t)base + reference +
-               (size_t)frame * sizeof(RecvxMotionAngleDiskKey);
+               (size_t)key_frame * sizeof(RecvxMotionAngleDiskKey);
     angles[0] = u16(motion->data + key_data);
     angles[1] = u16(motion->data + key_data + 2);
     angles[2] = u16(motion->data + key_data + 4);
     return 1;
+}
+
+static int motion_position(const MeshReader *reader,
+                           const RecvxPlayerMotionAsset *motion, uint32_t frame,
+                           unsigned int object_index, float position[3])
+{
+    uint32_t base, reference, key_frame;
+    size_t object_data, key_data;
+    unsigned int axis;
+    if (motion == NULL || object_index >= motion->object_count)
+        return 0;
+    if (motion->data == NULL || motion->size < 16 ||
+        motion->frame_count == 0 || motion->object_count != reader->object_count)
+        return -1;
+    base = (uint32_t)u16(motion->data +
+        offsetof(RecvxPlayerMotionDiskHeader, header_size));
+    if (base > motion->size || motion->data_offset > motion->size - base ||
+        (size_t)object_index * sizeof(RecvxMotionObjectDiskTrack) >
+            motion->size - base - motion->data_offset ||
+        motion->size - base - motion->data_offset -
+            object_index * sizeof(RecvxMotionObjectDiskTrack) <
+                sizeof(RecvxMotionObjectDiskTrack))
+        return -1;
+    object_data = (size_t)base + motion->data_offset +
+                  object_index * sizeof(RecvxMotionObjectDiskTrack);
+    reference = u32(motion->data + object_data +
+        offsetof(RecvxMotionObjectDiskTrack, position_offset));
+    if (reference == UINT32_MAX)
+        return 0;
+    key_frame = frame % motion->frame_count;
+    if (reference > motion->size - base ||
+        (size_t)key_frame > (motion->size - base - reference) /
+                        sizeof(RecvxMotionPositionDiskKey) ||
+        motion->size - base - reference -
+            (size_t)key_frame * sizeof(RecvxMotionPositionDiskKey) <
+                sizeof(RecvxMotionPositionDiskKey))
+        return -1;
+    key_data = (size_t)base + reference +
+               (size_t)key_frame * sizeof(RecvxMotionPositionDiskKey);
+    for (axis = 0; axis < 3; ++axis) {
+        position[axis] = f32(motion->data + key_data + axis * sizeof(float));
+        if (!coordinate(position[axis]))
+            return -1;
+    }
+    return 1;
+}
+
+static unsigned int blend_angle(unsigned int from, unsigned int to, float blend)
+{
+    int32_t delta = (int32_t)((to - from + 0x8000u) & 0xffffu) - 0x8000;
+    return (from + (uint32_t)(int32_t)(delta * blend)) & 0xffffu;
 }
 
 static int object_matrix(const MeshReader *reader, const unsigned char *object,
@@ -134,16 +187,39 @@ static int object_matrix(const MeshReader *reader, const unsigned char *object,
                          const Matrix *parent, Matrix *matrix)
 {
     unsigned int row, axis;
-    unsigned int angles[3];
-    int has_motion_angles = motion_angles(reader, object_index, angles);
-    if (has_motion_angles < 0)
+    unsigned int angles[3], from_angles[3];
+    float animated_position[3], from_position[3];
+    int has_motion_position = motion_position(reader, reader->motion,
+                                              reader->motion_frame, object_index,
+                                              animated_position);
+    int has_motion_angles = motion_angles(reader, reader->motion,
+                                          reader->motion_frame, object_index,
+                                          angles);
+    int has_from_position = motion_position(reader, reader->from_motion,
+                                            reader->from_motion_frame,
+                                            object_index, from_position);
+    int has_from_angles = motion_angles(reader, reader->from_motion,
+                                        reader->from_motion_frame,
+                                        object_index, from_angles);
+    if (has_motion_position < 0 || has_motion_angles < 0 ||
+        has_from_position < 0 || has_from_angles < 0)
         return -1;
     *matrix = *parent;
-    if (!(flags & 1)) {
+    if (has_motion_position || has_from_position || !(flags & 1)) {
         float position[3];
         for (axis = 0; axis < 3; ++axis) {
-            position[axis] = f32(object +
+            float bind_position = f32(object +
                 offsetof(RecvxChunkObjectDisk, position) + axis * sizeof(float));
+            float from_value, to_value;
+            if (!coordinate(bind_position))
+                return -1;
+            from_value = has_from_position ? from_position[axis] :
+                (flags & 1) ? 0.0f : bind_position;
+            to_value = has_motion_position ? animated_position[axis] :
+                (flags & 1) ? 0.0f : bind_position;
+            position[axis] = reader->from_motion != NULL ?
+                from_value + (to_value - from_value) * reader->motion_blend :
+                to_value;
             if (!coordinate(position[axis]))
                 return -1;
         }
@@ -151,13 +227,19 @@ static int object_matrix(const MeshReader *reader, const unsigned char *object,
             for (axis = 0; axis < 3; ++axis)
                 matrix->value[row][3] += matrix->value[row][axis] * position[axis];
     }
-    if (has_motion_angles || !(flags & 2)) {
+    if (has_motion_angles || has_from_angles || !(flags & 2)) {
         static const unsigned int orders[2][3] = {{2, 1, 0}, {1, 0, 2}};
         for (axis = 0; axis < 3; ++axis) {
             unsigned int rotation_axis = orders[(flags & 0x20) != 0][axis];
-            uint32_t angle = has_motion_angles ? angles[rotation_axis] :
-                u32(object + offsetof(RecvxChunkObjectDisk, angles) +
-                    rotation_axis * sizeof(uint32_t));
+            uint32_t bind_angle = u32(object +
+                offsetof(RecvxChunkObjectDisk, angles) + rotation_axis * sizeof(uint32_t));
+            unsigned int to_angle = has_motion_angles ? angles[rotation_axis] :
+                has_from_angles ? from_angles[rotation_axis] :
+                (flags & 2) ? 0 : bind_angle;
+            unsigned int from_angle = has_from_angles ? from_angles[rotation_axis] :
+                (flags & 2) ? 0 : bind_angle;
+            uint32_t angle = reader->from_motion != NULL ?
+                blend_angle(from_angle, to_angle, reader->motion_blend) : to_angle;
             rotate(matrix, rotation_axis, angle);
         }
     }
@@ -701,9 +783,12 @@ done:
     return result;
 }
 
-int recvxPosePlayerMesh(const RecvxPlayerModelAsset *model,
-                        const RecvxPlayerMotionAsset *motion, uint32_t frame,
-                        RecvxRoomMesh *mesh)
+int recvxBlendPlayerMeshPose(const RecvxPlayerModelAsset *model,
+                            const RecvxPlayerMotionAsset *from_motion,
+                            uint32_t from_frame,
+                            const RecvxPlayerMotionAsset *motion,
+                            uint32_t frame, float blend,
+                            RecvxRoomMesh *mesh)
 {
     MeshReader reader = {0};
     unsigned char visited[MAX_OBJECTS];
@@ -716,7 +801,10 @@ int recvxPosePlayerMesh(const RecvxPlayerModelAsset *model,
         model->object_count > MAX_OBJECTS || model->header_offset > model->size ||
         mesh->storage == NULL || mesh->vertices == NULL || motion->present == 0 ||
         motion->object_count != model->object_count || motion->frame_count == 0 ||
-        motion->size == 0)
+        motion->size == 0 ||
+        (from_motion != NULL && (!from_motion->present || from_motion->size == 0 ||
+         from_motion->object_count != model->object_count ||
+         from_motion->frame_count == 0)))
         return -1;
     Matrix bind_matrices[model->object_count];
     Matrix posed_matrices[model->object_count];
@@ -734,6 +822,12 @@ int recvxPosePlayerMesh(const RecvxPlayerModelAsset *model,
     memset(visited, 0, reader.object_count);
     reader.motion = motion;
     reader.motion_frame = frame % motion->frame_count;
+    reader.from_motion = from_motion;
+    if (from_motion != NULL) {
+        blend = fmaxf(0.0f, fminf(1.0f, blend));
+        reader.from_motion_frame = from_frame % from_motion->frame_count;
+        reader.motion_blend = blend;
+    }
     reader.player_model = model;
     reader.vertex_limit = mesh->vertex_count;
     reader.batch_limit = mesh->batch_count;
@@ -779,6 +873,13 @@ int recvxPosePlayerMesh(const RecvxPlayerModelAsset *model,
     if (result == 0)
         *mesh = reader.mesh;
     return result;
+}
+
+int recvxPosePlayerMesh(const RecvxPlayerModelAsset *model,
+                        const RecvxPlayerMotionAsset *motion, uint32_t frame,
+                        RecvxRoomMesh *mesh)
+{
+    return recvxBlendPlayerMeshPose(model, NULL, 0, motion, frame, 1.0f, mesh);
 }
 
 int recvxMeshSetWireframe(RecvxRoomMesh *mesh, int enabled)

@@ -21,6 +21,8 @@
 #define SCREEN_HEIGHT 272
 #define BUFFER_WIDTH 512
 #define FRAME_BYTES (BUFFER_WIDTH * SCREEN_HEIGHT * 4)
+#define PLAYER_HOKAN_RATE (42598.0f / 65536.0f)
+#define PLAYER_REVERSE_HOKAN_RATE (49152.0f / 65536.0f)
 
 static unsigned int command_list[16384] __attribute__((aligned(64)));
 static void *draw_buffer;
@@ -40,11 +42,28 @@ static int player_mode;
 static const RecvxRoomMesh *player_model_mesh;
 static RecvxRoomMesh *player_actor_mesh;
 static const RecvxPlayerAssets *player_actor_assets;
+static const RecvxTextureSet *player_actor_textures;
 static unsigned int player_animation_slot;
 static float player_animation_frame;
+static unsigned int player_transition_slot;
+static uint32_t player_transition_frame;
+static unsigned int player_transition_remaining;
+static unsigned int player_transition_duration;
+static float player_transition_rate;
+static float player_speed_per_tick;
 static int fixed_camera_active;
 static ScePspFVector3 fixed_eye_offset, fixed_camera_forward, fixed_camera_up;
+static ScePspFVector3 fixed_camera_base;
+static uint16_t fixed_camera_angles[3];
+static float fixed_camera_lens;
 static float fixed_camera_fov;
+static uint32_t fixed_camera_pose_cut;
+static uint32_t fixed_camera_pose_variant;
+static uint16_t fixed_camera_pose_flags;
+static uint32_t fixed_camera_transition_frame;
+static uint32_t fixed_camera_transition_duration;
+static int fixed_camera_pose_initialized;
+static int fixed_camera_transition_active;
 
 typedef struct PlayerVertex {
     uint32_t color;
@@ -94,7 +113,8 @@ static int set_wireframe(RecvxRoomMesh *mesh, int enabled)
 
 static void draw_memory_hud(const RecvxScene *scene, const RecvxRoomMesh *mesh,
                             const RecvxTextureSet *textures,
-                            const RecvxPlayerRoom *player_room)
+                            const RecvxPlayerRoom *player_room,
+                            const RecvxPlayer *player)
 {
     SceSize free_bytes = sceKernelTotalFreeMemSize();
     SceSize largest_block = sceKernelMaxFreeMemSize();
@@ -107,6 +127,8 @@ static void draw_memory_hud(const RecvxScene *scene, const RecvxRoomMesh *mesh,
         (size_t)player_room->wall_count * sizeof(*player_room->walls) : 0;
     size_t door_bytes = player_room != NULL ?
         (size_t)player_room->door_count * sizeof(*player_room->doors) : 0;
+    size_t floor_bytes = player_room != NULL ?
+        (size_t)player_room->floor_count * sizeof(*player_room->floors) : 0;
     size_t wire_capacity = mesh != NULL ?
         (size_t)mesh->triangle_count * 6 * sizeof(RecvxSceneVertex) : 0;
     size_t wire_bytes = mesh != NULL && mesh->wire_vertices != NULL ? wire_capacity : 0;
@@ -127,10 +149,11 @@ static void draw_memory_hud(const RecvxScene *scene, const RecvxRoomMesh *mesh,
                          (unsigned int)(wire_bytes / 1024),
                          (unsigned int)(wire_saved / 1024));
     pspDebugScreenSetXY(1, 6);
-    pspDebugScreenPrintf("Player data %uK mesh %uK walls %uK doors %uK",
+    pspDebugScreenPrintf("Player data %uK mesh %uK wall %uK floor %uK door %uK",
                          (unsigned int)(player_source_bytes / 1024),
                          (unsigned int)(player_mesh_bytes / 1024),
                          (unsigned int)(wall_bytes / 1024),
+                         (unsigned int)(floor_bytes / 1024),
                          (unsigned int)(door_bytes / 1024));
     pspDebugScreenSetXY(1, 7);
     pspDebugScreenPrintf("Frame %u.%02u CPU+submit %u.%02u GE wait %u.%02u ms",
@@ -148,6 +171,9 @@ static void draw_memory_hud(const RecvxScene *scene, const RecvxRoomMesh *mesh,
                          (unsigned int)(command_list_bytes / 1024),
                          (unsigned int)(sizeof(command_list) / 1024),
                          (unsigned int)(command_list_high_water / 1024));
+    pspDebugScreenSetXY(1, 9);
+    pspDebugScreenPrintf("Floor target %d",
+                         player != NULL ? (int)player->floor_target_index : -1);
 }
 
 static int object_hidden(const RecvxRoomMesh *mesh, uint32_t object_index)
@@ -216,6 +242,103 @@ static int32_t limited_camera_angle(int32_t base, int32_t target, int32_t limit)
     return (uint16_t)(base + delta);
 }
 
+static float camera_rate(float rate)
+{
+    if (rate <= 0.0f)
+        return 0.0f;
+    return rate >= 1.0f ? 1.0f : rate;
+}
+
+static int32_t camera_angle_step(uint16_t current, int32_t target, float rate)
+{
+    int32_t delta = camera_angle_delta(target, current);
+    return (uint16_t)(current + (int32_t)(delta * rate));
+}
+
+static int fixed_camera_transition_required(const RecvxRoomCamera *camera)
+{
+    return fixed_camera_pose_initialized &&
+           (fixed_camera_pose_cut != camera_cut ||
+            fixed_camera_pose_variant != camera_variant) &&
+           ((camera->flags & 0x2u) || (fixed_camera_pose_flags & 0x2u));
+}
+
+static void advance_fixed_camera_pose(const RecvxRoomCamera *camera,
+                                      const ScePspFVector3 *target_position,
+                                      const int32_t target_angles[3],
+                                      float target_lens, float target_fov,
+                                      uint32_t ticks)
+{
+    int pose_changed;
+    uint32_t tick;
+    if (!fixed_camera_pose_initialized) {
+        fixed_camera_base = *target_position;
+        fixed_camera_lens = target_lens;
+        fixed_camera_fov = target_fov;
+        for (unsigned int axis = 0; axis < 3; ++axis)
+            fixed_camera_angles[axis] = (uint16_t)target_angles[axis];
+        fixed_camera_pose_cut = camera_cut;
+        fixed_camera_pose_variant = camera_variant;
+        fixed_camera_pose_flags = camera->flags;
+        fixed_camera_transition_active = 0;
+        fixed_camera_pose_initialized = 1;
+    } else {
+        pose_changed = fixed_camera_pose_cut != camera_cut ||
+                       fixed_camera_pose_variant != camera_variant;
+        if (pose_changed) {
+            int32_t duration;
+            fixed_camera_transition_active =
+                (camera->flags & 0x2u) || (fixed_camera_pose_flags & 0x2u);
+            fixed_camera_transition_frame = 0;
+            duration = (int8_t)camera->speed + 1;
+            fixed_camera_transition_duration = duration > 0 ?
+                (uint32_t)duration : 1;
+            fixed_camera_pose_cut = camera_cut;
+            fixed_camera_pose_variant = camera_variant;
+            fixed_camera_pose_flags = camera->flags;
+            if (!fixed_camera_transition_active) {
+                fixed_camera_base = *target_position;
+                fixed_camera_lens = target_lens;
+                fixed_camera_fov = target_fov;
+                for (unsigned int axis = 0; axis < 3; ++axis)
+                    fixed_camera_angles[axis] = (uint16_t)target_angles[axis];
+            }
+        }
+        for (tick = 0; tick < ticks; ++tick) {
+            float position_rate = camera_rate(camera->angle_speed);
+            float angle_rate = camera_rate(camera->angle_speed8 * 0.01f);
+            float perspective_rate;
+            perspective_rate = angle_rate;
+            if (fixed_camera_transition_active) {
+                position_rate = fixed_camera_transition_duration != 0 ?
+                    (float)fixed_camera_transition_frame /
+                    (float)fixed_camera_transition_duration : 1.0f;
+                perspective_rate = position_rate;
+                if (!(camera->flags & 0x4u))
+                    angle_rate = position_rate;
+            }
+            fixed_camera_base.x += position_rate *
+                (target_position->x - fixed_camera_base.x);
+            fixed_camera_base.y += position_rate *
+                (target_position->y - fixed_camera_base.y);
+            fixed_camera_base.z += position_rate *
+                (target_position->z - fixed_camera_base.z);
+            fixed_camera_lens += position_rate *
+                (target_lens - fixed_camera_lens);
+            fixed_camera_fov += perspective_rate *
+                (target_fov - fixed_camera_fov);
+            for (unsigned int axis = 0; axis < 3; ++axis)
+                fixed_camera_angles[axis] = (uint16_t)camera_angle_step(
+                    fixed_camera_angles[axis], target_angles[axis], angle_rate);
+            if (fixed_camera_transition_active) {
+                ++fixed_camera_transition_frame;
+                if (fixed_camera_transition_frame >= fixed_camera_transition_duration)
+                    fixed_camera_transition_active = 0;
+            }
+        }
+    }
+}
+
 static void fixed_camera_base_position(const RecvxRoomMesh *mesh,
                                        const RecvxPlayer *player,
                                        uint32_t attr,
@@ -244,31 +367,43 @@ static void fixed_camera_base_position(const RecvxRoomMesh *mesh,
 }
 
 static void configure_fixed_camera(const RecvxRoomMesh *mesh,
-                                   const RecvxPlayer *player)
+                                   const RecvxPlayer *player,
+                                   uint32_t simulation_ticks)
 {
     const RecvxRoomCamera *camera;
-    ScePspFVector3 base_position, offset = {0.0f, 0.0f, 0.0f};
+    ScePspFVector3 base_position, aim_position, offset = {0.0f, 0.0f, 0.0f};
     ScePspFVector3 forward = {0.0f, 0.0f, -1.0f};
     ScePspFVector3 up = {0.0f, 1.0f, 0.0f};
     int32_t angles[3];
     uint32_t attr, perspective;
-    float dx, dy, dz, horizontal;
+    float dx, dy, dz, horizontal, target_fov = 50.0f;
     fixed_camera_active = 0;
-    fixed_camera_fov = 50.0f;
     if (mesh == NULL || player == NULL || mesh->cameras == NULL ||
         camera_cut >= mesh->cut_count)
         return;
     camera = &mesh->cameras[camera_cut * 2 + camera_variant];
     attr = recvxRoomCutAttributeForPosition(mesh, camera_cut, player->x,
                                             player->z, player->floor);
+    attr = camera_variant != 0 ? attr >> 16 : attr & 0xffffu;
     fixed_camera_base_position(mesh, player, attr, &base_position);
+    aim_position = base_position;
+    if (fixed_camera_pose_initialized &&
+        ((fixed_camera_pose_cut == camera_cut &&
+          fixed_camera_pose_variant == camera_variant) ||
+         fixed_camera_transition_required(camera)))
+        aim_position = fixed_camera_base;
     for (unsigned int axis = 0; axis < 3; ++axis)
         angles[axis] = signed_camera_angle(camera->angles[axis]);
-    dx = player->x - base_position.x;
-    dz = player->z - base_position.z;
-    dy = player->y + camera->height - base_position.y;
+    dx = player->x - aim_position.x;
+    dz = player->z - aim_position.z;
+    dy = player->y + camera->height - aim_position.y;
     horizontal = sqrtf(dx * dx + dz * dz);
-    if (!(camera->flags & 1u)) {
+    if (camera->flags & 0x4u) {
+        if (!(attr & 0x4u))
+            angles[0] = (int32_t)(-atan2f(dy, horizontal) * 10430.37835f);
+        if (!(attr & 0x2u))
+            angles[1] = (int32_t)(-atan2f(dx, dz) * 10430.37835f) + 32768;
+    } else if (!(camera->flags & 1u)) {
         if (camera->angle_limits[0] != 0 && !(attr & 0x4u)) {
             int32_t desired = (int32_t)(-atan2f(dy, horizontal) * 10430.37835f);
             angles[0] = limited_camera_angle(angles[0], desired,
@@ -278,6 +413,54 @@ static void configure_fixed_camera(const RecvxRoomMesh *mesh,
             int32_t desired = (int32_t)(-atan2f(dx, dz) * 10430.37835f) + 32768;
             angles[1] = limited_camera_angle(angles[1], desired,
                                              signed_camera_angle(camera->angle_limits[1]));
+        }
+    } else {
+        int32_t current_pitch = fixed_camera_pose_initialized ?
+            signed_camera_angle(fixed_camera_angles[0]) : angles[0];
+        int32_t current_yaw = fixed_camera_pose_initialized ?
+            signed_camera_angle(fixed_camera_angles[1]) : angles[1];
+        int32_t pitch_limit = signed_camera_angle(camera->angle_limits[0]);
+        int32_t yaw_limit = signed_camera_angle(camera->angle_limits[1]);
+        int32_t desired_pitch =
+            (int32_t)(-atan2f(dy, horizontal) * 10430.37835f);
+        int32_t desired_yaw =
+            (int32_t)(-atan2f(dx, dz) * 10430.37835f) + 32768;
+        int32_t delta;
+        if (camera->angle_limits[0] != 0 && !(attr & 0x4u)) {
+            if (pitch_limit < 0)
+                pitch_limit = -pitch_limit;
+            delta = camera_angle_delta(desired_pitch, angles[0]);
+            if (delta < -pitch_limit) {
+                int32_t next = (uint16_t)(angles[0] - pitch_limit);
+                if (camera_angle_delta(next, current_pitch) > 0)
+                    next = current_pitch;
+                angles[0] = next;
+            } else if (delta > pitch_limit) {
+                int32_t next = (uint16_t)(angles[0] + pitch_limit);
+                if (camera_angle_delta(next, current_pitch) < 0)
+                    next = current_pitch;
+                angles[0] = next;
+            } else {
+                angles[0] = current_pitch;
+            }
+        }
+        if (camera->angle_limits[1] != 0 && !(attr & 0x2u)) {
+            if (yaw_limit < 0)
+                yaw_limit = -yaw_limit;
+            delta = camera_angle_delta(desired_yaw, angles[1]);
+            if (delta < -yaw_limit) {
+                int32_t next = (uint16_t)(angles[1] - yaw_limit);
+                if (camera_angle_delta(next, current_yaw) > 0)
+                    next = current_yaw;
+                angles[1] = next;
+            } else if (delta > yaw_limit) {
+                int32_t next = (uint16_t)(angles[1] + yaw_limit);
+                if (camera_angle_delta(next, current_yaw) < 0)
+                    next = current_yaw;
+                angles[1] = next;
+            } else {
+                angles[1] = current_yaw;
+            }
         }
     }
     if ((camera->roll_limits[0] != 0 || camera->roll_limits[1] != 0 ||
@@ -291,19 +474,6 @@ static void configure_fixed_camera(const RecvxRoomMesh *mesh,
                    ((camera->roll_limits[3] - camera->roll_limits[1]) / camera->cut_depth);
         angles[2] = (uint16_t)(angles[2] + z0 + x_delta * (z1 - z0) / camera->cut_width);
     }
-    offset.z = -camera->lens;
-    rotate_camera_vector(&offset, 2, angles[2]);
-    rotate_camera_vector(&offset, 0, angles[0]);
-    rotate_camera_vector(&offset, 1, angles[1]);
-    rotate_camera_vector(&forward, 2, -angles[2]);
-    rotate_camera_vector(&forward, 0, -angles[0]);
-    rotate_camera_vector(&forward, 1, -angles[1]);
-    rotate_camera_vector(&up, 2, -angles[2]);
-    rotate_camera_vector(&up, 0, -angles[0]);
-    rotate_camera_vector(&up, 1, -angles[1]);
-    fixed_eye_offset = offset;
-    fixed_camera_forward = forward;
-    fixed_camera_up = up;
     perspective = camera->perspective;
     if (camera->flags & 0x20u && camera->cut_width != 0.0f &&
         camera->cut_depth != 0.0f) {
@@ -315,13 +485,32 @@ static void configure_fixed_camera(const RecvxRoomMesh *mesh,
         float p3 = ((perspective >> 24) & 0xffu) * 182.04445f;
         float a0 = p0 + z_delta * ((p2 - p0) / camera->cut_depth);
         float a1 = p1 + z_delta * ((p3 - p1) / camera->cut_depth);
-        fixed_camera_fov = (a0 + x_delta * (a1 - a0) / camera->cut_width) *
-                           (360.0f / 65536.0f);
+        target_fov = (a0 + x_delta * (a1 - a0) / camera->cut_width) *
+                     (360.0f / 65536.0f);
     } else if ((perspective & 0xffffu) != 0) {
-        fixed_camera_fov = (perspective & 0xffffu) * (360.0f / 65536.0f);
+        target_fov = (perspective & 0xffffu) * (360.0f / 65536.0f);
     }
-    if (fixed_camera_fov < 15.0f || fixed_camera_fov > 120.0f)
-        fixed_camera_fov = 50.0f;
+    if (target_fov < 15.0f || target_fov > 120.0f)
+        target_fov = 50.0f;
+    advance_fixed_camera_pose(camera, &base_position, angles, camera->lens,
+                              target_fov, simulation_ticks);
+    for (unsigned int axis = 0; axis < 3; ++axis)
+        angles[axis] = signed_camera_angle(fixed_camera_angles[axis]);
+    offset.z = -fixed_camera_lens;
+    rotate_camera_vector(&offset, 2, angles[2]);
+    rotate_camera_vector(&offset, 0, angles[0]);
+    rotate_camera_vector(&offset, 1, angles[1]);
+    forward = (ScePspFVector3){0.0f, 0.0f, -1.0f};
+    up = (ScePspFVector3){0.0f, 1.0f, 0.0f};
+    rotate_camera_vector(&forward, 2, -angles[2]);
+    rotate_camera_vector(&forward, 0, -angles[0]);
+    rotate_camera_vector(&forward, 1, -angles[1]);
+    rotate_camera_vector(&up, 2, -angles[2]);
+    rotate_camera_vector(&up, 0, -angles[0]);
+    rotate_camera_vector(&up, 1, -angles[1]);
+    fixed_eye_offset = offset;
+    fixed_camera_forward = forward;
+    fixed_camera_up = up;
     fixed_camera_active = 1;
 }
 
@@ -329,10 +518,9 @@ static void fixed_camera_position(const RecvxRoomMesh *mesh,
                                   const RecvxPlayer *player,
                                   ScePspFVector3 *position)
 {
-    uint32_t attr = recvxRoomCutAttributeForPosition(mesh, camera_cut,
-                                                    player->x, player->z,
-                                                    player->floor);
-    fixed_camera_base_position(mesh, player, attr, position);
+    (void)mesh;
+    (void)player;
+    *position = fixed_camera_base;
     position->x += fixed_eye_offset.x;
     position->y += fixed_eye_offset.y;
     position->z += fixed_eye_offset.z;
@@ -373,20 +561,46 @@ static void set_batch_blending(const RecvxMeshBatch *batch)
 }
 
 static void draw_player_model(const RecvxPlayer *player,
-                              const RecvxRoomMesh *model)
+                              const RecvxRoomMesh *model,
+                              const RecvxTextureSet *textures)
 {
     ScePspFVector3 position = {player->x, player->y, player->z};
     uint32_t i;
     sceGuDisable(GU_TEXTURE_2D);
     sceGuDisable(GU_ALPHA_TEST);
+    if (textures != NULL && textures->textures != NULL && textures->count != 0) {
+        sceGuTexMode(GU_PSM_T8, 0, 0, 1);
+        sceGuClutMode(GU_PSM_8888, 0, 0xff, 0);
+        sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
+        sceGuTexScale(1, 1);
+        sceGuTexOffset(0, 0);
+        sceGuAlphaFunc(GU_GREATER, 0, 0xff);
+        sceGuEnable(GU_ALPHA_TEST);
+    }
     sceGumPushMatrix();
     sceGumTranslate(&position);
     sceGumRotateY(player->yaw);
     for (i = 0; i < model->batch_count; ++i) {
         const RecvxMeshBatch *batch = &model->batches[i];
+        const RecvxTexture *texture = NULL;
         if (batch->vertex_count == 0)
             continue;
+        if (textures != NULL && textures->textures != NULL &&
+            batch->texture_index < textures->count)
+            texture = &textures->textures[batch->texture_index];
         set_batch_blending(batch);
+        if (texture != NULL) {
+            sceGuEnable(GU_TEXTURE_2D);
+            sceGuClutLoad(32, texture->palette);
+            sceGuTexImage(0, texture->width, texture->height,
+                          texture->width, texture->pixels);
+            sceGuTexWrap(batch->flags & 1 ? GU_CLAMP : GU_REPEAT,
+                         batch->flags & 2 ? GU_CLAMP : GU_REPEAT);
+            sceGuTexFilter(batch->flags & 4 ? GU_LINEAR : GU_NEAREST,
+                           batch->flags & 4 ? GU_LINEAR : GU_NEAREST);
+            sceGuTexFlush();
+        } else
+            sceGuDisable(GU_TEXTURE_2D);
         sceGumDrawArray(GU_TRIANGLES,
                         GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_NORMAL_32BITF |
                         GU_VERTEX_32BITF | GU_TRANSFORM_3D,
@@ -394,6 +608,8 @@ static void draw_player_model(const RecvxPlayer *player,
                         model->vertices + batch->first_vertex);
     }
     sceGuDisable(GU_BLEND);
+    sceGuDisable(GU_ALPHA_TEST);
+    sceGuDisable(GU_TEXTURE_2D);
     sceGumPopMatrix();
 }
 
@@ -479,7 +695,7 @@ static void reset_camera(const RecvxScene *scene, const RecvxRoomMesh *mesh,
 {
     const float *position = display_mode != 3 && mesh && mesh->vertices ? mesh->center : scene->center;
     radius = display_mode != 3 && mesh && mesh->vertices ? mesh->radius : scene->radius;
-    configure_fixed_camera(mesh, player);
+    configure_fixed_camera(mesh, player, 0);
     if (player != NULL && fixed_camera_active) {
         fixed_camera_position(mesh, player, &center);
         center.x += fixed_camera_forward.x;
@@ -501,6 +717,7 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
                        const RecvxTextureSet *textures, const RecvxPlayer *player,
                        const RecvxPlayerAssets *actor_assets,
                        RecvxRoomMesh *actor_mesh,
+                       const RecvxTextureSet *actor_textures,
                        size_t actor_source_bytes)
 {
     if (scene == NULL || scene->vertices == NULL || initialized)
@@ -538,6 +755,12 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
         sceKernelDcacheWritebackRange(mesh->vertices, mesh->storage_bytes);
     if (actor_mesh && actor_mesh->vertices)
         sceKernelDcacheWritebackRange(actor_mesh->vertices, actor_mesh->storage_bytes);
+    if (actor_textures)
+        for (uint32_t i = 0; i < actor_textures->count; ++i) {
+            const RecvxTexture *texture = &actor_textures->textures[i];
+            sceKernelDcacheWritebackRange(texture->pixels,
+                                          texture->image_bytes + 1024);
+        }
     if (textures)
         for (uint32_t i = 0; i < textures->count; ++i) {
             const RecvxTexture *texture = &textures->textures[i];
@@ -552,10 +775,20 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
     player_model_mesh = actor_mesh;
     player_actor_mesh = actor_mesh;
     player_actor_assets = actor_assets;
+    player_actor_textures = actor_textures;
     player_animation_slot = UINT_MAX;
     player_animation_frame = 0.0f;
+    player_transition_slot = UINT_MAX;
+    player_transition_frame = 0;
+    player_transition_remaining = 0;
+    player_transition_duration = 0;
+    player_transition_rate = PLAYER_HOKAN_RATE;
     camera_cut = 0;
     camera_variant = 0;
+    fixed_camera_pose_initialized = 0;
+    fixed_camera_transition_active = 0;
+    fixed_camera_transition_frame = 0;
+    fixed_camera_transition_duration = 0;
     if (player_mode)
         update_player_culling(mesh, player, -1);
     apply_room_lighting(mesh);
@@ -566,42 +799,188 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
     return 0;
 }
 
+static unsigned int mapped_player_motion_frame(unsigned int source_slot,
+                                               float source_frame,
+                                               const RecvxPlayerMotionAsset *target)
+{
+    const RecvxPlayerMotionAsset *source;
+    if (player_actor_assets == NULL || target == NULL ||
+        source_slot >= player_actor_assets->motion_count)
+        return 0;
+    source = &player_actor_assets->motions[source_slot];
+    if (!source->present || source->frame_count == 0)
+        return 0;
+    return (unsigned int)(source_frame * target->frame_count / source->frame_count);
+}
+
+static const RecvxPlayerMotionAsset *player_motion(unsigned int slot)
+{
+    const RecvxPlayerMotionAsset *motion;
+    if (player_actor_assets == NULL || slot >= player_actor_assets->motion_count)
+        return NULL;
+    motion = &player_actor_assets->motions[slot];
+    return motion->present && motion->frame_count != 0 ? motion : NULL;
+}
+
+static void select_player_motion(unsigned int motion_slot,
+                                 unsigned int stair_phase)
+{
+    const RecvxPlayerMotionAsset *motion = player_motion(motion_slot);
+    unsigned int initial_frame = 0;
+    if (player_animation_slot == motion_slot)
+        return;
+    player_transition_slot = player_animation_slot;
+    player_transition_frame = (uint32_t)player_animation_frame;
+    player_animation_slot = motion_slot;
+    if (stair_phase != RECVX_PLAYER_STAIR_NONE) {
+        player_transition_duration = 4;
+        player_transition_rate = PLAYER_HOKAN_RATE;
+        if (stair_phase == RECVX_PLAYER_STAIR_RECOVER)
+            initial_frame = 15;
+    } else {
+        switch (motion_slot) {
+        case 0:
+            player_transition_duration = 8;
+            player_transition_rate = PLAYER_HOKAN_RATE;
+            initial_frame = player_transition_slot == 4 ?
+                mapped_player_motion_frame(player_transition_slot,
+                                           player_animation_frame, motion) : 5;
+            break;
+        case 4:
+            player_transition_duration = 4;
+            player_transition_rate = PLAYER_HOKAN_RATE;
+            initial_frame = mapped_player_motion_frame(player_transition_slot,
+                                                       player_animation_frame, motion);
+            break;
+        case 16:
+            player_transition_duration = 8;
+            player_transition_rate = PLAYER_REVERSE_HOKAN_RATE;
+            if (player_transition_slot == 0 || player_transition_slot == 4)
+                initial_frame = mapped_player_motion_frame(player_transition_slot,
+                                                           player_animation_frame, motion);
+            else
+                initial_frame = 25;
+            break;
+        case 39:
+            player_transition_duration = 8;
+            player_transition_rate = PLAYER_HOKAN_RATE;
+            break;
+        case 42:
+        default:
+            player_transition_duration = 5;
+            player_transition_rate = PLAYER_HOKAN_RATE;
+            break;
+        }
+    }
+    player_transition_remaining = player_transition_slot == UINT_MAX ? 0 :
+                                 player_transition_duration;
+    player_animation_frame = motion != NULL &&
+        initial_frame < motion->frame_count ? (float)initial_frame : 0.0f;
+}
+
 static void update_player_simulation(RecvxPlayer *player,
                                     const RecvxPlayerRoom *player_room,
                                     float forward, float turn,
-                                    uint32_t ticks)
+                                    int run, uint32_t ticks)
 {
-    const RecvxPlayerMotionAsset *motion;
-    unsigned int motion_slot;
+    const RecvxPlayerMotionAsset *motion = NULL;
+    unsigned int normal_motion_slot, speed_track = 0;
+    float turn_speed;
     uint32_t tick;
 
     if (player == NULL || player_room == NULL)
         return;
-    for (tick = 0; tick < ticks; ++tick)
-        recvxPlayerUpdate(player, player_room, forward, turn,
-                          1.0f / RECVX_GAME_TICKS_PER_SECOND);
-
-    if (player_actor_assets == NULL || player_actor_mesh == NULL ||
-        player_actor_assets->model_count == 0)
-        return;
-    motion_slot = forward != 0.0f ? 39 : 42;
-    if (motion_slot >= player_actor_assets->motion_count ||
-        !player_actor_assets->motions[motion_slot].present ||
-        player_actor_assets->motions[motion_slot].frame_count == 0)
-        return;
-    motion = &player_actor_assets->motions[motion_slot];
-    if (player_animation_slot != motion_slot) {
-        player_animation_slot = motion_slot;
-        player_animation_frame = 0.0f;
-    } else {
-        player_animation_frame += (float)ticks;
+    if (forward < 0.0f) {
+        normal_motion_slot = 16;
+        speed_track = 6;
+    } else if (forward > 0.0f && run) {
+        normal_motion_slot = 4;
+        speed_track = 3;
+    } else if (forward > 0.0f)
+        normal_motion_slot = 0;
+    else if (turn != 0.0f)
+        normal_motion_slot = 39;
+    else
+        normal_motion_slot = 42;
+    turn_speed = (forward == 0.0f ? 3.769911184f : 2.094395102f);
+    for (tick = 0; tick < ticks; ++tick) {
+        unsigned int stair_phase = player->stair_phase;
+        unsigned int motion_slot = normal_motion_slot;
+        float speed_per_tick = 4.0f / RECVX_GAME_TICKS_PER_SECOND;
+        if (stair_phase != RECVX_PLAYER_STAIR_NONE) {
+            motion_slot = stair_phase == RECVX_PLAYER_STAIR_TURN ? 39u :
+                stair_phase == RECVX_PLAYER_STAIR_MOVE ?
+                    (unsigned int)player->stair_motion_slot : 0u;
+            select_player_motion(motion_slot, stair_phase);
+            if (stair_phase == RECVX_PLAYER_STAIR_MOVE)
+                player_animation_frame = (float)player->stair_motion_frame;
+            else if (stair_phase == RECVX_PLAYER_STAIR_RECOVER)
+                player_animation_frame = 15.0f +
+                    (float)(10u - player->stair_recovery_ticks);
+            player_speed_per_tick = 0.0f;
+            recvxPlayerAdvanceStair(player, player_room, player_actor_assets);
+            if (stair_phase == RECVX_PLAYER_STAIR_MOVE &&
+                player->stair_phase == RECVX_PLAYER_STAIR_MOVE)
+                player_animation_frame = (float)player->stair_motion_frame;
+            else if (stair_phase == RECVX_PLAYER_STAIR_MOVE &&
+                     player->stair_phase == RECVX_PLAYER_STAIR_RECOVER) {
+                select_player_motion(0, RECVX_PLAYER_STAIR_RECOVER);
+                player_animation_frame = 15.0f;
+            } else if (stair_phase == RECVX_PLAYER_STAIR_RECOVER &&
+                       player->stair_phase == RECVX_PLAYER_STAIR_NONE) {
+                select_player_motion(normal_motion_slot,
+                                     RECVX_PLAYER_STAIR_NONE);
+            }
+        } else {
+            select_player_motion(normal_motion_slot, RECVX_PLAYER_STAIR_NONE);
+            if (forward != 0.0f && player_actor_assets != NULL) {
+                float authored_speed;
+                if (recvxPlayerSpeedAt(player_actor_assets, speed_track,
+                                       (uint32_t)player_animation_frame,
+                                       &authored_speed) == 1)
+                    speed_per_tick = fabsf(authored_speed);
+            }
+            player_speed_per_tick = forward * speed_per_tick;
+            recvxPlayerUpdateAtSpeed(player, player_room, forward, turn,
+                                     speed_per_tick * RECVX_GAME_TICKS_PER_SECOND,
+                                     turn_speed, 1.0f / RECVX_GAME_TICKS_PER_SECOND);
+            if (player_actor_assets != NULL)
+                recvxPlayerTryBeginStair(player, player_room,
+                                         player_actor_assets);
+        }
+        motion = player_motion(player_animation_slot);
+        if (motion != NULL && stair_phase != RECVX_PLAYER_STAIR_MOVE) {
+            player_animation_frame += 1.0f;
+            if (player_animation_frame >= motion->frame_count)
+                player_animation_frame = fmodf(player_animation_frame,
+                                               (float)motion->frame_count);
+        }
+        if (player_transition_remaining != 0)
+            --player_transition_remaining;
     }
-    if (player_animation_frame >= motion->frame_count)
-        player_animation_frame = fmodf(player_animation_frame,
-                                       (float)motion->frame_count);
-    recvxPosePlayerMesh(&player_actor_assets->models[0], motion,
-                        (uint32_t)player_animation_frame,
-                        player_actor_mesh);
+    if (ticks == 0 && forward == 0.0f)
+        player_speed_per_tick = 0.0f;
+    motion = player_motion(player_animation_slot);
+    if (player_actor_assets != NULL && player_actor_mesh != NULL &&
+        player_actor_assets->model_count != 0 && motion != NULL) {
+        const RecvxPlayerMotionAsset *from_motion = NULL;
+        float blend = 1.0f;
+        if (player_transition_remaining != 0 &&
+            player_transition_slot < player_actor_assets->motion_count) {
+            const RecvxPlayerMotionAsset *candidate =
+                &player_actor_assets->motions[player_transition_slot];
+            if (candidate->present && candidate->frame_count != 0) {
+                from_motion = candidate;
+                blend = 1.0f - powf(1.0f - player_transition_rate,
+                                    (float)(player_transition_duration -
+                                            player_transition_remaining));
+            }
+        }
+        recvxBlendPlayerMeshPose(&player_actor_assets->models[0], from_motion,
+                                 player_transition_frame, motion,
+                                 (uint32_t)player_animation_frame, blend,
+                                 player_actor_mesh);
+    }
 }
 
 void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const RecvxTextureSet *textures,
@@ -660,11 +1039,12 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
         else if (input->buttons & RECVX_BUTTON_RIGHT)
             turn = 1.0f;
         update_player_simulation(player, player_room, forward, turn,
+                                 (input->buttons & RECVX_BUTTON_RTRIGGER) != 0,
                                  simulation_ticks);
         if (update_player_culling(mesh, player, (int)camera_cut) > 0) {
             lighting_changed = 1;
         }
-        configure_fixed_camera(mesh, player);
+        configure_fixed_camera(mesh, player, simulation_ticks);
         if (fixed_camera_active) {
             fixed_camera_position(mesh, player, &eye);
             center.x = eye.x + fixed_camera_forward.x;
@@ -822,7 +1202,7 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
             if (player_actor_mesh != NULL)
                 sceKernelDcacheWritebackRange(player_actor_mesh->vertices,
                                               player_actor_mesh->storage_bytes);
-            draw_player_model(player, player_model_mesh);
+            draw_player_model(player, player_model_mesh, player_actor_textures);
         } else
             draw_player(player);
     }
@@ -840,7 +1220,7 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
     pspDebugScreenSetTextColor(0xffffffff);
     pspDebugScreenSetXY(1, 1);
     pspDebugScreenPrintf("%s   %s", room_name,
-                         player_mode ? "Walking prototype" :
+                         player_mode ? "Player prototype" :
                          display_mode == 4 ? "Room model textured" : display_mode == 3 ? "Spatial viewer" :
                          display_mode == 1 ? "Room model wireframe" : "Room model solid");
     pspDebugScreenSetXY(1, 2);
@@ -854,28 +1234,30 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
                          (unsigned int)(scene->vertex_count / 2));
     pspDebugScreenSetXY(1, 3);
     if (player_mode && player != NULL && mesh != NULL && mesh->cut_count != 0)
-        pspDebugScreenPrintf("Cut %u/%u  Cam %c  Player %.1f,%.1f F%d %s M%u:%02u",
+        pspDebugScreenPrintf("Cut %u/%u  Cam %c  Player %.1f,%.1f F%d %s M%u:%02u v%+.3f",
                              (unsigned int)(camera_cut + 1), (unsigned int)mesh->cut_count,
                              camera_variant ? 'B' : 'A', player->x, player->z,
                              (int)player->floor, player->blocked ? "Wall" : "",
                              player_animation_slot == UINT_MAX ? 0 : player_animation_slot,
-                             (unsigned int)player_animation_frame);
+                             (unsigned int)player_animation_frame,
+                             player_speed_per_tick);
     else if (player_mode && player != NULL)
-        pspDebugScreenPrintf("Player %.1f,%.1f F%d %s M%u:%02u", player->x, player->z,
+        pspDebugScreenPrintf("Player %.1f,%.1f F%d %s M%u:%02u v%+.3f", player->x, player->z,
                              (int)player->floor, player->blocked ? "Wall" : "",
                              player_animation_slot == UINT_MAX ? 0 : player_animation_slot,
-                             (unsigned int)player_animation_frame);
+                             (unsigned int)player_animation_frame,
+                             player_speed_per_tick);
     else if (mesh && mesh->cut_count)
         pspDebugScreenPrintf("Cut %u/%u  Camera %c  Hidden objects %u",
                              (unsigned int)(camera_cut + 1), (unsigned int)mesh->cut_count,
                              camera_variant ? 'B' : 'A', hidden_object_count(mesh));
     else
         pspDebugScreenPrintf("No room camera cuts");
-    draw_memory_hud(scene, mesh, textures, player_room);
+    draw_memory_hud(scene, mesh, textures, player_room, player);
     pspDebugScreenSetXY(1, 29);
     pspDebugScreenPrintf("SELECT: solid / wire / bounds / spatial / textured");
     pspDebugScreenSetXY(1, 31);
-    pspDebugScreenPrintf(player_mode ? "Stick move/turn  D-pad tank controls  Fixed room camera" :
+    pspDebugScreenPrintf(player_mode ? "Stick move/turn  D-pad tank controls  R run  Fixed room camera" :
                          "D-pad orbit  Stick pan  L/R zoom  TRIANGLE reset");
     pspDebugScreenSetXY(1, 32);
     pspDebugScreenPrintf(player_mode ? "CROSS door  SQUARE return  TRIANGLE reset  START exit" :
@@ -896,6 +1278,7 @@ void recvxRendererStop(void)
     player_model_mesh = NULL;
     player_actor_mesh = NULL;
     player_actor_assets = NULL;
+    player_actor_textures = NULL;
     player_animation_slot = UINT_MAX;
     player_animation_frame = 0.0f;
     pspDebugScreenSetOffset(0);

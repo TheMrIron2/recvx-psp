@@ -19,6 +19,7 @@ typedef struct RecvxTextureSet {
 // Zero-initialize outputs; successful loads replace owned buffers
 int recvxDecodeTim2(const void *data, size_t size, RecvxTexture *texture);
 int recvxBuildRoomTextures(const void *room, size_t size, RecvxTextureSet *set);
+int recvxBuildPlayerTextures(const void *data, size_t size, RecvxTextureSet *set);
 void recvxTextureFree(RecvxTexture *texture);
 void recvxTexturesFree(RecvxTextureSet *set);
 

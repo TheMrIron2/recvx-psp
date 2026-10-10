@@ -83,6 +83,12 @@ int recvxBuildPlayerMesh(const RecvxPlayerModelAsset *model, RecvxRoomMesh *mesh
 int recvxPosePlayerMesh(const RecvxPlayerModelAsset *model,
                        const RecvxPlayerMotionAsset *motion, uint32_t frame,
                        RecvxRoomMesh *mesh);
+int recvxBlendPlayerMeshPose(const RecvxPlayerModelAsset *model,
+                            const RecvxPlayerMotionAsset *from_motion,
+                            uint32_t from_frame,
+                            const RecvxPlayerMotionAsset *to_motion,
+                            uint32_t to_frame, float blend,
+                            RecvxRoomMesh *mesh);
 int recvxMeshSetWireframe(RecvxRoomMesh *mesh, int enabled);
 int recvxApplyRoomLighting(RecvxRoomMesh *mesh, uint32_t cut, uint32_t camera);
 int recvxRoomCutForPosition(const RecvxRoomMesh *mesh, float x, float z,

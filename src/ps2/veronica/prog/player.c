@@ -1,6 +1,7 @@
 #include "../../../ps2/veronica/prog/player.h"
 #include "../../../ps2/veronica/prog/MdlPut.h"
 #include "../../../ps2/veronica/prog/Motion.h"
+#include "../../../ps2/veronica/prog/adv.h"
 #include "../../../ps2/veronica/prog/cut.h"
 #include "../../../ps2/veronica/prog/effect.h"
 #include "../../../ps2/veronica/prog/eneset.h"
@@ -11,12 +12,14 @@
 #include "../../../ps2/veronica/prog/njplus.h"
 #include "../../../ps2/veronica/prog/objitm.h"
 #include "../../../ps2/veronica/prog/playpch.h"
+#include "../../../ps2/veronica/prog/playpch2.h"
 #include "../../../ps2/veronica/prog/pl_evt.h"
 #include "../../../ps2/veronica/prog/ps2_NaMath.h"
 #include "../../../ps2/veronica/prog/ps2_NaMatrix.h"
 #include "../../../ps2/veronica/prog/pwksub.h"
 #include "../../../ps2/veronica/prog/room.h"
 #include "../../../ps2/veronica/prog/sdfunc.h"
+#include "../../../ps2/veronica/prog/sub1.h"
 #include "../../../ps2/veronica/prog/weapon.h"
 
 ETTY_WORK lkmtab[2] = 

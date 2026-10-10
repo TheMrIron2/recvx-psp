@@ -1,3 +1,4 @@
+#include <math.h>
 #include <string.h>
 
 #include "psp/player_asset.h"
@@ -298,22 +299,134 @@ static int parse_motion_stream(const uint8_t *data, size_t size,
     return 0;
 }
 
+static int parse_speed_stream(const uint8_t *data, size_t size,
+                              RecvxPlayerAssets *assets)
+{
+    size_t offset = 0;
+    int terminated = 0;
+    while (span(size, offset, 4)) {
+        uint32_t record_size = read_u32(data + offset);
+        RecvxPlayerSpeedAsset *speed;
+        uint32_t key;
+        offset += 4;
+        if (record_size == UINT32_MAX) {
+            terminated = 1;
+            break;
+        }
+        if (assets->speed_count == RECVX_PLAYER_SPEED_LIMIT)
+            return -2;
+        speed = &assets->speeds[assets->speed_count++];
+        if (record_size == 0)
+            continue;
+        if ((record_size & 3) != 0 || !span(size, offset, record_size))
+            return -1;
+        for (key = 0; key < record_size / sizeof(float); ++key) {
+            uint32_t bits = read_u32(data + offset + key * sizeof(float));
+            float value;
+            memcpy(&value, &bits, sizeof(value));
+            if (!isfinite(value) || fabsf(value) > 10000.0f)
+                return -1;
+        }
+        speed->data = data + offset;
+        speed->byte_size = record_size;
+        speed->key_count = record_size / sizeof(float);
+        ++assets->populated_speeds;
+        offset += record_size;
+    }
+    if (!terminated || !stream_tail_is_zero(data, size, offset))
+        return -1;
+    return 0;
+}
+
 int recvxPlayerAssetsParse(const void *model_stream, size_t model_size,
                            const void *motion_stream, size_t motion_size,
+                           const void *speed_stream, size_t speed_size,
                            RecvxPlayerAssets *assets)
 {
     int result;
-    if (model_stream == NULL || motion_stream == NULL || assets == NULL)
+    if (model_stream == NULL || motion_stream == NULL || assets == NULL ||
+        ((speed_stream == NULL) != (speed_size == 0)))
         return -1;
     memset(assets, 0, sizeof(*assets));
     assets->model_stream = model_stream;
     assets->motion_stream = motion_stream;
+    assets->speed_stream = speed_stream;
     assets->model_stream_size = model_size;
     assets->motion_stream_size = motion_size;
+    assets->speed_stream_size = speed_size;
     result = parse_model_stream(model_stream, model_size, assets);
     if (result == 0)
         result = parse_motion_stream(motion_stream, motion_size, assets);
+    if (result == 0 && speed_stream != NULL)
+        result = parse_speed_stream(speed_stream, speed_size, assets);
     if (result != 0)
         memset(assets, 0, sizeof(*assets));
     return result;
+}
+
+int recvxPlayerSpeedAt(const RecvxPlayerAssets *assets, uint32_t track,
+                       uint32_t frame, float *speed)
+{
+    const RecvxPlayerSpeedAsset *record;
+    size_t key;
+    uint32_t bits;
+    float value;
+    if (assets == NULL || speed == NULL || track >= assets->speed_count ||
+        frame == UINT32_MAX)
+        return 0;
+    record = &assets->speeds[track];
+    key = (size_t)frame + 1;
+    if (record->data == NULL || key >= record->key_count)
+        return 0;
+    bits = read_u32(record->data + key * sizeof(float));
+    memcpy(&value, &bits, sizeof(value));
+    if (!isfinite(value) || fabsf(value) > 10000.0f)
+        return -1;
+    *speed = value;
+    return 1;
+}
+
+int recvxPlayerMotionPositionAt(const RecvxPlayerMotionAsset *motion,
+                                uint32_t object_index, uint32_t frame,
+                                float position[3])
+{
+    uint32_t base, reference;
+    size_t object_data, key_data;
+    unsigned int axis;
+    if (motion == NULL || position == NULL || !motion->present ||
+        motion->data == NULL || motion->size < sizeof(RecvxPlayerMotionDiskHeader) ||
+        motion->frame_count == 0 || object_index >= motion->object_count)
+        return -1;
+    base = read_u16(motion->data +
+        offsetof(RecvxPlayerMotionDiskHeader, header_size));
+    if (base > motion->size || motion->data_offset > motion->size - base ||
+        (size_t)object_index * sizeof(RecvxMotionObjectDiskTrack) >
+            motion->size - base - motion->data_offset ||
+        motion->size - base - motion->data_offset -
+            (size_t)object_index * sizeof(RecvxMotionObjectDiskTrack) <
+                sizeof(RecvxMotionObjectDiskTrack))
+        return -1;
+    object_data = (size_t)base + motion->data_offset +
+                  (size_t)object_index * sizeof(RecvxMotionObjectDiskTrack);
+    reference = read_u32(motion->data + object_data +
+        offsetof(RecvxMotionObjectDiskTrack, position_offset));
+    if (reference == UINT32_MAX)
+        return 0;
+    frame %= motion->frame_count;
+    if (reference > motion->size - base ||
+        (size_t)frame > (motion->size - base - reference) /
+                         sizeof(RecvxMotionPositionDiskKey) ||
+        motion->size - base - reference -
+            (size_t)frame * sizeof(RecvxMotionPositionDiskKey) <
+                sizeof(RecvxMotionPositionDiskKey))
+        return -1;
+    key_data = (size_t)base + reference +
+               (size_t)frame * sizeof(RecvxMotionPositionDiskKey);
+    for (axis = 0; axis < 3; ++axis) {
+        uint32_t bits = read_u32(motion->data + key_data + axis * sizeof(float));
+        memcpy(&position[axis], &bits, sizeof(position[axis]));
+        if (!isfinite(position[axis]) || fabsf(position[axis]) > 10000.0f)
+            return -1;
+    }
+    return 1;
 }

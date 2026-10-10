@@ -11,6 +11,7 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
                        const RecvxTextureSet *textures, const RecvxPlayer *player,
                        const RecvxPlayerAssets *player_assets,
                        RecvxRoomMesh *player_mesh,
+                       const RecvxTextureSet *player_textures,
                        size_t player_source_bytes);
 void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const RecvxTextureSet *textures,
                         RecvxPlayer *player, const RecvxPlayerRoom *player_room,

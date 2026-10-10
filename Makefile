@@ -19,7 +19,7 @@ PSP_PLATFORM_SOURCES := src/psp/platform_psp.c
 PSP_LEGACY_SOURCES := src/psp/legacy_runtime.c src/psp/legacy_platform.c src/psp/legacy_script.c src/ps2/veronica/prog/system_init.c
 GAME_SOURCES := src/ps2/veronica/prog/flag.c src/ps2/veronica/prog/ps2_NaMem.c
 SOURCES := src/psp/main.c src/psp/renderer.c $(PORT_SOURCES) $(PSP_PLATFORM_SOURCES) $(GAME_SOURCES) $(PSP_LEGACY_SOURCES)
-LEGACY_PORTABLE_SOURCES := src/ps2/veronica/prog/main.c src/ps2/veronica/prog/system_init.c src/ps2/veronica/prog/system.c src/ps2/veronica/prog/game.c
+LEGACY_PORTABLE_SOURCES := src/ps2/veronica/prog/main.c src/ps2/veronica/prog/system_init.c src/ps2/veronica/prog/system.c src/ps2/veronica/prog/game.c src/ps2/veronica/prog/player.c src/ps2/veronica/prog/Motion.c src/ps2/veronica/prog/camera.c src/ps2/veronica/prog/playpch.c src/ps2/veronica/prog/playpch2.c src/ps2/veronica/prog/pwksub.c src/ps2/veronica/prog/hitchk.c src/ps2/veronica/prog/hitchkl.c src/ps2/veronica/prog/rutchk.c
 LEGACY_PORTABLE_OBJECTS := $(addprefix build/psp/legacy-objects/,$(notdir $(LEGACY_PORTABLE_SOURCES:.c=.o)))
 OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SOURCES))
 DEPS := $(OBJS:.o=.d)
@@ -93,6 +93,7 @@ test: $(HOST_TEST) $(HOST_SHARED)
 	ASAN_OPTIONS=detect_leaks=0 $(HOST_TEST)
 	python3 tests/test_expand.py $(HOST_SHARED)
 	python3 tests/test_room.py $(HOST_SHARED)
+	python3 tests/test_player.py $(HOST_SHARED)
 	python3 tests/test_scene.py $(HOST_SHARED)
 	python3 tests/test_mesh.py $(HOST_SHARED)
 	python3 tests/test_texture.py $(HOST_SHARED)

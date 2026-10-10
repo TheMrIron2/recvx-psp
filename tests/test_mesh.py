@@ -6,11 +6,64 @@ import struct
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from scene_api import Mesh, Texture, TextureSet, bind_scene
+from scene_api import Mesh, RoomCut, Texture, TextureSet, bind_scene
 
 lib = bind_scene(ctypes.CDLL(str(Path(sys.argv[1]).resolve())))
 mesh = Mesh()
 BODY = 0x510
+
+empty_stream = ctypes.create_string_buffer(b"\xff\xff\xff\xff")
+speed_bytes = struct.pack("<IffI", 8, 0.0, 0.5, 0xFFFFFFFF)
+speed_stream = ctypes.create_string_buffer(speed_bytes)
+player_assets_buffer = ctypes.create_string_buffer(65536)
+player_speed = ctypes.c_float()
+lib.recvxPlayerAssetsParse.argtypes = [ctypes.c_void_p, ctypes.c_size_t,
+                                       ctypes.c_void_p, ctypes.c_size_t,
+                                       ctypes.c_void_p, ctypes.c_size_t,
+                                       ctypes.c_void_p]
+lib.recvxPlayerSpeedAt.argtypes = [ctypes.c_void_p, ctypes.c_uint32,
+                                   ctypes.c_uint32, ctypes.POINTER(ctypes.c_float)]
+lib.recvxBlendPlayerMeshPose.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
+                                         ctypes.c_uint32, ctypes.c_void_p,
+                                         ctypes.c_uint32, ctypes.c_float,
+                                         ctypes.c_void_p]
+lib.recvxRoomCutForPosition.argtypes = [ctypes.POINTER(Mesh), ctypes.c_float,
+                                        ctypes.c_float, ctypes.c_int,
+                                        ctypes.c_int]
+lib.recvxRoomCutForPosition.restype = ctypes.c_int
+assert lib.recvxPlayerAssetsParse(empty_stream, 4, empty_stream, 4,
+                                 speed_stream, len(speed_bytes),
+                                 player_assets_buffer) == 0
+assert lib.recvxPlayerSpeedAt(player_assets_buffer, 0, 0,
+                              ctypes.byref(player_speed)) == 1
+assert player_speed.value == 0.5
+assert lib.recvxPlayerSpeedAt(player_assets_buffer, 0, 1,
+                              ctypes.byref(player_speed)) == 0
+
+
+class PlayerModelAsset(ctypes.Structure):
+    _fields_ = [("data", ctypes.c_void_p), ("skin", ctypes.c_void_p),
+                ("size", ctypes.c_uint32), ("skin_size", ctypes.c_uint32),
+                ("record_slot", ctypes.c_uint32), ("model_index", ctypes.c_uint32),
+                ("flags", ctypes.c_uint32), ("header_offset", ctypes.c_uint32),
+                ("object_offset", ctypes.c_uint32), ("texture_offset", ctypes.c_uint32),
+                ("object_count", ctypes.c_uint16), ("chunk_model", ctypes.c_uint8)]
+
+
+class PlayerMotionAsset(ctypes.Structure):
+    _fields_ = [("data", ctypes.c_void_p), ("size", ctypes.c_uint32),
+                ("record_slot", ctypes.c_uint32), ("flags", ctypes.c_uint32),
+                ("frame_count", ctypes.c_uint32), ("motion_offset", ctypes.c_uint32),
+                ("data_offset", ctypes.c_uint32), ("attribute_offset", ctypes.c_uint32),
+                ("object_count", ctypes.c_uint16), ("motion_type", ctypes.c_uint16),
+                ("interpolation", ctypes.c_uint16), ("present", ctypes.c_uint8)]
+
+
+class CutArea(ctypes.Structure):
+    _fields_ = [("attr", ctypes.c_uint32), ("min_x", ctypes.c_float),
+                ("min_z", ctypes.c_float), ("max_x", ctypes.c_float),
+                ("max_z", ctypes.c_float), ("floor", ctypes.c_int8),
+                ("type", ctypes.c_uint8)]
 
 
 def fixture(points=((0, 0, 0), (1, 0, 0), (0, 1, 0)), objects=1,
@@ -169,6 +222,58 @@ data, _ = fixture(objects=2)
 assert build(data) == 0 and mesh.batch_count == 2
 assert [mesh.batches[i].object_index for i in range(2)] == [0, 1]
 assert [mesh.batches[i].vertex_count for i in range(2)] == [3, 3]
+
+# Authored position tracks, including the root, move the posed hierarchy
+player_data, _ = fixture()
+player_buffer = ctypes.create_string_buffer(bytes(player_data))
+player_model = PlayerModelAsset(
+    ctypes.addressof(player_buffer) + 0x500, None, len(player_data) - 0x500, 0,
+    0, 0, 0, 16, 0, 0xFFFFFFFF, 1, 1)
+motion_data = bytearray(104)
+struct.pack_into("<4sHHII", motion_data, 0, b"MTN\x80", 16, 1, 16, 0xFFFFFFFF)
+struct.pack_into("<IIHH", motion_data, 32, 44, 2, 3, 2)
+struct.pack_into("<II", motion_data, 60, 52, 76)
+struct.pack_into("<3f3f", motion_data, 68, 2, 3, 4, -1, 5, 2)
+struct.pack_into("<3H3H", motion_data, 92, 65535, 0, 0, 1, 0, 0)
+motion_buffer = ctypes.create_string_buffer(bytes(motion_data))
+player_motion = PlayerMotionAsset(
+    ctypes.cast(motion_buffer, ctypes.c_void_p), len(motion_data), 0, 0,
+    2, 16, 44, 0xFFFFFFFF, 1, 3, 2, 1)
+assert lib.recvxBuildPlayerMesh(ctypes.byref(player_model), ctypes.byref(mesh)) == 0
+assert lib.recvxPosePlayerMesh(ctypes.byref(player_model), ctypes.byref(player_motion),
+                               0, ctypes.byref(mesh)) == 0
+for actual, expected in zip(positions(), [(2,3,4), (3,3,4), (2,4,4)]):
+    assert all(abs(a-b) < 1.1e-4 for a, b in zip(actual, expected))
+assert lib.recvxPosePlayerMesh(ctypes.byref(player_model), ctypes.byref(player_motion),
+                               1, ctypes.byref(mesh)) == 0
+for actual, expected in zip(positions(), [(-1,5,2), (0,5,2), (-1,6,2)]):
+    assert all(abs(a-b) < 1.1e-4 for a, b in zip(actual, expected))
+assert lib.recvxBlendPlayerMeshPose(ctypes.byref(player_model),
+                                    ctypes.byref(player_motion), 0,
+                                    ctypes.byref(player_motion), 1, 0.5,
+                                    ctypes.byref(mesh)) == 0
+for actual, expected in zip(positions(), [(0.5,4,3), (1.5,4,3), (0.5,5,3)]):
+    assert all(abs(a-b) < 1e-6 for a, b in zip(actual, expected))
 lib.recvxMeshFree(ctypes.byref(mesh))
 lib.recvxMeshFree(ctypes.byref(mesh))
-print("PASS: MLB bounds, transforms, winding, UVs, texture batches and ownership")
+
+# Cut selection keeps camera choice stable at a shared edge
+camera_mesh = Mesh()
+camera_areas = (CutArea * 2)(
+    CutArea(0x8000, 0, 0, 10, 10, 0, 0),
+    CutArea(0, 10, 0, 20, 10, 0, 0))
+camera_cuts = (RoomCut * 2)()
+for index in range(2):
+    camera_cuts[index].area_first = index
+    camera_cuts[index].area_count = 1
+    camera_cuts[index].active = 1
+camera_mesh.cuts = camera_cuts
+camera_mesh.cut_count = 2
+camera_mesh.cut_areas = ctypes.cast(camera_areas, ctypes.c_void_p)
+camera_mesh.cut_area_count = 2
+assert lib.recvxRoomCutForPosition(ctypes.byref(camera_mesh), 5, 5, 0, -1) == 0
+assert lib.recvxRoomCameraForPosition(ctypes.byref(camera_mesh), 0, 5, 5, 0) == 1
+assert lib.recvxRoomCutForPosition(ctypes.byref(camera_mesh), 10, 5, 0, 0) == 0
+assert lib.recvxRoomCutForPosition(ctypes.byref(camera_mesh), 12, 5, 0, 0) == 1
+assert lib.recvxRoomCameraForPosition(ctypes.byref(camera_mesh), 1, 15, 5, 0) == 0
+print("PASS: MLB transforms, UVs, skinning, camera cuts and ownership")

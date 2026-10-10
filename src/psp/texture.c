@@ -191,3 +191,46 @@ done:
     recvxTexturesFree(&loaded);
     return result;
 }
+
+int recvxBuildPlayerTextures(const void *data, size_t size, RecvxTextureSet *set)
+{
+    const unsigned char *bytes = data;
+    RecvxTextureSet loaded = {0};
+    size_t offset;
+    int result = -1;
+    if (data == NULL || set == NULL)
+        return -1;
+    loaded.textures = calloc(MAX_TEXTURES, sizeof(*loaded.textures));
+    if (loaded.textures == NULL)
+        return -3;
+    for (offset = 0; size >= 4 && offset <= size - 4; ++offset) {
+        RecvxTexture decoded = {0};
+        int decode_result;
+        if (memcmp(bytes + offset, "TIM2", 4) != 0)
+            continue;
+        decode_result = recvxDecodeTim2(bytes + offset, size - offset, &decoded);
+        if (decode_result == -3) {
+            result = -3;
+            goto done;
+        }
+        if (decode_result != 0)
+            continue;
+        if (loaded.count == MAX_TEXTURES ||
+            decoded.image_bytes + 1024 > MAX_TEXTURE_BYTES - loaded.storage_bytes) {
+            recvxTextureFree(&decoded);
+            result = -2;
+            goto done;
+        }
+        loaded.storage_bytes += decoded.image_bytes + 1024;
+        loaded.textures[loaded.count++] = decoded;
+        offset += 3;
+    }
+    if (loaded.count == 0)
+        goto done;
+    recvxTexturesFree(set);
+    *set = loaded;
+    return 0;
+done:
+    recvxTexturesFree(&loaded);
+    return result;
+}

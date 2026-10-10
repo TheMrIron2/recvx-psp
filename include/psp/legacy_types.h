@@ -14,6 +14,7 @@ typedef struct RecvxUint128 {
 } u_long128;
 
 typedef float sceVu0FVECTOR[4];
+typedef float sceVu0FMATRIX[4][4];
 typedef uint64_t sceGsTex0;
 typedef uint64_t sceGsTex1;
 typedef struct sceGsDBuffDc sceGsDBuffDc;

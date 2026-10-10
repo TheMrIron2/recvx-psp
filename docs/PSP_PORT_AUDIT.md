@@ -33,7 +33,9 @@ ASAN_OPTIONS=detect_leaks=0 build/host/port-test /tmp/recvx-port-audit-data
 
 These checks cover the static-room path. They do not validate every embedded actor, animation, script, texture group, audio bank, or playable room state.
 The Python tests and all-room scan use the unsanitized shared library; the separate C runner supplies the sanitizer coverage.
-There are currently no direct player-controller tests in `tests/`.
+At the initial audit there were no direct player-controller tests. The current
+`make test` suite checks the original Claire collision dimensions, vertical
+wall overlap, and floor/attribute filters.
 
 The rebuilt EBOOT was also smoke-run in PPSSPP 1.19.3. The room checks pass
 for `RM_0000`, `RM_0020`, and `RM_0030`; `RM_0020` enters walking mode and
@@ -77,18 +79,28 @@ player extra data, and 986,820 bytes of texture payload. Default weapon entry
 motion streams with bounds checks, preserving model indices, skin associations,
 model object counts, motion slots, and frame counts. The PSP status screen
 reports the parsed inventory when `player-assets/` is copied alongside the room
-data. The reader retains the model and motion source buffers for future
-rendering work. The first Claire chunk model now goes through the room mesh
+data. The runtime retains the model and motion source buffers for pose
+evaluation. The first Claire chunk model now goes through the room mesh
 decoder's hierarchy and triangle path and preserves its native room-unit scale
-for an untextured preview in walking mode. The model keeps its facing while
-reverse input moves it backward. The PSP renderer now samples the original
-normal idle and walk motion slots (42 and 39) for per-object rotation keys.
-It retains model-local translations so the provisional controller owns root
-movement. Motion key arrays are extent-checked, and posing reuses the existing
-mesh storage without frame-time allocation. The extracted skin table blends
-parent and bone transforms for the single body mesh; user hardware checks now
-confirm the animated skin retains visible arms. Pose comparison against the
-original is still pending. The player texture tail is still not rendered.
+for a textured animated preview in walking mode. The model keeps its facing
+while reverse input moves it backward. The renderer now maps the original Claire
+motion table for idle (42), pivot (39), forward walk (0), and reverse walk
+(16), plus run (4). It parses per-frame movement speeds from the player extra
+stream and uses tracks 0 and 6 for forward and reverse walking, and track 3
+for running while R is held. Position and angle tracks both feed the hierarchy
+and skinning path; the player root now follows authored translation keys.
+Motion and speed key
+arrays are extent-checked, and posing reuses existing mesh storage without
+frame-time allocation. The extracted skin table blends parent and bone
+transforms for the single body mesh; user hardware checks confirm the animated
+skin retains visible arms. The user also confirmed in PPSSPP that the walk and
+run animations look correct. The texture-tail decoder loads 19 embedded T8
+pages, and the initial Claire body mesh renders its five local material slots
+with their UVs and palettes. PPSSPP captures
+`m2-player-room-0030-spawn.png` and `m2-player-room-0030-forward-1.png` show the
+red vest and blue jeans during movement. Other player models, a frame-by-frame
+pose comparison, and original motion state-specific transition curves remain
+open.
 
 [The Makefile](../Makefile) links only `flag.c` and `ps2_NaMem.c` from the original game.
 The original game directory contains 154 C files and about 248,000 lines, excluding CRI and SDK sources. This measures integration scope, not remaining development effort.
@@ -102,9 +114,13 @@ The current PSP ELF has 211,244 bytes of text, 4,912 bytes of data, and 115,160 
 [system.c](../src/ps2/veronica/prog/system.c) drives loading, menus, gameplay, events, doors, movies, and saves.
 [game.c](../src/ps2/veronica/prog/game.c), through `bhMainSequence`, orders enemy, player, effect, object, camera, lighting, drawing, and event work.
 
-The PSP [player.c](../src/psp/player.c) is a new controller with fixed movement constants, gravity, and partial collision interpretation.
-It copies the wall array but does not implement the original floor/other collision arrays, dynamic collision, movement states, animation coupling, or combat.
-It is useful for navigation diagnostics, but extending it into the final controller would duplicate the substantial behavior already present in the decompilation.
+The PSP [player.c](../src/psp/player.c) is still a diagnostic controller. Its
+Claire collider now uses the original 3.5 radius and 16.5 height, default
+player collision flags, wall floor/attribute filters, and room floor heights.
+Static box, circle, and triangle walls share the overlap check and bounded
+axis resolution. Floor attribute records are loaded, but dynamic walls,
+original movement states, and combat remain incomplete. The original
+controller remains the target for integration.
 
 Bring across `player.c`, `playpch.c`, `playpch2.c`, `pwksub.c`, `pl_evt.c`, `hitchk.c`, `hitchkl.c`, and `rutchk.c` incrementally.
 Preserve movement, animation frame attributes, collision response, and flag behavior together.
@@ -471,13 +487,13 @@ Per PPSSPP dev hrydgard: "sceSas doesn't have native midi support ... there migh
 | --- | --- | --- |
 | 0: Measured baseline (closed for prototype scope) | Reproducible build, current viewer, memory/frame/GE instrumentation, content inventory | Four connected opening-route rooms have immediate-spawn PSP measurements for memory, frame, and GE use at the enforced 333 MHz CPU / 166 MHz bus clock; one missed-deadline `RM_0030` sample is recorded. No representative stress, steady-play, or transition workload exists yet; profile them when gameplay provides one |
 | 1: Game foundation (closed) | Portable ABI, math/input/file services, explicit room ownership, original task/timing skeleton | Required modules compile without PS2 SDK imports; disk-layout assertions pass; original initialization and a real SCD0 state run with an explicit unsupported-command boundary |
-| 2: Original player | Player assets from `SYSTEM.AFS`, motion/skin support, original movement/collision and camera control | Animated Claire can idle, turn, walk/run and navigate a representative room with reference-matching poses, collision, and cuts |
+| 2: Original player (in progress) | Player assets from `SYSTEM.AFS`, motion/skin support, original movement/collision and camera control | Animated Claire can idle, turn, walk/run and navigate a representative room with reference-matching poses, collision, and cuts |
 | 3: Playable sequence | Original events, interactions, messages, object state, doors, and basic audio | A contiguous original sequence includes a pickup or puzzle interaction, a scripted event, correct room transition, and persistent state on return |
 | 4: Game systems | Combat/enemy families, inventory/item box/map/files, save/load, menus, effects, complete audio/movie lifecycle | A representative chapter is completable with sound, combat, saving, cold-boot loading, death/retry, and cutscenes |
 | 5: Full content | Remaining characters, enemies, bosses, scripts, puzzles, cinematics, and game modes | Supported campaign and bonus modes finish from their normal entry points; no required opcode, asset, or backend path is unsupported |
 | 6: Release quality | Performance tuning, visual/audio QA, readable UI, robust I/O, suspend/resume, packaging | Complete playthroughs and long transition/save/load soak runs pass on every supported PSP model; no progression blockers, memory growth, or sustained frame/audio failures |
 
-Start audio/movie feasibility during milestones 1–2 so a late discovery does
+Start audio/movie feasibility during milestone 2 so a late discovery does
 not invalidate the memory or asset design. Start save-format work during the
 playable sequence; saves become a practical way to exercise later content.
 
@@ -506,21 +522,76 @@ flag changes in the production path.
    sets original flags and queues event 38 before stopping at unsupported
    enemy-dependent opcode `0x24`. Keep that boundary visible while bringing
    actor and event services across in the next milestones.
-3. Decode the extracted initial player model, skin, motion, and texture
-   entries from `SYSTEM.AFS`; document model formats and resident costs. The
-   initial stream extraction and size inventory now exist as `make
-   player-assets`. The PSP preview samples authored idle and walk rotation
-   tracks and applies the extracted skin weights; root motion and pose
-   comparison against the original are still pending.
-4. Extend the M1 runtime bridge into gameplay. The 23-slot dispatcher and
-   provisional 30 Hz clock exist, the viewer remains bound to slot 7, and the
-   original initializer runs in slot 0 against a bounded PSP arena. Room event
-   data has explicit ownership, and the supported SCD0 prefix reaches the
-   original event-queue request. Next bring in the queued event body and the
-   actor/collision services it needs; keep unsupported operations visible.
-5. Drive the real player and cameras, then the first real script interaction
-   and door. Add reference traces for position, animation, camera, flags,
-   script position, and asynchronous completion at each integration step.
+3. Milestone 2: finish the player asset and pose path. The initial Claire
+   model, skin, motion, and texture entries are extracted from `SYSTEM.AFS`;
+   `make player-assets` records stream sizes and model inventory. The PSP
+   preview samples original idle, pivot, forward, reverse, and run motions,
+   applies root and joint translation/rotation tracks, and uses the authored
+   forward, reverse, and run speed tables. R held during forward input selects
+   the original run motion; the user confirmed the walk and run animations in
+   PPSSPP. Motion changes blend root and joint transforms with the source
+   controller's per-state counts and rates: idle 5 ticks at 42598/65536,
+   pivot and walk 8 at 42598/65536, reverse 8 at 49152/65536, and run 4 at
+   42598/65536. Initial frames preserve the source controller's start-frame
+   or proportional frame mapping. The texture-tail decoder loads the 19
+   embedded T8 pages and draws the initial Claire body's five local material
+   slots with their UVs, palettes, sampler flags, alpha, and diffuse color.
+   PPSSPP captures show the textured actor while walking; other player models
+   and a frame-by-frame pose comparison remain open.
+4. Milestone 2: bring original movement, collision, and camera behavior onto
+   the PSP runtime. The state controller remains diagnostic; room camera poses
+   and automatic cut selection use original room records. Tests cover camera
+   variant selection and cut-edge hysteresis, but camera movement has no
+   reference trace yet. The original player, motion, camera, and collision
+   modules pass the PSP syntax check, and `make legacy-link-inventory` records
+   their unresolved services. The player object still depends on broad combat,
+   enemy, audio, effect, model, and global game services, so syntax-checking
+   these modules does not connect the original state loop. The diagnostic path
+   uses Claire's collision size and room floor heights; tests cover wall height,
+   attribute filtering, and floor attribute loading. Static box, circle, and
+   triangle wall contacts now resolve each movement axis with an eight-step
+   search against the overlap predicate. The `RM_0030` spawn 0 host trace uses
+   Claire's authored forward-walk speed keys: it reaches the east wall on tick
+   6 at x=35.49939 and remains there through tick 30. Active ETC type-2 stair
+   regions with nonzero parameter 0 now produce up to four edge walls generated
+   by the original `bhSetDansaLimitAtari`; neighboring stair regions suppress
+   shared edges. The four packaged opening-route rooms have no active stair
+   records, so this path is built but not exercised in PPSSPP. Wall, floor,
+   door, and stair records are room-owned. The
+   player preserves original type-1 step-sound IDs and type-3 slow, water, and
+   hazard surface states; slow floors apply the original 0.8 movement scale.
+   Existing host coverage checks floor parameter loading, surface
+   classification, and slowed displacement. Type-0 floor target selection
+   follows the source's normal position box or `attr & 1` front-point region,
+   its four cardinal facing masks, and the player flag suppression for bits
+   `0x2` and `0x4`. A host trace against `RM_0000` selects floor records 2 and 3
+   only for their allowed heading bins. The selected record index is exposed
+   on the player and diagnostic HUD; PPSSPP still omits the in-game text from
+   its captures. Item-use handling of the selected record, stair height/state
+   transitions, audio/effect responses, and the original player state loop
+   remain open. PPSSPP 1.19.3 was restarted from the
+   refreshed EBOOT. The new `m2-player-room-0030-contact-stable.png` capture
+   shows Claire holding at the visible wall boundary during sustained input.
+   The debug HUD is absent from PPSSPP's captures, so the image cannot provide
+   the player coordinates or blocked flag. A scripted RM_0030 path uses the
+   authored walk speeds and source cut areas to move from cut 2 to cut 0, then
+   cut 1 to cut 3. The `camera-cut2`, `camera-diagonal`, and `camera-cut1`
+   captures show those views; cut 3's source camera has the interpolation flag
+   and speed 30, and the `camera-transition-near`, `camera-transition`, and
+   `camera-transition-settled` frames show the view moving through that cut
+   while keeping Claire visible. The transition opens onto a large unrendered
+   dark area in the room view. This confirms visible cut selection and motion
+   in PPSSPP, but does not compare camera poses to the original runtime.
+   Static inspection of all 205 packed rooms found active type-1 stair records
+   in 54 rooms. Claire's extracted normal stair motions 31, 32, 35, and 36 each
+   have 27 frames and root position tracks; her initial archive has no tracks
+   in special hatch slots 62 through 65. The opening four rooms still provide
+   no stair case for PPSSPP validation. Reference traces for animation,
+   collision, and camera movement remain open.
+5. Milestone 3: execute the queued event body and build the first original
+   interaction and door sequence. Preserve event flags, script position,
+   transition completion, and state on return; keep unsupported operations
+   visible while integrating the required actor and presentation services.
 
 This sequence exposes the expensive unknowns before expanding art coverage
 or polishing presentation. No reliable completion estimate follows from
