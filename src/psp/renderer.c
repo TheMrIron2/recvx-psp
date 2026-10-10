@@ -323,16 +323,12 @@ static void draw_player_model(const RecvxPlayer *player,
                               const RecvxRoomMesh *model)
 {
     ScePspFVector3 position = {player->x, player->y, player->z};
-    ScePspFVector3 reflection = {1.0f, 1.0f, -1.0f};
-    float model_yaw = player->yaw +
-                      (player->walking_backward ? 3.141592654f : 0.0f);
     uint32_t i;
     sceGuDisable(GU_TEXTURE_2D);
     sceGuDisable(GU_ALPHA_TEST);
     sceGumPushMatrix();
     sceGumTranslate(&position);
-    sceGumRotateY(model_yaw);
-    sceGumScale(&reflection);
+    sceGumRotateY(player->yaw);
     for (i = 0; i < model->batch_count; ++i) {
         const RecvxMeshBatch *batch = &model->batches[i];
         if (batch->vertex_count == 0)
@@ -391,10 +387,8 @@ static void draw_player(const RecvxPlayer *player)
         {-0.2f, 1.75f, 0.0f}, {0.0f, 1.75f, -0.2f},
         {0.2f, 1.75f, 0.0f}, {0.0f, 1.75f, 0.2f}
     };
-    float model_yaw = player->yaw +
-                      (player->walking_backward ? 3.141592654f : 0.0f);
-    player_sine = sinf(model_yaw);
-    player_cosine = cosf(model_yaw);
+    player_sine = sinf(player->yaw);
+    player_cosine = cosf(player->yaw);
     player_vertex_count = 0;
     add_player_box(player, 0.0f, 1.02f, 0.0f, 0.27f, 0.48f, 0.17f,
                    0xff874027);

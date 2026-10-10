@@ -380,7 +380,6 @@ void recvxPlayerUpdate(RecvxPlayer *player, const RecvxPlayerRoom *room,
     dt = fmaxf(0.0f, fminf(0.05f, dt));
     forward = fmaxf(-1.0f, fminf(1.0f, forward));
     turn = fmaxf(-1.0f, fminf(1.0f, turn));
-    player->walking_backward = forward < 0.0f;
     player->blocked = 0;
     player->yaw = fmodf(player->yaw - turn * PLAYER_TURN_SPEED * dt,
                         6.283185307f);

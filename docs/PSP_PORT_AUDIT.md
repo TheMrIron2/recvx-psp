@@ -62,10 +62,10 @@ reports the parsed inventory when `player-assets/` is copied alongside the room
 data. The reader retains the model and motion source buffers for future
 rendering work. The first Claire chunk model now goes through the room mesh
 decoder's hierarchy and triangle path and preserves its native room-unit scale
-for an untextured static preview in walking mode. Its facing follows the travel
-direction during reverse input. It does not apply skin weights, sample motion
-keys, or load the player texture tail, so this is not an animated or faithful
-Claire render yet.
+for an untextured static preview in walking mode. The model keeps its facing
+while reverse input moves it backward. It does not apply skin weights, sample
+motion keys, or load the player texture tail, so this is not an animated or
+faithful Claire render yet.
 
 [The Makefile](../Makefile) links only `flag.c` and `ps2_NaMem.c` from the original game.
 The original game directory contains 154 C files and about 248,000 lines, excluding CRI and SDK sources. This measures integration scope, not remaining development effort.

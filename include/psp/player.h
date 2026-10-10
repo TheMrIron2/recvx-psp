@@ -33,7 +33,6 @@ typedef struct RecvxPlayer {
     int32_t floor;
     int grounded;
     int blocked;
-    int walking_backward;
 } RecvxPlayer;
 
 int recvxPlayerRoomLoad(const void *data, size_t size, RecvxPlayerRoom *room);
