@@ -1,6 +1,7 @@
 #include <pspctrl.h>
 #include <pspdebug.h>
 #include <pspkernel.h>
+#include <psppower.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,14 +10,24 @@
 #include "psp/renderer.h"
 #include "psp/selftest.h"
 
-PSP_MODULE_INFO("RECVX PSP", PSP_MODULE_USER, 0, 5);
+PSP_MODULE_INFO("RECVX PSP", PSP_MODULE_USER, 0, 6);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);
 PSP_HEAP_SIZE_KB(18 * 1024);
 
 static RecvxScene scene;
 static RecvxRoomMesh mesh;
 static RecvxTextureSet textures;
-static char room_name[17];
+static RecvxPlayerRoom player_room;
+static RecvxPlayer player;
+static char room_name[RECVX_ROOM_NAME_SIZE];
+static char room_catalog[RECVX_MAX_ROOM_CATALOG][RECVX_ROOM_NAME_SIZE];
+static size_t room_catalog_count, current_room;
+static unsigned int room_spawn;
+static int room_catalog_status;
+static int player_ready;
+static int clock_set_result;
+static int door_exit_lock;
+static char room_note[64];
 
 static int exit_callback(int arg1, int arg2, void *common)
 {
@@ -32,30 +43,53 @@ static void show_checks(const char *data_directory)
     int flags = recvxCheckFlags();
     int memory = recvxCheckMemory();
     int expand = recvxCheckExpand();
+    int cpu_clock = scePowerGetCpuClockFrequencyInt();
+    int bus_clock = scePowerGetBusClockFrequencyInt();
 
     recvxSceneFree(&scene);
     recvxMeshFree(&mesh);
     recvxTexturesFree(&textures);
+    recvxPlayerRoomFree(&player_room);
+    player_ready = 0;
+    room_name[0] = '\0';
 
     pspDebugScreenClear();
     pspDebugScreenPrintf("Resident Evil: Code Veronica X\n");
-    pspDebugScreenPrintf("PSP bootstrap build\n\n");
+    pspDebugScreenPrintf("Room walking prototype\n\n");
+    if (clock_set_result == 0)
+        pspDebugScreenPrintf("Clock: CPU %d MHz, bus/GPU %d MHz\n", cpu_clock, bus_clock);
+    else
+        pspDebugScreenPrintf("Clock request failed (%d); CPU %d, bus/GPU %d MHz\n",
+                             clock_set_result, cpu_clock, bus_clock);
     pspDebugScreenPrintf("Original game flag routines: %s (%d)\n",
                          flags ? "FAIL" : "PASS", flags);
     pspDebugScreenPrintf("Original Ninja memory copies: %s (%d)\n",
                          memory ? "FAIL" : "PASS", memory);
     pspDebugScreenPrintf("Portable asset decompression: %s (%d)\n\n",
                          expand ? "FAIL" : "PASS", expand);
+    if (room_note[0] != '\0') {
+        pspDebugScreenPrintf("%s\n\n", room_note);
+        room_note[0] = '\0';
+    }
     pspDebugScreenPrintf("Decompression checks include invalid input.\n");
     pspDebugScreenPrintf("Loading room file...\n");
     {
         RecvxRoomFileInfo info;
         unsigned char *room_data = NULL;
-        int result = recvxLoadRoomFile(data_directory, &info, &room_data);
+        int result;
+        if (room_catalog_status == 0 && room_catalog_count != 0)
+            result = recvxLoadNamedRoomFile(data_directory, room_catalog[current_room],
+                                            &info, &room_data);
+        else if (room_catalog_status == 1)
+            result = recvxLoadRoomFile(data_directory, &info, &room_data);
+        else
+            result = 2;
         if (result == 1) {
             pspDebugScreenPrintf("Room check: copy data/ from make assets.\n\n");
         } else if (result != 0) {
             pspDebugScreenPrintf("Room check: FAIL (%d)\n\n", result);
+            if (room_catalog_status > 1)
+                pspDebugScreenPrintf("Room catalog is invalid.\n\n");
         } else {
             pspDebugScreenPrintf("Room %s: PASS\n", info.name);
             pspDebugScreenPrintf("Expanded %u -> %u bytes; CRC32 %08x\n",
@@ -92,13 +126,33 @@ static void show_checks(const char *data_directory)
                 recvxTexturesFree(&textures);
                 pspDebugScreenPrintf("Room textures: FAIL (%d)\n\n", result);
             }
+            result = recvxPlayerRoomLoad(room_data, info.expanded_size, &player_room);
+            if (result == 0)
+                result = recvxPlayerSpawn(&player, &player_room, room_data,
+                                          info.expanded_size, room_spawn);
+            if (result == 0) {
+                player_ready = 1;
+                pspDebugScreenPrintf("Player spawn and room collision: READY\n\n");
+            } else {
+                recvxPlayerRoomFree(&player_room);
+                pspDebugScreenPrintf("Player data: FAIL (%d)\n\n", result);
+            }
         }
         free(room_data);
     }
-    pspDebugScreenPrintf("The game engine is not running yet.\n\n");
-    pspDebugScreenPrintf("Press CROSS to repeat the checks.\n");
+    if (!player_ready)
+        pspDebugScreenPrintf("No playable spawn is available.\n\n");
+    if (room_catalog_count > 1)
+        pspDebugScreenPrintf("Room %u/%u: %s\n", (unsigned int)(current_room + 1),
+                             (unsigned int)room_catalog_count, room_name);
+    else if (room_name[0] != '\0')
+        pspDebugScreenPrintf("Room: %s\n", room_name);
+    pspDebugScreenPrintf("Press CROSS to walk this room.\n");
+    if (room_catalog_count > 1)
+        pspDebugScreenPrintf("Press LEFT/RIGHT to load another room.\n");
     if (scene.vertices != NULL)
         pspDebugScreenPrintf("Press SQUARE for the 3D room viewer.\n");
+    pspDebugScreenPrintf("Press SELECT to repeat the checks.\n");
     pspDebugScreenPrintf("Press START or HOME to exit.\n");
 }
 
@@ -108,7 +162,10 @@ int main(int argc, char **argv)
     int callback;
     unsigned int previous_buttons = 0;
     int viewing = 0;
+    int playing = 0;
     char data_directory[512] = "data";
+
+    clock_set_result = scePowerSetClockFrequency(333, 333, 166);
 
     if (argc > 0 && argv != NULL && argv[0] != NULL) {
         const char *last_slash = strrchr(argv[0], '/');
@@ -116,6 +173,10 @@ int main(int argc, char **argv)
             snprintf(data_directory, sizeof(data_directory), "%.*s/data",
                      (int)(last_slash - argv[0]), argv[0]);
     }
+
+    room_catalog_status = recvxLoadRoomCatalog(data_directory, room_catalog,
+                                                RECVX_MAX_ROOM_CATALOG,
+                                                &room_catalog_count);
 
     pspDebugScreenInit();
     callback = sceKernelCreateCallback("Exit", exit_callback, NULL);
@@ -128,27 +189,82 @@ int main(int argc, char **argv)
     show_checks(data_directory);
 
     for (;;) {
+        int walking_started_this_frame = 0;
         if (sceCtrlPeekBufferPositive(&pad, 1) > 0) {
             unsigned int pressed = pad.Buttons & ~previous_buttons;
             previous_buttons = pad.Buttons;
             if (pressed & PSP_CTRL_START)
                 break;
+            if (!viewing && room_catalog_count > 1 &&
+                (pressed & (PSP_CTRL_LEFT | PSP_CTRL_RIGHT))) {
+                if (pressed & PSP_CTRL_LEFT)
+                    current_room = (current_room + room_catalog_count - 1) % room_catalog_count;
+                else
+                    current_room = (current_room + 1) % room_catalog_count;
+                room_spawn = 0;
+                door_exit_lock = 0;
+                show_checks(data_directory);
+            }
+            if (!viewing && (pressed & PSP_CTRL_CROSS) && player_ready) {
+                if (recvxRendererStart(&scene, &mesh, &textures, &player) == 0) {
+                    viewing = 1;
+                    playing = 1;
+                    walking_started_this_frame = 1;
+                } else {
+                    pspDebugScreenPrintf("Could not initialize walking mode.\n");
+                }
+            }
             if (pressed & PSP_CTRL_SQUARE) {
                 if (viewing) {
                     recvxRendererStop();
                     viewing = 0;
+                    playing = 0;
                     show_checks(data_directory);
                 } else if (scene.vertices != NULL) {
-                    if (recvxRendererStart(&scene, &mesh, &textures) == 0)
+                    if (recvxRendererStart(&scene, &mesh, &textures, NULL) == 0)
                         viewing = 1;
                     else
                         pspDebugScreenPrintf("Could not initialize the renderer.\n");
                 }
             }
-            if (!viewing && (pressed & PSP_CTRL_CROSS))
+            if (!viewing && (pressed & PSP_CTRL_SELECT))
                 show_checks(data_directory);
+            if (viewing && playing && !walking_started_this_frame) {
+                RecvxPlayerDoor door;
+                int at_door = recvxPlayerDoorAt(&player, &player_room, &door);
+                if (door_exit_lock) {
+                    if (!at_door)
+                        door_exit_lock = 0;
+                } else if ((pressed & PSP_CTRL_CROSS) && at_door) {
+                    char target_name[RECVX_ROOM_NAME_SIZE];
+                    unsigned int case_no = room_name[6] >= '0' && room_name[6] <= '9' ?
+                                           (unsigned int)(room_name[6] - '0') : 0;
+                    size_t i;
+                    snprintf(target_name, sizeof(target_name), "RM_%1u%02u%1u.RDX",
+                             door.target_stage, door.target_room, case_no);
+                    for (i = 0; i < room_catalog_count; ++i)
+                        if (strcmp(room_catalog[i], target_name) == 0)
+                            break;
+                    recvxRendererStop();
+                    viewing = 0;
+                    playing = 0;
+                    if (i < room_catalog_count) {
+                        current_room = i;
+                        room_spawn = door.target_pos;
+                        door_exit_lock = 1;
+                        room_note[0] = '\0';
+                    } else {
+                        snprintf(room_note, sizeof(room_note),
+                                 "Door target %s is not in this room catalog", target_name);
+                    }
+                    show_checks(data_directory);
+                }
+            }
             if (viewing)
-                recvxRendererFrame(&scene, &mesh, &textures, room_name, &pad, pressed);
+                recvxRendererFrame(&scene, &mesh, &textures,
+                                   playing ? &player : NULL,
+                                   playing ? &player_room : NULL,
+                                   room_name, &pad, pressed);
         }
         if (!viewing)
             sceKernelDelayThreadCB(16667);
@@ -160,6 +276,7 @@ int main(int argc, char **argv)
     recvxSceneFree(&scene);
     recvxMeshFree(&mesh);
     recvxTexturesFree(&textures);
+    recvxPlayerRoomFree(&player_room);
     sceKernelExitGame();
     return 0;
 }

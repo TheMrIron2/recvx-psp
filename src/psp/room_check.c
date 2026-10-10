@@ -11,8 +11,64 @@ static uint32_t read_u32(const unsigned char *data)
            ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
 }
 
-int recvxLoadRoomFile(const char *directory, RecvxRoomFileInfo *info,
-                      unsigned char **data)
+static int valid_room_name(const char *name)
+{
+    unsigned int i;
+    if (name == NULL || strlen(name) != 11 || memcmp(name, "RM_", 3) != 0 ||
+        memcmp(name + 7, ".RDX", 4) != 0)
+        return 0;
+    for (i = 3; i < 7; ++i)
+        if (name[i] < '0' || name[i] > '9')
+            return 0;
+    return 1;
+}
+
+int recvxLoadRoomCatalog(const char *directory,
+                         char (*names)[RECVX_ROOM_NAME_SIZE], size_t capacity,
+                         size_t *count)
+{
+    char path[512], line[64];
+    FILE *file;
+    size_t used = 0;
+    int path_size;
+    if (count == NULL)
+        return 2;
+    *count = 0;
+    if (directory == NULL || names == NULL || capacity == 0)
+        return 2;
+    path_size = snprintf(path, sizeof(path), "%s/rooms.txt", directory);
+    if (path_size < 0 || (size_t)path_size >= sizeof(path))
+        return 2;
+    file = fopen(path, "rb");
+    if (file == NULL)
+        return 1;
+    while (fgets(line, sizeof(line), file) != NULL) {
+        size_t length = strcspn(line, "\r\n"), i;
+        if (line[length] == '\0' && !feof(file) && length == sizeof(line) - 1)
+            goto invalid;
+        line[length] = '\0';
+        if (length == 0)
+            continue;
+        if (!valid_room_name(line) || used == capacity)
+            goto invalid;
+        for (i = 0; i < used; ++i)
+            if (strcmp(names[i], line) == 0)
+                goto invalid;
+        memcpy(names[used++], line, length + 1);
+    }
+    if (ferror(file) || used == 0)
+        goto invalid;
+    fclose(file);
+    *count = used;
+    return 0;
+
+invalid:
+    fclose(file);
+    return 2;
+}
+
+static int load_room_file(const char *directory, const char *name,
+                          RecvxRoomFileInfo *info, unsigned char **data)
 {
     char path[512];
     unsigned char metadata[32];
@@ -25,10 +81,13 @@ int recvxLoadRoomFile(const char *directory, RecvxRoomFileInfo *info,
     if (data == NULL)
         return 2;
     *data = NULL;
-    if (directory == NULL || info == NULL)
+    if (directory == NULL || info == NULL || (name != NULL && !valid_room_name(name)))
         return 2;
     memset(info, 0, sizeof(*info));
-    path_size = snprintf(path, sizeof(path), "%s/room.meta", directory);
+    if (name != NULL)
+        path_size = snprintf(path, sizeof(path), "%s/rooms/%.*s.meta", directory, 7, name);
+    else
+        path_size = snprintf(path, sizeof(path), "%s/room.meta", directory);
     if (path_size < 0 || (size_t)path_size >= sizeof(path))
         return 2;
     file = fopen(path, "rb");
@@ -44,6 +103,8 @@ int recvxLoadRoomFile(const char *directory, RecvxRoomFileInfo *info,
     info->crc32 = read_u32(metadata + 12);
     memcpy(info->name, metadata + 16, 16);
     info->name[16] = '\0';
+    if (name != NULL && strcmp(info->name, name) != 0)
+        goto done;
     /* Keep the check within the PSP-1000's 16 MiB application heap. */
     if (info->packed_size == 0 || info->expanded_size < 128 ||
         info->packed_size > 8 * 1024 * 1024 ||
@@ -56,7 +117,10 @@ int recvxLoadRoomFile(const char *directory, RecvxRoomFileInfo *info,
         result = 4;
         goto done;
     }
-    path_size = snprintf(path, sizeof(path), "%s/room.rdx", directory);
+    if (name != NULL)
+        path_size = snprintf(path, sizeof(path), "%s/rooms/%.*s.rdx", directory, 7, name);
+    else
+        path_size = snprintf(path, sizeof(path), "%s/room.rdx", directory);
     result = 3;
     if (path_size < 0 || (size_t)path_size >= sizeof(path))
         goto done;
@@ -87,6 +151,18 @@ done:
     free(expanded);
     free(packed);
     return result;
+}
+
+int recvxLoadRoomFile(const char *directory, RecvxRoomFileInfo *info,
+                      unsigned char **data)
+{
+    return load_room_file(directory, NULL, info, data);
+}
+
+int recvxLoadNamedRoomFile(const char *directory, const char *name,
+                           RecvxRoomFileInfo *info, unsigned char **data)
+{
+    return load_room_file(directory, name, info, data);
 }
 
 int recvxCheckRoomFile(const char *directory, RecvxRoomFileInfo *info)

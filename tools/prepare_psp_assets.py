@@ -47,9 +47,15 @@ def load_reference(compiler):
 def prepare(args):
     room_names = re.findall(r'"(RM_\d{4}\.RDX)"',
                            (ROOT / "src/ps2/veronica/prog/ps2_dvd_image.c").read_text())
-    selected = args.room.upper()
-    if selected not in room_names:
-        raise ValueError(f"Unknown room: {selected}")
+    selected = [name.upper() for name in re.split(r"[,\s]+", args.rooms) if name]
+    if not selected:
+        selected = [args.room.upper()]
+    if len(set(selected)) != len(selected):
+        raise ValueError("Room selection contains duplicates")
+    unknown = [name for name in selected if name not in room_names]
+    if unknown:
+        raise ValueError(f"Unknown room: {unknown[0]}")
+    selected_set = set(selected)
     library = bind_scene(ctypes.CDLL(str(args.library.resolve())))
     decode = library.recvxExpandBounded
     decode.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
@@ -60,8 +66,9 @@ def prepare(args):
     inspect.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(RoomInfo)]
     inspect.restype = ctypes.c_int
     reference = load_reference(args.host_cc) if args.validate_all else None
-    report = {"iso": str(args.iso), "selected_room": selected, "rooms": []}
-    sample = None
+    report = {"iso": str(args.iso), "selected_room": selected[0],
+              "selected_rooms": selected, "rooms": []}
+    prepared = {}
 
     with args.iso.open("rb") as iso:
         mkiso.check_iso(iso)
@@ -85,7 +92,7 @@ def prepare(args):
         report["archive_room_count"] = count
         output = ctypes.create_string_buffer(16 * 1024 * 1024)
         for index, (name, (offset, size)) in enumerate(zip(room_names, entries)):
-            if not args.validate_all and name != selected:
+            if not args.validate_all and name not in selected_set:
                 continue
             iso.seek(archive.lba + offset)
             packed = iso.read(size)
@@ -141,26 +148,40 @@ def prepare(args):
             library.recvxTexturesFree(ctypes.byref(textures))
             library.recvxMeshFree(ctypes.byref(mesh))
             report["rooms"].append(record)
-            if name == selected:
+            if name in selected_set:
                 if size + written.value > 14 * 1024 * 1024 or size > 8 * 1024 * 1024 or written.value > 12 * 1024 * 1024:
                     raise ValueError(f"{name}: exceeds PSP file-check memory budget")
-                sample = packed, struct.pack("<4sIII16s", b"RCV1", size, written.value,
-                                             crc, name.encode()), record
+                metadata = struct.pack("<4sIII16s", b"RCV1", size, written.value,
+                                       crc, name.encode())
+                prepared[name] = (packed, metadata, record)
             if args.validate_all and (index + 1) % 25 == 0:
                 print(f"Validated {index + 1}/{count} rooms", flush=True)
 
-    if sample is None:
-        raise ValueError("Selected room was not found")
+    if len(prepared) != len(selected):
+        raise ValueError("One or more selected rooms were not found")
     args.output.mkdir(parents=True, exist_ok=True)
-    packed, metadata, record = sample
+    room_directory = args.output / "rooms"
+    room_directory.mkdir(exist_ok=True)
+    for old_file in room_directory.iterdir():
+        if old_file.suffix in (".rdx", ".meta") and re.fullmatch(r"RM_\d{4}", old_file.stem):
+            if old_file.stem not in {name[:7] for name in selected}:
+                old_file.unlink()
+    (args.output / "rooms.txt").write_text("".join(f"{name}\n" for name in selected))
+    for name in selected:
+        packed, metadata, record = prepared[name]
+        stem = name[:7]
+        (room_directory / f"{stem}.rdx").write_bytes(packed)
+        (room_directory / f"{stem}.meta").write_bytes(metadata)
+    packed, metadata, record = prepared[selected[0]]
     (args.output / "room.rdx").write_bytes(packed)
     (args.output / "room.meta").write_bytes(metadata)
     (args.output / "asset-report.json").write_text(json.dumps(report, indent=2) + "\n")
     texture_count = sum(r["textures"]["count"] for r in report["rooms"])
     print(f"PASS: {len(report['rooms'])}/{count} rooms decoded; scenes, meshes and {texture_count} textures validated" +
           ("; all match original C reference" if reference is not None else ""))
-    print(f"Prepared {selected}: {record['packed_size']:,} -> {record['expanded_size']:,} bytes, "
-          f"CRC32 {record['crc32']}")
+    print(f"Prepared {len(selected)} rooms: {', '.join(selected)}")
+    print(f"First room {selected[0]}: {record['packed_size']:,} -> "
+          f"{record['expanded_size']:,} bytes, CRC32 {record['crc32']}")
     print(f"Copy {args.output}/ with EBOOT.PBP for the PSP room check")
 
 
@@ -168,6 +189,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--iso", type=Path, required=True)
     parser.add_argument("--room", default="RM_0000.RDX")
+    parser.add_argument("--rooms", default="")
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--host-cc", default="cc")

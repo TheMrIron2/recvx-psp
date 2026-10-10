@@ -24,6 +24,13 @@ typedef struct RecvxRoomFileInfo {
     RecvxRoomInfo room;
 } RecvxRoomFileInfo;
 
+#define RECVX_ROOM_NAME_SIZE 17
+#define RECVX_MAX_ROOM_CATALOG 205
+
+int recvxLoadRoomCatalog(const char *directory,
+                         char (*names)[RECVX_ROOM_NAME_SIZE], size_t capacity,
+                         size_t *count);
+
 /* 0: PASS, 1: no metadata, 2: bad metadata, 3: read failure, 4: allocation
  * failure, 5: decode failure, 6: checksum mismatch, 7: bad room structure.
  * Loads directory/room.meta and directory/room.rdx; frees buffers on return.
@@ -35,5 +42,7 @@ int recvxCheckRoomFile(const char *directory, RecvxRoomFileInfo *info);
  */
 int recvxLoadRoomFile(const char *directory, RecvxRoomFileInfo *info,
                       unsigned char **data);
+int recvxLoadNamedRoomFile(const char *directory, const char *name,
+                           RecvxRoomFileInfo *info, unsigned char **data);
 
 #endif

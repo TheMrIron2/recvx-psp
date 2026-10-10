@@ -43,9 +43,20 @@ def preview(args):
     decode.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
                        ctypes.c_size_t, ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
     decode.restype = ctypes.c_int
-    meta = (args.data / "room.meta").read_bytes()
+    catalog = args.data / "rooms.txt"
+    if catalog.is_file():
+        names = [line.strip() for line in catalog.read_text().splitlines() if line.strip()]
+        room = args.room.upper() if args.room else (names[0] if names else "")
+        if (room not in names or len(room) != 11 or room[:3] != "RM_" or
+                not room[3:7].isdigit() or room[7:] != ".RDX"):
+            raise ValueError(f"Room {room} is not in the prepared catalog")
+        stem = room[:7]
+        meta_path, packed_path = args.data / "rooms" / f"{stem}.meta", args.data / "rooms" / f"{stem}.rdx"
+    else:
+        meta_path, packed_path = args.data / "room.meta", args.data / "room.rdx"
+    meta = meta_path.read_bytes()
     magic, packed_size, expanded_size, crc, name = struct.unpack("<4sIII16s", meta)
-    packed = (args.data / "room.rdx").read_bytes()
+    packed = packed_path.read_bytes()
     if magic != b"RCV1" or len(packed) != packed_size or expanded_size > 12*1024*1024:
         raise ValueError("Invalid room metadata")
     output = ctypes.create_string_buffer(expanded_size)
@@ -72,6 +83,12 @@ def preview(args):
         model_geometry = args.mode != "spatial" and bool(mesh.vertices)
         filled = args.mode in ("model","textured") and model_geometry
         geometry = mesh if model_geometry else scene
+        if args.cut >= mesh.cut_count and mesh.cut_count:
+            raise ValueError("Selected camera cut is outside this room")
+        if args.cut < 0:
+            raise ValueError("Camera cut must be zero or greater")
+        if lib.recvxApplyRoomLighting(ctypes.byref(mesh), args.cut, args.camera) != 0:
+            raise ValueError("Room lighting setup failed")
         width, height = 480, 272
         center = list(geometry.center)
         yaw, pitch, distance = 0.85, 0.6, geometry.radius * 3
@@ -120,45 +137,52 @@ def preview(args):
             return tuple(round(sum(c[channel]*w for c,w in zip(colors,weights))) for channel in range(4))
 
         batches = list(mesh.batches[:mesh.batch_count])
-        batch_index = 0
+        def hidden(batch):
+            if args.cut >= mesh.cut_count or batch.object_index >= 512:
+                return False
+            mask = mesh.cuts[args.cut].hide_objects[args.camera]
+            return bool(mask[batch.object_index // 32] & (0x80000000 >> (batch.object_index & 31)))
+
         if filled:
-            for index in range(0, mesh.vertex_count, 3):
-                vertices = mesh.vertices[index:index + 3]
-                while batch_index+1 < len(batches) and index >= batches[batch_index+1].first_vertex:
-                    batch_index += 1
-                batch = batches[batch_index] if batches else None
-                use_texture = textured and batch and batch.texture_index != 0xFFFFFFFF
-                texture_vertices = mesh.textured_vertices[index:index+3] if use_texture else None
-                projected = [project(v) for v in vertices]
-                if any(p is None for p in projected):
+            for batch in batches:
+                if hidden(batch):
                     continue
-                a, b, c = projected
-                color = (vertices[0].color & 255, (vertices[0].color >> 8) & 255,
-                         (vertices[0].color >> 16) & 255)
+                for index in range(batch.first_vertex, batch.first_vertex + batch.vertex_count, 3):
+                    vertices = mesh.vertices[index:index + 3]
+                    use_texture = textured and batch.texture_index != 0xFFFFFFFF
+                    texture_vertices = mesh.textured_vertices[index:index+3] if use_texture else None
+                    projected = [project(v) for v in vertices]
+                    if any(p is None for p in projected):
+                        continue
+                    a, b, c = projected
+                    color = (vertices[0].color & 255, (vertices[0].color >> 8) & 255,
+                             (vertices[0].color >> 16) & 255)
 
-                def edge(p, q, x, y):
-                    return (x-p[0])*(q[1]-p[1]) - (y-p[1])*(q[0]-p[0])
+                    def edge(p, q, x, y):
+                        return (x-p[0])*(q[1]-p[1]) - (y-p[1])*(q[0]-p[0])
 
-                area = edge(a, b, c[0], c[1])
-                if abs(area) < 1e-6:
-                    continue
-                polygons.append((sum(p[2] for p in projected), projected, color))
-                left = max(0, math.floor(min(p[0] for p in projected)))
-                right_edge = min(width-1, math.ceil(max(p[0] for p in projected)))
-                top = max(0, math.floor(min(p[1] for p in projected)))
-                bottom = min(height-1, math.ceil(max(p[1] for p in projected)))
-                hit = False
-                for y in range(top, bottom+1):
-                    for x in range(left, right_edge+1):
-                        w0 = edge(b, c, x+0.5, y+0.5) / area
-                        w1 = edge(c, a, x+0.5, y+0.5) / area
-                        w2 = 1-w0-w1
-                        if min(w0, w1, w2) < -1e-6:
-                            continue
-                        depth = 1/(w0/a[2] + w1/b[2] + w2/c[2])
-                        pixel = y*width+x
-                        if depth <= depths[pixel]:
+                    area = edge(a, b, c[0], c[1])
+                    if abs(area) < 1e-6:
+                        continue
+                    polygons.append((sum(p[2] for p in projected), projected, color))
+                    left = max(0, math.floor(min(p[0] for p in projected)))
+                    right_edge = min(width-1, math.ceil(max(p[0] for p in projected)))
+                    top = max(0, math.floor(min(p[1] for p in projected)))
+                    bottom = min(height-1, math.ceil(max(p[1] for p in projected)))
+                    hit = False
+                    for y in range(top, bottom+1):
+                        for x in range(left, right_edge+1):
+                            w0 = edge(b, c, x+0.5, y+0.5) / area
+                            w1 = edge(c, a, x+0.5, y+0.5) / area
+                            w2 = 1-w0-w1
+                            if min(w0, w1, w2) < -1e-6:
+                                continue
+                            depth = 1/(w0/a[2] + w1/b[2] + w2/c[2])
+                            pixel = y*width+x
+                            if depth > depths[pixel]:
+                                continue
                             pixel_color = color
+                            alpha = (vertices[0].color >> 24) & 255
                             if use_texture:
                                 weights = (w0/a[2]*depth,w1/b[2]*depth,w2/c[2]*depth)
                                 u = sum(t.u*w for t,w in zip(texture_vertices,weights))
@@ -167,37 +191,52 @@ def preview(args):
                                 if tex_color[3] == 0:
                                     continue
                                 pixel_color = tuple(round(t*c/255) for t,c in zip(tex_color[:3],color))
+                                alpha = (alpha * tex_color[3] + 127) // 255
+                            if alpha == 0:
+                                continue
+                            if batch.blend_state & 0x10000:
+                                destination = pixels[pixel*3:pixel*3+3]
+                                if (batch.blend_state & 0xff) == 10:
+                                    output_color = tuple(min(255, d + (s*alpha + 127)//255)
+                                                         for s, d in zip(pixel_color, destination))
+                                else:
+                                    output_color = tuple((s*alpha + d*(255-alpha) + 127)//255
+                                                         for s, d in zip(pixel_color, destination))
+                            else:
+                                output_color = pixel_color
                             depths[pixel] = depth
-                            pixels[pixel*3:pixel*3+3] = bytes(pixel_color)
+                            pixels[pixel*3:pixel*3+3] = bytes(output_color)
                             hit = True
-                visible += hit
+                    visible += hit
             # SVG uses depth sorting; PNG above uses per-pixel depth testing.
             for _, points, color in sorted(polygons, key=lambda p: p[0], reverse=True):
                 coordinates = " ".join(f"{p[0]:.2f},{p[1]:.2f}" for p in points)
                 svg.append(f'<polygon points="{coordinates}" fill="#{color[0]:02x}{color[1]:02x}{color[2]:02x}"/>')
         line_vertices = mesh.wire_vertices if model_geometry else scene.vertices
-        line_count = mesh.vertex_count * 2 if model_geometry else scene.vertex_count
-        for index in range(0, 0 if filled else line_count, 2):
-            v0, v1 = line_vertices[index], line_vertices[index + 1]
-            a, b = project(v0), project(v1)
-            if a is None or b is None:
-                continue
-            color = (v0.color & 255, (v0.color >> 8) & 255, (v0.color >> 16) & 255)
-            svg.append(f'<path d="M {a[0]:.2f} {a[1]:.2f} L {b[0]:.2f} {b[1]:.2f}" '
-                       f'stroke="#{color[0]:02x}{color[1]:02x}{color[2]:02x}" fill="none"/>')
-            steps = max(1, math.ceil(max(abs(a[0]-b[0]), abs(a[1]-b[1]))))
-            hit = False
-            for step in range(steps + 1):
-                t = step / steps
-                x, y = round(a[0]*(1-t) + b[0]*t), round(a[1]*(1-t) + b[1]*t)
-                if 0 <= x < width and 0 <= y < height:
-                    pixel = y*width + x
-                    depth = 1 / ((1-t)/a[2] + t/b[2])
-                    if model_geometry or depth <= depths[pixel]:
-                        depths[pixel] = depth
-                        pixels[pixel*3:pixel*3+3] = bytes(color)
-                        hit = True
-            visible += hit
+        line_ranges = [(batch.first_vertex * 2, batch.vertex_count * 2)
+                       for batch in batches if not hidden(batch)] if model_geometry else [(0, scene.vertex_count)]
+        for first_line, line_count in line_ranges:
+            for index in range(first_line, first_line + (0 if filled else line_count), 2):
+                v0, v1 = line_vertices[index], line_vertices[index + 1]
+                a, b = project(v0), project(v1)
+                if a is None or b is None:
+                    continue
+                color = (v0.color & 255, (v0.color >> 8) & 255, (v0.color >> 16) & 255)
+                svg.append(f'<path d="M {a[0]:.2f} {a[1]:.2f} L {b[0]:.2f} {b[1]:.2f}" '
+                           f'stroke="#{color[0]:02x}{color[1]:02x}{color[2]:02x}" fill="none"/>')
+                steps = max(1, math.ceil(max(abs(a[0]-b[0]), abs(a[1]-b[1]))))
+                hit = False
+                for step in range(steps + 1):
+                    t = step / steps
+                    x, y = round(a[0]*(1-t) + b[0]*t), round(a[1]*(1-t) + b[1]*t)
+                    if 0 <= x < width and 0 <= y < height:
+                        pixel = y*width + x
+                        depth = 1 / ((1-t)/a[2] + t/b[2])
+                        if model_geometry or depth <= depths[pixel]:
+                            depths[pixel] = depth
+                            pixels[pixel*3:pixel*3+3] = bytes(color)
+                            hit = True
+                visible += hit
         title = name.rstrip(b"\0").decode("ascii")
         if textured:
             svg = svg[:2]
@@ -222,11 +261,13 @@ def preview(args):
                         atlas[pixel:pixel+3] = rgb
             write_png(args.output.with_name("room-textures.png"),atlas_width,atlas_height,atlas)
         args.output.with_suffix(".svg").write_text("\n".join(svg)+"\n")
-        if geometry.vertex_count and visible == 0:
+        if geometry.vertex_count and visible == 0 and not (model_geometry and mesh.cut_count):
             raise ValueError("Default camera does not show the scene")
         if model_geometry:
             primitive = "faces" if filled else "lines"
-            print(f"Model preview: {mesh.model_count} models, {mesh.triangle_count} triangles, {visible} visible {primitive}")
+            cut_label = f"cut {args.cut + 1}/{mesh.cut_count} camera {args.camera}" if mesh.cut_count else "no camera cuts"
+            print(f"Model preview: {cut_label}, {mesh.model_count} models, "
+                  f"{mesh.triangle_count} triangles, {visible} visible {primitive}")
         else:
             print(f"Spatial preview: {scene.box_count} bounds, {scene.marker_count} markers, {visible} visible lines")
         print(args.output.with_suffix(".svg"))
@@ -241,7 +282,10 @@ if __name__ == "__main__":
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--room")
     parser.add_argument("--mode", choices=("model", "wire", "spatial", "textured"), default="textured")
+    parser.add_argument("--cut", type=int, default=0)
+    parser.add_argument("--camera", type=int, choices=(0, 1), default=0)
     try:
         preview(parser.parse_args())
     except (OSError, ValueError, struct.error) as error:

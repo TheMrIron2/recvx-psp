@@ -9,9 +9,14 @@
 #define MAX_DEPTH 64
 #define MAX_TRIANGLES 16384
 #define MAX_BATCHES 512
+#define MAX_CAMERA_CUTS 64
+#define MAX_CUT_AREAS 16384
+#define MAX_ROOM_LIGHTS 256
 
-_Static_assert(sizeof(RecvxTexturedVertex) == 24, "GU textured vertex layout");
-_Static_assert(offsetof(RecvxTexturedVertex, x) == 12, "GU position follows UV and color");
+_Static_assert(sizeof(RecvxMeshVertex) == 36, "GU mesh vertex layout");
+_Static_assert(offsetof(RecvxMeshVertex, nx) == 12, "GU normal follows color");
+_Static_assert(offsetof(RecvxMeshVertex, x) == 24, "GU position follows normal");
+_Static_assert(sizeof(RecvxMeshBatch) == 24, "Mesh batch layout");
 
 typedef struct Matrix { float value[3][4]; } Matrix;
 
@@ -20,7 +25,7 @@ typedef struct MeshReader {
     size_t size, body, objects;
     unsigned int object_count;
     unsigned char *visited;
-    uint32_t last_texture, last_flags;
+    uint32_t current_object, last_object, last_texture, last_flags, last_blend_state;
     RecvxRoomMesh mesh;
     float minimum[3], maximum[3];
 } MeshReader;
@@ -135,38 +140,53 @@ static int point(const MeshReader *reader, size_t vertex_data, unsigned int firs
     return 0;
 }
 
-static uint32_t face_color(uint32_t argb, const float points[3][3])
+static uint32_t diffuse_color(uint32_t argb)
 {
-    float a[3], b[3], normal[3], length, shade = 0.4f;
-    unsigned int axis;
-    for (axis = 0; axis < 3; ++axis) {
-        a[axis] = points[1][axis] - points[0][axis];
-        b[axis] = points[2][axis] - points[0][axis];
-    }
-    normal[0] = a[1] * b[2] - a[2] * b[1];
-    normal[1] = a[2] * b[0] - a[0] * b[2];
-    normal[2] = a[0] * b[1] - a[1] * b[0];
+    return (argb & 0xff000000u) | ((argb & 0x000000ffu) << 16) |
+           (argb & 0x0000ff00u) | ((argb & 0x00ff0000u) >> 16);
+}
+
+static void triangle_normal(const float points[3][3], float normal[3])
+{
+    float x1 = points[1][0] - points[0][0];
+    float y1 = points[1][1] - points[0][1];
+    float z1 = points[1][2] - points[0][2];
+    float x2 = points[2][0] - points[0][0];
+    float y2 = points[2][1] - points[0][1];
+    float z2 = points[2][2] - points[0][2];
+    float length;
+    normal[0] = y1 * z2 - z1 * y2;
+    normal[1] = z1 * x2 - x1 * z2;
+    normal[2] = x1 * y2 - y1 * x2;
     length = sqrtf(normal[0]*normal[0] + normal[1]*normal[1] + normal[2]*normal[2]);
-    if (length > 0)
-        shade += 0.6f * fminf(1, fabsf(normal[0]*0.4f + normal[1]*0.8f + normal[2]*0.45f) / length);
-    return 0xff000000u | ((uint32_t)(((argb >> 16) & 255) * shade)) |
-           ((uint32_t)(((argb >> 8) & 255) * shade) << 8) |
-           ((uint32_t)((argb & 255) * shade) << 16);
+    if (length > 0) {
+        normal[0] /= length;
+        normal[1] /= length;
+        normal[2] /= length;
+    } else {
+        normal[0] = 0;
+        normal[1] = 1;
+        normal[2] = 0;
+    }
 }
 
 static int triangle(MeshReader *reader, size_t vertices, unsigned int first,
                     unsigned int count, const unsigned int indices[3],
                     const float uv[3][2], const Matrix *matrix, uint32_t color,
-                    uint32_t texture, uint32_t flags)
+                    uint32_t texture, uint32_t flags, uint32_t object_index,
+                    uint32_t blend_state)
 {
     float points[3][3];
+    float normal[3];
     unsigned int i, axis;
     if (reader->mesh.triangle_count == MAX_TRIANGLES)
         return -2;
     for (i = 0; i < 3; ++i)
         if (point(reader, vertices, first, count, indices[i], matrix, points[i]) != 0)
             return -1;
-    if (!reader->mesh.batch_count || texture != reader->last_texture || flags != reader->last_flags) {
+    triangle_normal(points, normal);
+    if (!reader->mesh.batch_count || texture != reader->last_texture || flags != reader->last_flags ||
+        object_index != reader->last_object || blend_state != reader->last_blend_state) {
         if (reader->mesh.batch_count == MAX_BATCHES)
             return -2;
         if (reader->mesh.batches) {
@@ -175,34 +195,31 @@ static int triangle(MeshReader *reader, size_t vertices, unsigned int first,
             batch->vertex_count = 0;
             batch->texture_index = texture;
             batch->flags = flags;
+            batch->object_index = object_index;
+            batch->blend_state = blend_state;
         }
         ++reader->mesh.batch_count;
+        reader->last_object = object_index;
         reader->last_texture = texture;
         reader->last_flags = flags;
+        reader->last_blend_state = blend_state;
     }
     if (reader->mesh.vertices != NULL) {
-        uint32_t shaded = face_color(color, points);
+        uint32_t base_color = diffuse_color(color);
         for (i = 0; i < 3; ++i) {
-            RecvxSceneVertex *vertex = &reader->mesh.vertices[reader->mesh.vertex_count + i];
-            vertex->color = shaded;
+            RecvxMeshVertex *vertex = &reader->mesh.vertices[reader->mesh.vertex_count + i];
+            vertex->u = uv[i][0];
+            vertex->v = uv[i][1];
+            vertex->color = base_color;
+            vertex->nx = normal[0];
+            vertex->ny = normal[1];
+            vertex->nz = normal[2];
             vertex->x = points[i][0];
             vertex->y = points[i][1];
             vertex->z = points[i][2];
-            RecvxTexturedVertex *textured = &reader->mesh.textured_vertices[reader->mesh.vertex_count + i];
-            textured->u = uv[i][0];
-            textured->v = uv[i][1];
-            textured->color = shaded;
-            textured->x = points[i][0];
-            textured->y = points[i][1];
-            textured->z = points[i][2];
+            reader->mesh.material_colors[reader->mesh.vertex_count + i] = base_color;
         }
         reader->mesh.batches[reader->mesh.batch_count - 1].vertex_count += 3;
-        for (i = 0; i < 3; ++i) {
-            reader->mesh.wire_vertices[reader->mesh.triangle_count * 6 + i * 2] =
-                reader->mesh.vertices[reader->mesh.vertex_count + i];
-            reader->mesh.wire_vertices[reader->mesh.triangle_count * 6 + i * 2 + 1] =
-                reader->mesh.vertices[reader->mesh.vertex_count + (i + 1) % 3];
-        }
     }
     for (i = 0; i < 3; ++i)
         for (axis = 0; axis < 3; ++axis) {
@@ -216,10 +233,13 @@ static int triangle(MeshReader *reader, size_t vertices, unsigned int first,
 
 static int model(MeshReader *reader, uint32_t offset, const Matrix *matrix)
 {
+    static const unsigned char blend_sources[8] = {11, 10, 3, 5, 8, 6, 2, 4};
+    static const unsigned char blend_destinations[8] = {11, 10, 9, 7, 8, 6, 2, 4};
     size_t header, vertex_chunk, polygon;
     unsigned int first, count;
     uint32_t color = 0xffb2b2b2;
     uint32_t texture = UINT32_MAX, sampler = 4, flip = 0;
+    uint32_t blend_source = 8, blend_destination = 6;
     int result;
     if (relative(reader, offset, 24, &header) != 0)
         return -1;
@@ -274,6 +294,8 @@ static int model(MeshReader *reader, uint32_t offset, const Matrix *matrix)
             unsigned int components = (mask & 1) + ((mask >> 1) & 1) + ((mask >> 2) & 1);
             if (words != components * 2)
                 return -1;
+            blend_source = blend_sources[(reader->bytes[polygon + 1] >> 3) & 7];
+            blend_destination = blend_destinations[reader->bytes[polygon + 1] & 7];
             if (mask & 1)
                 color = u32(reader->bytes + position);
         } else {
@@ -324,10 +346,16 @@ static int model(MeshReader *reader, uint32_t offset, const Matrix *matrix)
                             memcpy(uv[0], previous_uv[1], sizeof(uv[0]));
                             memcpy(uv[1], previous_uv[0], sizeof(uv[1]));
                         }
+                        uint32_t blend_state = (blend_source << 8) | blend_destination;
+                        if (reader->bytes[polygon + 1] & 8)
+                            blend_state |= RECVX_BLEND_ALPHA;
+                        if (reader->bytes[polygon + 1] & 0x10)
+                            blend_state |= RECVX_BLEND_DOUBLE_SIDED;
                         result = triangle(reader, vertex_chunk + 64, first, count,
                                           indices, uv, matrix, color,
                                           type == 64 ? UINT32_MAX : texture,
-                                          type == 64 ? 0 : sampler);
+                                          type == 64 ? 0 : sampler,
+                                          reader->current_object, blend_state);
                         if (result != 0)
                             return result;
                     }
@@ -373,6 +401,7 @@ static int tree(MeshReader *reader, unsigned int index, const Matrix *parent, un
         if (object_matrix(object, flags, parent, &matrix) != 0)
             return -1;
         if (!(flags & 8) && model_offset != UINT32_MAX) {
+            reader->current_object = index;
             result = model(reader, model_offset, &matrix);
             if (result != 0)
                 return result;
@@ -394,9 +423,63 @@ static int tree(MeshReader *reader, unsigned int index, const Matrix *parent, un
 void recvxMeshFree(RecvxRoomMesh *mesh)
 {
     if (mesh != NULL) {
+        free(mesh->wire_storage);
         free(mesh->storage);
+        free(mesh->cuts);
+        free(mesh->cameras);
+        free(mesh->cut_areas);
+        free(mesh->lights);
         memset(mesh, 0, sizeof(*mesh));
     }
+}
+
+int recvxMeshSetWireframe(RecvxRoomMesh *mesh, int enabled)
+{
+    RecvxSceneVertex *wire_vertices;
+    size_t wire_count, wire_bytes, i;
+    if (mesh == NULL)
+        return -1;
+    if (!enabled) {
+        free(mesh->wire_storage);
+        mesh->wire_storage = NULL;
+        mesh->wire_vertices = NULL;
+        return 0;
+    }
+    if (mesh->wire_vertices != NULL)
+        return 0;
+    if (mesh->vertices == NULL || mesh->triangle_count > UINT32_MAX / 3 ||
+        mesh->vertex_count != mesh->triangle_count * 3)
+        return -1;
+    wire_count = (size_t)mesh->triangle_count * 6;
+    if (wire_count > SIZE_MAX / sizeof(*wire_vertices))
+        return -1;
+    wire_bytes = wire_count * sizeof(*wire_vertices);
+    if (wire_bytes > SIZE_MAX - 15)
+        return -1;
+    mesh->wire_storage = malloc(wire_bytes + 15);
+    if (mesh->wire_storage == NULL)
+        return -3;
+    wire_vertices = (RecvxSceneVertex *)
+        (((uintptr_t)mesh->wire_storage + 15) & ~(uintptr_t)15);
+    for (i = 0; i < mesh->triangle_count; ++i) {
+        const RecvxMeshVertex *triangle = &mesh->vertices[i * 3];
+        unsigned int edge;
+        for (edge = 0; edge < 3; ++edge) {
+            const RecvxMeshVertex *a = &triangle[edge];
+            const RecvxMeshVertex *b = &triangle[(edge + 1) % 3];
+            RecvxSceneVertex *line = &wire_vertices[i * 6 + edge * 2];
+            line[0].color = a->color;
+            line[0].x = a->x;
+            line[0].y = a->y;
+            line[0].z = a->z;
+            line[1].color = b->color;
+            line[1].x = b->x;
+            line[1].y = b->y;
+            line[1].z = b->z;
+        }
+    }
+    mesh->wire_vertices = wire_vertices;
+    return 0;
 }
 
 int recvxBuildRoomMesh(const void *room, size_t size, RecvxRoomMesh *mesh)
@@ -406,36 +489,233 @@ int recvxBuildRoomMesh(const void *room, size_t size, RecvxRoomMesh *mesh)
     Matrix identity = {{{1,0,0,0}, {0,1,0,0}, {0,0,1,0}}};
     size_t directory, blob;
     uint32_t object_offset;
-    unsigned int axis, pass;
+    unsigned int axis, pass, cut, camera, word, light, ambient_index;
+    size_t total_cut_areas = 0;
     int result = 0;
     if (mesh == NULL || recvxInspectRoom(room, size, &info) != 0)
         return -1;
     reader.bytes = room;
     reader.size = size;
+    reader.mesh.cut_count = info.counts[0];
+    if (reader.mesh.cut_count > MAX_CAMERA_CUTS)
+        return -2;
+    if (reader.mesh.cut_count != 0) {
+        uint32_t cut_offset = u32(reader.bytes + info.rom_offset);
+        for (cut = 0; cut < reader.mesh.cut_count; ++cut) {
+            const unsigned char *cut_record = reader.bytes + cut_offset + cut * 0x2a8;
+            uint32_t area_offset = u32(cut_record + 4);
+            unsigned int area_count = cut_record[3];
+            if (area_count != 0 && ((area_offset & 3) != 0 ||
+                !range(&reader, area_offset, area_count * 0x20))) {
+                result = -1;
+                goto done;
+            }
+            total_cut_areas += area_count;
+            if (total_cut_areas > MAX_CUT_AREAS) {
+                result = -2;
+                goto done;
+            }
+        }
+        reader.mesh.cuts = calloc(reader.mesh.cut_count, sizeof(*reader.mesh.cuts));
+        if (reader.mesh.cuts == NULL)
+            return -3;
+        reader.mesh.cameras = calloc(reader.mesh.cut_count * 2,
+                                     sizeof(*reader.mesh.cameras));
+        if (reader.mesh.cameras == NULL) {
+            result = -3;
+            goto done;
+        }
+        if (total_cut_areas != 0) {
+            reader.mesh.cut_areas = calloc(total_cut_areas, sizeof(*reader.mesh.cut_areas));
+            if (reader.mesh.cut_areas == NULL) {
+                result = -3;
+                goto done;
+            }
+        }
+        reader.mesh.cut_area_count = total_cut_areas;
+        {
+            uint32_t area_index = 0;
+            for (cut = 0; cut < reader.mesh.cut_count; ++cut) {
+                const unsigned char *cut_record = reader.bytes + cut_offset + cut * 0x2a8;
+                uint32_t area_offset = u32(cut_record + 4);
+                unsigned int area_count = cut_record[3];
+                RecvxRoomCut *destination = &reader.mesh.cuts[cut];
+                unsigned int area;
+                destination->active = cut_record[0] & 1;
+                destination->area_first = area_index;
+                destination->area_count = area_count;
+                for (area = 0; area < area_count; ++area) {
+                    const unsigned char *source = reader.bytes + area_offset + area * 0x20;
+                    RecvxCutArea *entry = &reader.mesh.cut_areas[area_index++];
+                    entry->attr = u32(source);
+                    entry->floor = (int8_t)source[4];
+                    entry->type = source[7];
+                    entry->min_x = f32(source + 0x10);
+                    entry->min_z = f32(source + 0x14);
+                    entry->max_x = f32(source + 0x18);
+                    entry->max_z = f32(source + 0x1c);
+                    if (entry->type > 4 || !coordinate(entry->min_x) ||
+                        !coordinate(entry->min_z) || !coordinate(entry->max_x) ||
+                        !coordinate(entry->max_z) || entry->min_x > entry->max_x ||
+                        entry->min_z > entry->max_z) {
+                        result = -1;
+                        goto done;
+                    }
+                }
+                for (camera = 0; camera < 2; ++camera) {
+                    const unsigned char *source = cut_record + 0x20 + camera * 0xc4;
+                    RecvxRoomCamera *camera_data =
+                        &reader.mesh.cameras[cut * 2 + camera];
+                    unsigned int axis;
+                    camera_data->flags = u16(source);
+                    camera_data->light_clip = source[2];
+                    camera_data->speed = source[3];
+                    for (axis = 0; axis < 3; ++axis) {
+                        camera_data->position[axis] = f32(source + 4 + axis * 4);
+                        camera_data->angles[axis] = (int32_t)u32(source + 0x34 + axis * 4);
+                        if (!coordinate(camera_data->position[axis])) {
+                            result = -1;
+                            goto done;
+                        }
+                    }
+                    camera_data->lens = f32(source + 0x10);
+                    camera_data->width = f32(source + 0x14);
+                    camera_data->height = f32(source + 0x18);
+                    camera_data->depth = f32(source + 0x1c);
+                    for (axis = 0; axis < 4; ++axis) {
+                        camera_data->active_y[axis] = f32(source + 0x20 + axis * 4);
+                        camera_data->roll_limits[axis] =
+                            (int16_t)u16(source + 0x48 + axis * 2);
+                        if (!coordinate(camera_data->active_y[axis])) {
+                            result = -1;
+                            goto done;
+                        }
+                    }
+                    camera_data->angle_speed = f32(source + 0x30);
+                    camera_data->angle_limits[0] = (int32_t)u32(source + 0x40);
+                    camera_data->angle_limits[1] = (int32_t)u32(source + 0x44);
+                    camera_data->angle_speed8 = source[0x50];
+                    camera_data->filter_number = source[0x51];
+                    camera_data->filter_rate = source[0x52];
+                    camera_data->reserved = source[0x53];
+                    camera_data->perspective = u32(source + 0x54);
+                    camera_data->cut_center_x = f32(cut_record + 0x08);
+                    camera_data->cut_center_z = f32(cut_record + 0x10);
+                    camera_data->cut_width = f32(cut_record + 0x14);
+                    camera_data->cut_depth = f32(cut_record + 0x1c);
+                    if (!coordinate(camera_data->lens) ||
+                        !coordinate(camera_data->width) ||
+                        !coordinate(camera_data->height) ||
+                        !coordinate(camera_data->depth) ||
+                        !coordinate(camera_data->angle_speed) ||
+                        !coordinate(camera_data->cut_center_x) ||
+                        !coordinate(camera_data->cut_center_z) ||
+                        !coordinate(camera_data->cut_width) ||
+                        !coordinate(camera_data->cut_depth)) {
+                        result = -1;
+                        goto done;
+                    }
+                    for (word = 0; word < 16; ++word)
+                        destination->hide_objects[camera][word] =
+                            u32(source + 0x58 + word * 4);
+                    for (word = 0; word < 8; ++word)
+                        destination->hide_lights[camera][word] =
+                            u32(source + 0x98 + word * 4);
+                }
+            }
+        }
+    }
+    reader.mesh.light_count = info.counts[1];
+    if (reader.mesh.light_count > MAX_ROOM_LIGHTS) {
+        result = -2;
+        goto done;
+    }
+    if (reader.mesh.light_count != 0) {
+        uint32_t light_offset = u32(reader.bytes + info.rom_offset + 4);
+        reader.mesh.lights = calloc(reader.mesh.light_count, sizeof(*reader.mesh.lights));
+        if (reader.mesh.lights == NULL) {
+            result = -3;
+            goto done;
+        }
+        for (light = 0; light < reader.mesh.light_count; ++light) {
+            const unsigned char *source = reader.bytes + light_offset + light * 0xe0;
+            RecvxRoomLight *destination = &reader.mesh.lights[light];
+            destination->flags = u32(source);
+            destination->type = u32(source + 4);
+            destination->source = u32(source + 0x18);
+            for (axis = 0; axis < 3; ++axis) {
+                destination->position[axis] = f32(source + 0x1c + axis * 4);
+                destination->direction[axis] = f32(source + 0x34 + axis * 4);
+                destination->color[axis] = f32(source + 0x4c + axis * 4);
+                if (!coordinate(destination->position[axis]) ||
+                    !coordinate(destination->direction[axis]) ||
+                    !isfinite(destination->color[axis]) ||
+                    fabsf(destination->color[axis]) > 64.0f) {
+                    result = -1;
+                    goto done;
+                }
+            }
+            destination->near_range = f32(source + 0x58);
+            destination->far_range = f32(source + 0x5c);
+            if (!isfinite(destination->near_range) || !isfinite(destination->far_range) ||
+                destination->near_range < 0 || destination->far_range < 0) {
+                result = -1;
+                goto done;
+            }
+        }
+    }
+    reader.mesh.ambient[0] = 0.3f;
+    reader.mesh.ambient[1] = 0.3f;
+    reader.mesh.ambient[2] = 0.3f;
+    ambient_index = reader.bytes[info.rom_offset + 0x3b8];
+    if (ambient_index < 4) {
+        const unsigned int offsets[3] = {0x3bc, 0x3cc, 0x3dc};
+        for (axis = 0; axis < 3; ++axis) {
+            float value = f32(reader.bytes + info.rom_offset + offsets[axis] + ambient_index * 4);
+            if (isfinite(value) && fabsf(value) <= 16.0f)
+                reader.mesh.ambient[axis] = value;
+        }
+    }
     directory = u32(reader.bytes + 20);
     if (directory == 0) {
         recvxMeshFree(mesh);
+        *mesh = reader.mesh;
+        memset(&reader.mesh, 0, sizeof(reader.mesh));
         return 0;
     }
-    if (!range(&reader, directory, 4))
-        return -1;
+    if (!range(&reader, directory, 4)) {
+        result = -1;
+        goto done;
+    }
     blob = u32(reader.bytes + directory);
-    if (!range(&reader, blob, 16) || memcmp(reader.bytes + blob, "MDL", 3) != 0)
-        return -1;
-    if (!(reader.bytes[blob + 3] & 0x80))
-        return -4;
+    if (!range(&reader, blob, 16) || memcmp(reader.bytes + blob, "MDL", 3) != 0) {
+        result = -1;
+        goto done;
+    }
+    if (!(reader.bytes[blob + 3] & 0x80)) {
+        result = -4;
+        goto done;
+    }
     reader.body = blob + u16(reader.bytes + blob + 4);
     reader.object_count = u16(reader.bytes + blob + 6);
-    if (u16(reader.bytes + blob + 4) < 16 || reader.body > size || reader.object_count == 0)
-        return -1;
-    if (reader.object_count > MAX_OBJECTS)
-        return -2;
+    if (u16(reader.bytes + blob + 4) < 16 || reader.body > size || reader.object_count == 0) {
+        result = -1;
+        goto done;
+    }
+    if (reader.object_count > MAX_OBJECTS) {
+        result = -2;
+        goto done;
+    }
     object_offset = u32(reader.bytes + blob + 12);
-    if (relative(&reader, object_offset, reader.object_count * 52, &reader.objects) != 0)
-        return -1;
+    if (relative(&reader, object_offset, reader.object_count * 52, &reader.objects) != 0) {
+        result = -1;
+        goto done;
+    }
     reader.visited = calloc(reader.object_count, 1);
-    if (reader.visited == NULL)
-        return -3;
+    if (reader.visited == NULL) {
+        result = -3;
+        goto done;
+    }
     reader.mesh.object_count = reader.object_count;
     for (pass = 0; pass < 2; ++pass) {
         memset(reader.visited, 0, reader.object_count);
@@ -450,18 +730,21 @@ int recvxBuildRoomMesh(const void *room, size_t size, RecvxRoomMesh *mesh)
             goto done;
         if (pass == 0 && reader.mesh.vertex_count != 0) {
             reader.mesh.storage_bytes = reader.mesh.vertex_count *
-                (3 * sizeof(RecvxSceneVertex) + sizeof(RecvxTexturedVertex)) +
+                (sizeof(RecvxMeshVertex) + sizeof(uint32_t)) +
                 reader.mesh.batch_count * sizeof(RecvxMeshBatch);
             reader.mesh.storage = malloc(reader.mesh.storage_bytes + 63);
             if (reader.mesh.storage == NULL) {
                 result = -3;
                 goto done;
             }
-            reader.mesh.vertices = (RecvxSceneVertex *)
+            reader.mesh.vertices = (RecvxMeshVertex *)
                 (((uintptr_t)reader.mesh.storage + 63) & ~(uintptr_t)63);
-            reader.mesh.wire_vertices = reader.mesh.vertices + reader.mesh.vertex_count;
-            reader.mesh.textured_vertices = (RecvxTexturedVertex *)(reader.mesh.vertices + reader.mesh.vertex_count * 3);
-            reader.mesh.batches = (RecvxMeshBatch *)(reader.mesh.textured_vertices + reader.mesh.vertex_count);
+            reader.mesh.material_colors = (uint32_t *)
+                ((unsigned char *)reader.mesh.vertices + reader.mesh.vertex_count * sizeof(*reader.mesh.vertices));
+            reader.mesh.textured_vertices = reader.mesh.vertices;
+            reader.mesh.batches = (RecvxMeshBatch *)
+                ((unsigned char *)reader.mesh.material_colors +
+                 reader.mesh.vertex_count * sizeof(*reader.mesh.material_colors));
         }
     }
     if (reader.mesh.vertex_count) {
@@ -482,6 +765,108 @@ done:
     return result;
 }
 
+static int cut_area_contains(const RecvxCutArea *area, float x, float z, int floor)
+{
+    float x0, z0, x1, z1, delta_x, offset;
+    if (area->floor != floor)
+        return 0;
+    if (area->type == 0)
+        return area->min_x <= x && area->max_x > x &&
+               area->min_z <= z && area->max_z > z;
+    if (x < area->min_x || x > area->max_x ||
+        z < area->min_z || z > area->max_z)
+        return 0;
+    switch (area->type) {
+    case 1:
+        x0 = area->max_x; z0 = area->max_z;
+        x1 = area->min_x; z1 = area->min_z;
+        break;
+    case 2:
+        x0 = area->min_x; z0 = area->max_z;
+        x1 = area->max_x; z1 = area->min_z;
+        break;
+    case 3:
+        x0 = area->min_x; z0 = area->min_z;
+        x1 = area->max_x; z1 = area->max_z;
+        break;
+    case 4:
+        x0 = area->max_x; z0 = area->min_z;
+        x1 = area->min_x; z1 = area->max_z;
+        break;
+    default:
+        return 0;
+    }
+    delta_x = x1 - x0;
+    if (delta_x == 0.0f)
+        return 0;
+    offset = fabsf((z1 - z0) * (x - x0) / delta_x);
+    return fabsf(z1 - z) > offset;
+}
+
+static int cut_at_position(const RecvxRoomMesh *mesh, float x, float z, int floor)
+{
+    uint32_t cut;
+    if (mesh == NULL || mesh->cuts == NULL || mesh->cut_areas == NULL)
+        return -1;
+    for (cut = 0; cut < mesh->cut_count; ++cut) {
+        const RecvxRoomCut *room_cut = &mesh->cuts[cut];
+        uint32_t i;
+        if (!room_cut->active || room_cut->area_first > mesh->cut_area_count ||
+            room_cut->area_count > mesh->cut_area_count - room_cut->area_first)
+            continue;
+        for (i = 0; i < room_cut->area_count; ++i)
+            if (cut_area_contains(&mesh->cut_areas[room_cut->area_first + i],
+                                  x, z, floor))
+                return (int)cut;
+    }
+    return -1;
+}
+
+int recvxRoomCutForPosition(const RecvxRoomMesh *mesh, float x, float z,
+                            int floor, int current_cut)
+{
+    int selected = cut_at_position(mesh, x, z, floor);
+    if (mesh == NULL || mesh->cut_count == 0)
+        return -1;
+    if (selected < 0)
+        return current_cut >= 0 && (uint32_t)current_cut < mesh->cut_count ? current_cut : 0;
+    if (current_cut < 0 || (uint32_t)current_cut >= mesh->cut_count ||
+        selected == current_cut)
+        return selected;
+    if (cut_at_position(mesh, x, z - 1.0f, floor) == current_cut ||
+        cut_at_position(mesh, x, z + 1.0f, floor) == current_cut ||
+        cut_at_position(mesh, x - 1.0f, z, floor) == current_cut ||
+        cut_at_position(mesh, x + 1.0f, z, floor) == current_cut)
+        return current_cut;
+    return selected;
+}
+
+uint32_t recvxRoomCutAttributeForPosition(const RecvxRoomMesh *mesh, uint32_t cut,
+                                         float x, float z, int floor)
+{
+    const RecvxRoomCut *room_cut;
+    uint32_t i;
+    if (mesh == NULL || mesh->cuts == NULL || mesh->cut_areas == NULL ||
+        cut >= mesh->cut_count)
+        return 0;
+    room_cut = &mesh->cuts[cut];
+    if (room_cut->area_first > mesh->cut_area_count ||
+        room_cut->area_count > mesh->cut_area_count - room_cut->area_first)
+        return 0;
+    for (i = 0; i < room_cut->area_count; ++i) {
+        const RecvxCutArea *area = &mesh->cut_areas[room_cut->area_first + i];
+        if (cut_area_contains(area, x, z, floor))
+            return area->attr;
+    }
+    return 0;
+}
+
+uint32_t recvxRoomCameraForPosition(const RecvxRoomMesh *mesh, uint32_t cut,
+                                    float x, float z, int floor)
+{
+    return (recvxRoomCutAttributeForPosition(mesh, cut, x, z, floor) & 0x8000u) != 0;
+}
+
 int recvxValidateMeshTextures(const RecvxRoomMesh *mesh, const RecvxTextureSet *textures)
 {
     uint32_t i;
@@ -491,5 +876,117 @@ int recvxValidateMeshTextures(const RecvxRoomMesh *mesh, const RecvxTextureSet *
         if (mesh->batches[i].texture_index != UINT32_MAX &&
             mesh->batches[i].texture_index >= textures->count)
             return -1;
+    return 0;
+}
+
+static unsigned int byte_from_light(float value)
+{
+    if (value <= 0)
+        return 0;
+    if (value >= 1)
+        return 255;
+    return (unsigned int)(value * 255.0f + 0.5f);
+}
+
+static float diffuse_amount(float dot, uint32_t blend_state)
+{
+    return (blend_state & RECVX_BLEND_DOUBLE_SIDED) ? fabsf(dot) : fmaxf(0, dot);
+}
+
+int recvxApplyRoomLighting(RecvxRoomMesh *mesh, uint32_t cut, uint32_t camera)
+{
+    const RecvxRoomLight *directional = NULL;
+    const RecvxRoomLight *points[3] = {NULL, NULL, NULL};
+    const RecvxRoomCut *room_cut = NULL;
+    unsigned int point_count = 0, i, axis, triangle, batch_index = 0;
+    if (mesh == NULL || camera > 1 ||
+        (mesh->vertex_count && (mesh->vertices == NULL || mesh->material_colors == NULL)))
+        return -1;
+    if (cut < mesh->cut_count && mesh->cuts != NULL)
+        room_cut = &mesh->cuts[cut];
+    if (mesh->light_count && mesh->lights == NULL)
+        return -1;
+    for (i = 4; i < mesh->light_count; ++i) {
+        const RecvxRoomLight *light = &mesh->lights[i];
+        int hidden = room_cut != NULL && i < 256 &&
+            (room_cut->hide_lights[camera][i / 32] & (0x80000000u >> (i & 31)));
+        if (hidden || (light->flags & 3) != 3)
+            continue;
+        if (light->source == 2 && directional == NULL)
+            directional = light;
+        else if (light->source == 4 && point_count < 3)
+            points[point_count++] = light;
+    }
+    for (triangle = 0; triangle + 2 < mesh->vertex_count; triangle += 3) {
+        RecvxMeshVertex *vertices = &mesh->vertices[triangle];
+        float center[3] = {
+            (vertices[0].x + vertices[1].x + vertices[2].x) / 3.0f,
+            (vertices[0].y + vertices[1].y + vertices[2].y) / 3.0f,
+            (vertices[0].z + vertices[1].z + vertices[2].z) / 3.0f
+        };
+        float normal[3] = {vertices[0].nx, vertices[0].ny, vertices[0].nz};
+        float intensity[3] = {mesh->ambient[0], mesh->ambient[1], mesh->ambient[2]};
+        uint32_t material = mesh->material_colors[triangle];
+        uint32_t blend_state = 0;
+        unsigned int channel;
+        while (batch_index + 1 < mesh->batch_count &&
+               triangle >= mesh->batches[batch_index].first_vertex +
+                           mesh->batches[batch_index].vertex_count)
+            ++batch_index;
+        if (mesh->batch_count)
+            blend_state = mesh->batches[batch_index].blend_state;
+        if (directional != NULL) {
+            float direction[3] = {-directional->direction[0], -directional->direction[1],
+                                  -directional->direction[2]};
+            float length = sqrtf(direction[0]*direction[0] + direction[1]*direction[1] +
+                                 direction[2]*direction[2]);
+            if (length > 0) {
+                float amount;
+                for (axis = 0; axis < 3; ++axis)
+                    direction[axis] /= length;
+                amount = diffuse_amount(normal[0]*direction[0] + normal[1]*direction[1] +
+                                        normal[2]*direction[2], blend_state);
+                for (channel = 0; channel < 3; ++channel)
+                    intensity[channel] += directional->color[channel] * amount;
+            }
+        }
+        for (i = 0; i < point_count; ++i) {
+            const RecvxRoomLight *light = points[i];
+            float direction[3] = {light->position[0] - center[0],
+                                  light->position[1] - center[1],
+                                  light->position[2] - center[2]};
+            float length = sqrtf(direction[0]*direction[0] + direction[1]*direction[1] +
+                                 direction[2]*direction[2]);
+            float attenuation;
+            if (length <= 0 || light->far_range <= 0)
+                continue;
+            if (length <= light->near_range)
+                attenuation = 1;
+            else if (length >= light->far_range)
+                attenuation = 0;
+            else if (light->far_range <= light->near_range)
+                attenuation = 0;
+            else
+                attenuation = (light->far_range - length) /
+                    (light->far_range - light->near_range);
+            if (attenuation <= 0)
+                continue;
+            for (axis = 0; axis < 3; ++axis)
+                direction[axis] /= length;
+            float amount = diffuse_amount(normal[0]*direction[0] + normal[1]*direction[1] +
+                                          normal[2]*direction[2], blend_state) * attenuation;
+            for (channel = 0; channel < 3; ++channel)
+                intensity[channel] += light->color[channel] * amount;
+        }
+        uint32_t color = material & 0xff000000u;
+        for (channel = 0; channel < 3; ++channel) {
+            unsigned int shift = channel * 8;
+            unsigned int base = (material >> shift) & 255;
+            color |= byte_from_light((base / 255.0f) * intensity[channel]) << shift;
+        }
+        vertices[0].color = color;
+        vertices[1].color = color;
+        vertices[2].color = color;
+    }
     return 0;
 }

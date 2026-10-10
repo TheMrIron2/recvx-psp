@@ -14,7 +14,7 @@ PSP_FW_VERSION := 600
 PSP_LARGE_MEMORY := 0
 
 # Keep the source list explicit as systems are ported to PSP.
-PORT_SOURCES := src/psp/expand.c src/psp/selftest.c src/psp/room.c src/psp/room_check.c src/psp/scene.c src/psp/mesh.c src/psp/texture.c
+PORT_SOURCES := src/psp/expand.c src/psp/selftest.c src/psp/room.c src/psp/room_check.c src/psp/scene.c src/psp/mesh.c src/psp/texture.c src/psp/player.c
 GAME_SOURCES := src/ps2/veronica/prog/flag.c src/ps2/veronica/prog/ps2_NaMem.c
 SOURCES := src/psp/main.c src/psp/renderer.c $(PORT_SOURCES) $(GAME_SOURCES)
 OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SOURCES))
@@ -22,7 +22,7 @@ DEPS := $(OBJS:.o=.d)
 INCDIR := include include/ps2/veronica/prog
 CFLAGS := -std=gnu11 -O2 -g -G0 -Wall -Wextra -MMD -MP
 LDFLAGS := -Wl,-Map,$(TARGET).map
-LIBS := -lpspgum -lpspgu -lm
+LIBS := -lpspgum -lpspgu -lpsppower -lm
 
 PSP_EBOOT := $(BUILD_DIR)/EBOOT.PBP
 PSP_EBOOT_SFO := $(BUILD_DIR)/PARAM.SFO
@@ -55,7 +55,7 @@ HOST_CC ?= cc
 HOST_TEST := build/host/port-test
 HOST_SHARED := build/host/librecvx-test.so
 HOST_FLAGS := -std=c11 -O1 -g -Wall -Wextra -Werror -Iinclude -Iinclude/ps2/veronica/prog
-HOST_HEADERS := include/psp/expand.h include/psp/selftest.h include/psp/room.h include/psp/scene.h include/psp/mesh.h include/psp/texture.h \
+HOST_HEADERS := include/psp/expand.h include/psp/selftest.h include/psp/room.h include/psp/scene.h include/psp/mesh.h include/psp/texture.h include/psp/player.h \
 	include/ps2/veronica/prog/expand.h include/ps2/veronica/prog/flag.h \
 	include/ps2/veronica/prog/ps2_NaMem.h include/ps2/veronica/prog/override_katana.h
 
@@ -80,17 +80,31 @@ $(HOST_SHARED): $(PORT_SOURCES) $(GAME_SOURCES) $(HOST_HEADERS) Makefile
 	$(HOST_CC) $(HOST_FLAGS) -fPIC -shared $(PORT_SOURCES) $(GAME_SOURCES) -lm -o $@
 
 ISO ?= recvx.iso
-ROOM ?= RM_0000.RDX
-.PHONY: assets test-assets preview
+ROOM ?=
+ROOMS ?= RM_0000.RDX,RM_0010.RDX,RM_0020.RDX,RM_0030.RDX
+ifneq ($(strip $(ROOM)),)
+ASSET_SELECTION := --room "$(ROOM)"
+else
+ASSET_SELECTION := --rooms "$(ROOMS)"
+endif
+.PHONY: assets player-assets route-audit test-assets preview
 assets: $(HOST_SHARED)
-	python3 tools/prepare_psp_assets.py --iso "$(ISO)" --room "$(ROOM)" \
+	python3 tools/prepare_psp_assets.py --iso "$(ISO)" $(ASSET_SELECTION) \
 		--library $(HOST_SHARED) --output $(BUILD_DIR)/data
 
+player-assets:
+	python3 tools/extract_psp_player_assets.py --iso "$(ISO)" \
+		--output $(BUILD_DIR)/original-player
+
+route-audit: $(HOST_SHARED)
+	python3 tools/inspect_psp_start_route.py --iso "$(ISO)" \
+		--library $(HOST_SHARED) --output $(BUILD_DIR)/start-route.json
+
 test-assets: $(HOST_SHARED) $(HOST_TEST)
-	python3 tools/prepare_psp_assets.py --iso "$(ISO)" --room "$(ROOM)" \
+	python3 tools/prepare_psp_assets.py --iso "$(ISO)" $(ASSET_SELECTION) \
 		--library $(HOST_SHARED) --output $(BUILD_DIR)/data --host-cc "$(HOST_CC)" --validate-all
 	ASAN_OPTIONS=detect_leaks=0 $(HOST_TEST) $(BUILD_DIR)/data
 
 preview: $(HOST_SHARED)
 	python3 tools/preview_psp_scene.py --data $(BUILD_DIR)/data \
-		--library $(HOST_SHARED) --output $(BUILD_DIR)/room-preview
+		--library $(HOST_SHARED) --output $(BUILD_DIR)/room-preview $(if $(ROOM),--room "$(ROOM)")

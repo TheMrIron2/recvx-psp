@@ -63,7 +63,10 @@ assert build(good) == 0
 assert mesh.object_count == mesh.model_count == mesh.triangle_count == 1 and mesh.vertex_count == 3
 assert positions() == [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
 assert ctypes.cast(mesh.vertices, ctypes.c_void_p).value % 16 == 0
-assert mesh.vertices[0].color == 0xFF39220C
+assert mesh.vertices[0].color == 0xFF563412
+assert not mesh.wire_vertices
+assert lib.recvxMeshSetWireframe(ctypes.byref(mesh), 1) == 0
+assert ctypes.cast(mesh.wire_vertices, ctypes.c_void_p).value % 16 == 0
 assert [(v.x, v.y, v.z) for v in mesh.wire_vertices[:6]] == [
     (0,0,0), (1,0,0), (1,0,0), (0,1,0), (0,1,0), (0,0,0)]
 assert mesh.batch_count == 1 and mesh.batches[0].vertex_count == 3
@@ -163,7 +166,9 @@ data, _ = fixture(strip_type=64)
 assert build(data) == 0 and mesh.batches[0].texture_index == 0xFFFFFFFF
 assert lib.recvxValidateMeshTextures(ctypes.byref(mesh),ctypes.byref(TextureSet())) == 0
 data, _ = fixture(objects=2)
-assert build(data) == 0 and mesh.batch_count == 1 and mesh.batches[0].vertex_count == 6
+assert build(data) == 0 and mesh.batch_count == 2
+assert [mesh.batches[i].object_index for i in range(2)] == [0, 1]
+assert [mesh.batches[i].vertex_count for i in range(2)] == [3, 3]
 lib.recvxMeshFree(ctypes.byref(mesh))
 lib.recvxMeshFree(ctypes.byref(mesh))
 print("PASS: MLB bounds, transforms, winding, UVs, texture batches and ownership")
