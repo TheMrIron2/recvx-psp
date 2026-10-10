@@ -7,7 +7,8 @@
 #include "psp/mesh.h"
 
 int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
-                       const RecvxTextureSet *textures, const RecvxPlayer *player);
+                       const RecvxTextureSet *textures, const RecvxPlayer *player,
+                       const RecvxRoomMesh *player_mesh);
 void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const RecvxTextureSet *textures,
                         RecvxPlayer *player, const RecvxPlayerRoom *player_room,
                         const char *room_name,

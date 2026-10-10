@@ -20,9 +20,11 @@ static RecvxRoomMesh mesh;
 static RecvxTextureSet textures;
 static RecvxPlayerRoom player_room;
 static RecvxPlayer player;
+static RecvxRoomMesh player_mesh;
 static RecvxPlayerAssets player_assets;
 static unsigned char *player_model_data, *player_motion_data;
 static int player_asset_status = 1;
+static int player_mesh_status = 1;
 static char room_name[RECVX_ROOM_NAME_SIZE];
 static char room_catalog[RECVX_MAX_ROOM_CATALOG][RECVX_ROOM_NAME_SIZE];
 static size_t room_catalog_count, current_room;
@@ -80,6 +82,18 @@ static void load_player_assets(const char *data_directory)
         result = recvxPlayerAssetsParse(player_model_data, model_size,
                                        player_motion_data, motion_size,
                                        &player_assets);
+    if (result == 0) {
+        if (player_assets.model_count == 0)
+            player_mesh_status = -1;
+        else {
+            player_mesh_status = recvxBuildPlayerMesh(&player_assets.models[0],
+                                                       &player_mesh);
+            if (player_mesh_status != 0)
+                recvxMeshFree(&player_mesh);
+        }
+    } else {
+        player_mesh_status = result;
+    }
     if (result != 0) {
         free(player_model_data);
         free(player_motion_data);
@@ -139,6 +153,13 @@ static void show_checks(const char *data_directory)
     else
         pspDebugScreenPrintf("Original actor data: invalid records (%d)\n\n",
                              player_asset_status);
+    if (player_asset_status == 0 && player_mesh_status == 0)
+        pspDebugScreenPrintf("Player mesh: %u objects, %u triangles, static preview\n\n",
+                             (unsigned int)player_mesh.object_count,
+                             (unsigned int)player_mesh.triangle_count);
+    else if (player_asset_status == 0)
+        pspDebugScreenPrintf("Player mesh preview unavailable (%d)\n\n",
+                             player_mesh_status);
     if (room_note[0] != '\0') {
         pspDebugScreenPrintf("%s\n\n", room_note);
         room_note[0] = '\0';
@@ -279,7 +300,8 @@ int main(int argc, char **argv)
                 show_checks(data_directory);
             }
             if (!viewing && (pressed & PSP_CTRL_CROSS) && player_ready) {
-                if (recvxRendererStart(&scene, &mesh, &textures, &player) == 0) {
+                if (recvxRendererStart(&scene, &mesh, &textures, &player,
+                                       player_mesh_status == 0 ? &player_mesh : NULL) == 0) {
                     viewing = 1;
                     playing = 1;
                     walking_started_this_frame = 1;
@@ -294,7 +316,7 @@ int main(int argc, char **argv)
                     playing = 0;
                     show_checks(data_directory);
                 } else if (scene.vertices != NULL) {
-                    if (recvxRendererStart(&scene, &mesh, &textures, NULL) == 0)
+                    if (recvxRendererStart(&scene, &mesh, &textures, NULL, NULL) == 0)
                         viewing = 1;
                     else
                         pspDebugScreenPrintf("Could not initialize the renderer.\n");
@@ -350,6 +372,7 @@ int main(int argc, char **argv)
     recvxMeshFree(&mesh);
     recvxTexturesFree(&textures);
     recvxPlayerRoomFree(&player_room);
+    recvxMeshFree(&player_mesh);
     free(player_model_data);
     free(player_motion_data);
     sceKernelExitGame();

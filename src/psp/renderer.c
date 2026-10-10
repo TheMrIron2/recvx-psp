@@ -29,6 +29,7 @@ static int display_mode;
 static uint32_t camera_cut;
 static uint32_t camera_variant;
 static int player_mode;
+static const RecvxRoomMesh *player_model_mesh;
 static int fixed_camera_active;
 static ScePspFVector3 fixed_eye_offset, fixed_camera_forward, fixed_camera_up;
 static float fixed_camera_fov;
@@ -318,6 +319,35 @@ static void set_batch_blending(const RecvxMeshBatch *batch)
     }
 }
 
+static void draw_player_model(const RecvxPlayer *player,
+                              const RecvxRoomMesh *model)
+{
+    ScePspFVector3 position = {player->x, player->y, player->z};
+    ScePspFVector3 reflection = {1.0f, 1.0f, -1.0f};
+    float model_yaw = player->yaw +
+                      (player->walking_backward ? 3.141592654f : 0.0f);
+    uint32_t i;
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDisable(GU_ALPHA_TEST);
+    sceGumPushMatrix();
+    sceGumTranslate(&position);
+    sceGumRotateY(model_yaw);
+    sceGumScale(&reflection);
+    for (i = 0; i < model->batch_count; ++i) {
+        const RecvxMeshBatch *batch = &model->batches[i];
+        if (batch->vertex_count == 0)
+            continue;
+        set_batch_blending(batch);
+        sceGumDrawArray(GU_TRIANGLES,
+                        GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_NORMAL_32BITF |
+                        GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+                        (int)batch->vertex_count, NULL,
+                        model->vertices + batch->first_vertex);
+    }
+    sceGuDisable(GU_BLEND);
+    sceGumPopMatrix();
+}
+
 static void add_player_vertex(uint32_t color, float x, float y, float z,
                               const RecvxPlayer *player)
 {
@@ -361,8 +391,10 @@ static void draw_player(const RecvxPlayer *player)
         {-0.2f, 1.75f, 0.0f}, {0.0f, 1.75f, -0.2f},
         {0.2f, 1.75f, 0.0f}, {0.0f, 1.75f, 0.2f}
     };
-    player_sine = sinf(player->yaw);
-    player_cosine = cosf(player->yaw);
+    float model_yaw = player->yaw +
+                      (player->walking_backward ? 3.141592654f : 0.0f);
+    player_sine = sinf(model_yaw);
+    player_cosine = cosf(model_yaw);
     player_vertex_count = 0;
     add_player_box(player, 0.0f, 1.02f, 0.0f, 0.27f, 0.48f, 0.17f,
                    0xff874027);
@@ -419,7 +451,8 @@ static void reset_camera(const RecvxScene *scene, const RecvxRoomMesh *mesh,
 }
 
 int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
-                       const RecvxTextureSet *textures, const RecvxPlayer *player)
+                       const RecvxTextureSet *textures, const RecvxPlayer *player,
+                       const RecvxRoomMesh *actor_mesh)
 {
     if (scene == NULL || scene->vertices == NULL || initialized)
         return -1;
@@ -450,6 +483,8 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
                                  scene->vertex_count * sizeof(*scene->vertices));
     if (mesh && mesh->vertices)
         sceKernelDcacheWritebackRange(mesh->vertices, mesh->storage_bytes);
+    if (actor_mesh && actor_mesh->vertices)
+        sceKernelDcacheWritebackRange(actor_mesh->vertices, actor_mesh->storage_bytes);
     if (textures)
         for (uint32_t i = 0; i < textures->count; ++i) {
             const RecvxTexture *texture = &textures->textures[i];
@@ -463,6 +498,7 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
     if (display_mode == 1 && set_wireframe(mesh, 1) != 0)
         display_mode = 0;
     player_mode = player != NULL;
+    player_model_mesh = actor_mesh;
     camera_cut = 0;
     camera_variant = 0;
     if (player_mode)
@@ -684,8 +720,12 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
                         (int)scene->vertex_count, NULL, scene->vertices);
         sceGuEnable(GU_DEPTH_TEST);
     }
-    if (player_mode && player != NULL)
-        draw_player(player);
+    if (player_mode && player != NULL) {
+        if (player_model_mesh != NULL && player_model_mesh->vertices != NULL)
+            draw_player_model(player, player_model_mesh);
+        else
+            draw_player(player);
+    }
     sceGuFinish();
     {
         uint64_t submit_done = sceKernelGetSystemTimeWide();
@@ -748,6 +788,7 @@ void recvxRendererStop(void)
     sceGuTerm();
     initialized = 0;
     player_mode = 0;
+    player_model_mesh = NULL;
     pspDebugScreenSetOffset(0);
     pspDebugScreenEnableBackColor(1);
     pspDebugScreenInit();

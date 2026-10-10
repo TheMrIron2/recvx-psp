@@ -433,6 +433,80 @@ void recvxMeshFree(RecvxRoomMesh *mesh)
     }
 }
 
+int recvxBuildPlayerMesh(const RecvxPlayerModelAsset *model, RecvxRoomMesh *mesh)
+{
+    MeshReader reader = {0};
+    Matrix identity = {{{1,0,0,0}, {0,1,0,0}, {0,0,1,0}}};
+    size_t object_bytes;
+    unsigned int axis, pass;
+    int result = 0;
+    if (model == NULL || mesh == NULL || model->data == NULL ||
+        !model->chunk_model || model->object_count == 0 ||
+        model->object_count > MAX_OBJECTS || model->header_offset > model->size)
+        return -1;
+    reader.bytes = model->data;
+    reader.size = model->size;
+    reader.body = model->header_offset;
+    reader.object_count = model->object_count;
+    object_bytes = (size_t)reader.object_count * 52;
+    if (relative(&reader, model->object_offset, object_bytes, &reader.objects) != 0)
+        return -1;
+    reader.visited = calloc(reader.object_count, 1);
+    if (reader.visited == NULL)
+        return -3;
+    reader.mesh.object_count = reader.object_count;
+    for (pass = 0; pass < 2; ++pass) {
+        memset(reader.visited, 0, reader.object_count);
+        for (axis = 0; axis < 3; ++axis) {
+            reader.minimum[axis] = INFINITY;
+            reader.maximum[axis] = -INFINITY;
+        }
+        reader.mesh.model_count = 0;
+        reader.mesh.vertex_count = 0;
+        reader.mesh.triangle_count = 0;
+        reader.mesh.batch_count = 0;
+        result = tree(&reader, 0, &identity, 0);
+        if (result != 0)
+            goto done;
+        if (pass == 0 && reader.mesh.vertex_count != 0) {
+            reader.mesh.storage_bytes = reader.mesh.vertex_count *
+                (sizeof(RecvxMeshVertex) + sizeof(uint32_t)) +
+                reader.mesh.batch_count * sizeof(RecvxMeshBatch);
+            reader.mesh.storage = malloc(reader.mesh.storage_bytes + 63);
+            if (reader.mesh.storage == NULL) {
+                result = -3;
+                goto done;
+            }
+            reader.mesh.vertices = (RecvxMeshVertex *)
+                (((uintptr_t)reader.mesh.storage + 63) & ~(uintptr_t)63);
+            reader.mesh.material_colors = (uint32_t *)
+                ((unsigned char *)reader.mesh.vertices +
+                 reader.mesh.vertex_count * sizeof(*reader.mesh.vertices));
+            reader.mesh.textured_vertices = reader.mesh.vertices;
+            reader.mesh.batches = (RecvxMeshBatch *)
+                ((unsigned char *)reader.mesh.material_colors +
+                 reader.mesh.vertex_count * sizeof(*reader.mesh.material_colors));
+        }
+    }
+    if (reader.mesh.vertex_count != 0) {
+        float diagonal = 0;
+        for (axis = 0; axis < 3; ++axis) {
+            float extent = reader.maximum[axis] - reader.minimum[axis];
+            reader.mesh.center[axis] =
+                (reader.maximum[axis] + reader.minimum[axis]) * 0.5f;
+            diagonal += extent * extent;
+        }
+        reader.mesh.radius = fmaxf(1, sqrtf(diagonal) * 0.5f);
+    }
+    recvxMeshFree(mesh);
+    *mesh = reader.mesh;
+    memset(&reader.mesh, 0, sizeof(reader.mesh));
+done:
+    free(reader.visited);
+    recvxMeshFree(&reader.mesh);
+    return result;
+}
+
 int recvxMeshSetWireframe(RecvxRoomMesh *mesh, int enabled)
 {
     RecvxSceneVertex *wire_vertices;

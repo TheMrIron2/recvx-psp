@@ -124,7 +124,7 @@ static int parse_motion(const uint8_t *data, uint32_t size,
     uint16_t object_count;
     const uint8_t *motion_data;
     uint32_t i;
-    if (size < 16 || memcmp(data, "MNT", 3) != 0)
+    if (size < 16 || memcmp(data, "MTN", 3) != 0)
         return -1;
     base = read_u16(data + 4);
     object_count = read_u16(data + 6);

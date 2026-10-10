@@ -3,6 +3,7 @@
 
 #include "psp/scene.h"
 #include "psp/texture.h"
+#include "psp/player_asset.h"
 
 typedef struct RecvxMeshVertex {
     float u, v;
@@ -78,6 +79,7 @@ typedef struct RecvxRoomMesh {
 } RecvxRoomMesh;
 
 int recvxBuildRoomMesh(const void *room, size_t size, RecvxRoomMesh *mesh);
+int recvxBuildPlayerMesh(const RecvxPlayerModelAsset *model, RecvxRoomMesh *mesh);
 int recvxMeshSetWireframe(RecvxRoomMesh *mesh, int enabled);
 int recvxApplyRoomLighting(RecvxRoomMesh *mesh, uint32_t cut, uint32_t camera);
 int recvxRoomCutForPosition(const RecvxRoomMesh *mesh, float x, float z,
