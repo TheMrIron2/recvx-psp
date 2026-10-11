@@ -530,9 +530,14 @@ flag changes in the production path.
    forward, reverse, and run speed tables. R held during forward input selects
    the original run motion; the user confirmed the walk and run animations in
    PPSSPP. Motion changes blend root and joint transforms with the source
-   controller's per-state counts and rates: idle 5 ticks at 42598/65536,
-   pivot and walk 8 at 42598/65536, reverse 8 at 49152/65536, and run 4 at
-   42598/65536. Initial frames preserve the source controller's start-frame
+   controller's per-state counts: idle 5 ticks, pivot and walk 8, reverse 8,
+   and run 4. `bhSetMotion` converts the source hokan values 42598 and 49152
+   into per-tick blend coefficients `(65536 - hokan_rate) / 65536`, or
+   22938/65536 (about 0.35) and 16384/65536 (0.25); the PSP path now uses
+   those coefficients. It still blends from a fixed previous motion sample
+   while the target sample advances, whereas the original updates each joint
+   from its prior live pose every tick. Exact transition curves remain open.
+   Initial frames preserve the source controller's start-frame
    or proportional frame mapping. Source control also decrements the pivot
    frame on right turns, increments it on left turns, and turns at 4.5 degrees
    per tick while running versus 4 degrees while walking; the PSP path now
@@ -595,11 +600,27 @@ flag changes in the production path.
    halfway toward her each game tick. The renderer now keeps that focus state
    and uses it for camera-area attributes, position offsets, and look angles;
    a cut or camera-variant change resets the focus to Claire's current position.
+   A further comparison of `bhCheckCutArea` and `bhCheckCutAttribute` found
+   that the original uses the rectangle/triangle predicate to select a cut,
+   then reads that cut's camera attributes from the area's bounding rectangle.
+   It also retains the previous `cam.attr` when no area contains the focus, and
+   chooses `camver` when a cut is set. The PSP path now separates attribute
+   lookup from cut selection, retains the last attribute on a miss, and holds
+   the camera variant until the cut changes. The refreshed EBOOT builds cleanly.
+   The first WSL launch returned `UtilBindVsockAnyPort: socket failed 1`;
+   rerunning through Windows PowerShell outside the sandbox succeeded.
+   Launching PPSSPP with `--graphics=software` makes the positional HUD visible,
+   and the captures are full 2560×1440 desktop frames.
    The refreshed EBOOT repeated the RM_0030 cut path in `m2-focus-camera-*`
    captures, including the wall hold and the cut 1-to-3 transition.
    After switching the desktop to 2560×1440 and PPSSPP to software rendering,
    the refreshed `m2-player-room-0030-camera-*` captures are full-screen
-   2560×1440 images with the HUD visible. In the latest clean run,
+   2560×1440 images with the HUD visible. A fresh camera-route capture starts
+   in cut 3 at (21.8, 71.7), then passes through cut 1 at (3.4, 88.1), cut 2
+   at (-0.2, 140.3), and cut 4 at (33.0, 146.9), navigating past the heap.
+   The wall-contact capture and this camera route are separate checks; the
+   earlier combined script mistakenly held forward into the heap during its
+   final segment. In the latest clean run,
    `camera-transition-near` reports cut 2/4 at (9.4, 145.3), while
    `camera-transition` and `camera-transition-settled` report cut 4/4 at
    (20.0, 143.9) and (33.2, 142.3). Claire remains visible through the
@@ -641,9 +662,16 @@ flag changes in the production path.
    motion slot 36, the 25-tick turn, 19 root-motion frames, 10 recovery ticks,
    and the floor-0 snap. This uses a test-only spawn override under the ignored
    smoke directory; the packaged `build/psp/data` room stays unchanged. It does
-   not compare stair poses against the original runtime. Special hatch motion,
-   reference traces for animation/collision/camera, and original camera-pose
-   comparisons remain open.
+   not compare stair poses against the original runtime. The jail-cell
+   comparison is also state-dependent: the PSP diagnostic starts at the
+   `RM_0000` closed-door spawn before the lighter sequence, while the user's
+   PCSX2 save is after that sequence. The user confirmed Claire can walk in
+   and out of the cell in the post-sequence state, with no physical obstacle.
+   The diagnostic does not yet apply the original event-driven wall changes,
+   so the closed gate is not evidence of a static collision defect; reproducing
+   that state change belongs to Milestone 3. Special hatch motion, reference
+   traces for animation/collision/camera, and original camera-pose comparisons
+   remain open.
 5. Milestone 3: execute the queued event body and build the first original
    interaction and door sequence. Preserve event flags, script position,
    transition completion, and state on return; keep unsupported operations

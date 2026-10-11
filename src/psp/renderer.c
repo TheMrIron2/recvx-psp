@@ -21,8 +21,8 @@
 #define SCREEN_HEIGHT 272
 #define BUFFER_WIDTH 512
 #define FRAME_BYTES (BUFFER_WIDTH * SCREEN_HEIGHT * 4)
-#define PLAYER_HOKAN_RATE (42598.0f / 65536.0f)
-#define PLAYER_REVERSE_HOKAN_RATE (49152.0f / 65536.0f)
+#define PLAYER_HOKAN_BLEND_PER_TICK ((65536.0f - 42598.0f) / 65536.0f)
+#define PLAYER_REVERSE_HOKAN_BLEND_PER_TICK ((65536.0f - 49152.0f) / 65536.0f)
 
 static unsigned int command_list[16384] __attribute__((aligned(64)));
 static void *draw_buffer;
@@ -38,6 +38,9 @@ static int initialized;
 static int display_mode;
 static uint32_t camera_cut;
 static uint32_t camera_variant;
+static uint32_t fixed_camera_attribute;
+static int camera_cut_initialized;
+static int fixed_camera_attribute_initialized;
 static int player_mode;
 static const RecvxRoomMesh *player_model_mesh;
 static RecvxRoomMesh *player_actor_mesh;
@@ -398,7 +401,7 @@ static void configure_fixed_camera(const RecvxRoomMesh *mesh,
     ScePspFVector3 forward = {0.0f, 0.0f, -1.0f};
     ScePspFVector3 up = {0.0f, 1.0f, 0.0f};
     int32_t angles[3];
-    uint32_t attr, perspective;
+    uint32_t attr, perspective, room_attribute;
     float dx, dy, dz, horizontal, target_fov = 50.0f;
     fixed_camera_active = 0;
     if (mesh == NULL || player == NULL || mesh->cameras == NULL ||
@@ -411,6 +414,12 @@ static void configure_fixed_camera(const RecvxRoomMesh *mesh,
         fixed_camera_player_focus.x = player->x;
         fixed_camera_player_focus.y = player->y + camera->height;
         fixed_camera_player_focus.z = player->z;
+        if (recvxRoomCutAttributeAtPosition(mesh, camera_cut, player->x,
+                                            player->z, player->floor,
+                                            &room_attribute)) {
+            fixed_camera_attribute = room_attribute;
+            fixed_camera_attribute_initialized = 1;
+        }
         fixed_camera_player_focus_cut = camera_cut;
         fixed_camera_player_focus_variant = camera_variant;
         fixed_camera_player_focus_initialized = 1;
@@ -420,13 +429,25 @@ static void configure_fixed_camera(const RecvxRoomMesh *mesh,
                 0.5f * (player->x - fixed_camera_player_focus.x);
             fixed_camera_player_focus.z +=
                 0.5f * (player->z - fixed_camera_player_focus.z);
+            if (recvxRoomCutAttributeAtPosition(mesh, camera_cut,
+                                                fixed_camera_player_focus.x,
+                                                fixed_camera_player_focus.z,
+                                                player->floor,
+                                                &room_attribute)) {
+                fixed_camera_attribute = room_attribute;
+                fixed_camera_attribute_initialized = 1;
+            }
         }
         fixed_camera_player_focus.y = player->y + camera->height;
     }
-    attr = recvxRoomCutAttributeForPosition(mesh, camera_cut,
-                                            fixed_camera_player_focus.x,
-                                            fixed_camera_player_focus.z,
-                                            player->floor);
+    if (recvxRoomCutAttributeAtPosition(mesh, camera_cut,
+                                        fixed_camera_player_focus.x,
+                                        fixed_camera_player_focus.z,
+                                        player->floor, &room_attribute)) {
+        fixed_camera_attribute = room_attribute;
+        fixed_camera_attribute_initialized = 1;
+    }
+    attr = fixed_camera_attribute_initialized ? fixed_camera_attribute : 0;
     attr = camera_variant != 0 ? attr >> 16 : attr & 0xffffu;
     fixed_camera_base_position(mesh, &fixed_camera_player_focus, attr,
                                &base_position);
@@ -543,20 +564,35 @@ static int update_player_culling(const RecvxRoomMesh *mesh, const RecvxPlayer *p
                                  int current_cut)
 {
     int selected;
+    int changed;
     uint32_t camera;
+    uint32_t room_attribute;
     if (mesh == NULL || player == NULL || mesh->cut_count == 0)
         return -1;
     selected = recvxRoomCutForPosition(mesh, player->x, player->z, player->floor,
                                        current_cut);
     if (selected < 0)
         return -1;
-    camera = recvxRoomCameraForPosition(mesh, (uint32_t)selected,
-                                        player->x, player->z, player->floor);
-    if (camera_cut == (uint32_t)selected && camera_variant == camera)
-        return 0;
+    if (!camera_cut_initialized || camera_cut != (uint32_t)selected) {
+        if (recvxRoomCutAttributeAtPosition(mesh, (uint32_t)selected,
+                                            player->x, player->z, player->floor,
+                                            &room_attribute)) {
+            fixed_camera_attribute = room_attribute;
+            fixed_camera_attribute_initialized = 1;
+        }
+        camera = fixed_camera_attribute_initialized ?
+            ((fixed_camera_attribute & 0x8000u) != 0) :
+            recvxRoomCameraForPosition(mesh, (uint32_t)selected,
+                                       player->x, player->z, player->floor);
+    } else {
+        camera = camera_variant;
+    }
+    changed = !camera_cut_initialized || camera_cut != (uint32_t)selected ||
+              camera_variant != camera;
     camera_cut = (uint32_t)selected;
     camera_variant = camera;
-    return 1;
+    camera_cut_initialized = 1;
+    return changed;
 }
 
 static void set_batch_blending(const RecvxMeshBatch *batch)
@@ -795,9 +831,12 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
     player_transition_frame = 0;
     player_transition_remaining = 0;
     player_transition_duration = 0;
-    player_transition_rate = PLAYER_HOKAN_RATE;
+    player_transition_rate = PLAYER_HOKAN_BLEND_PER_TICK;
     camera_cut = 0;
     camera_variant = 0;
+    fixed_camera_attribute = 0;
+    camera_cut_initialized = 0;
+    fixed_camera_attribute_initialized = 0;
     fixed_camera_pose_initialized = 0;
     fixed_camera_player_focus_initialized = 0;
     fixed_camera_transition_active = 0;
@@ -848,27 +887,27 @@ static void select_player_motion(unsigned int motion_slot,
     player_animation_slot = motion_slot;
     if (stair_phase != RECVX_PLAYER_STAIR_NONE) {
         player_transition_duration = 4;
-        player_transition_rate = PLAYER_HOKAN_RATE;
+        player_transition_rate = PLAYER_HOKAN_BLEND_PER_TICK;
         if (stair_phase == RECVX_PLAYER_STAIR_RECOVER)
             initial_frame = 15;
     } else {
         switch (motion_slot) {
         case 0:
             player_transition_duration = 8;
-            player_transition_rate = PLAYER_HOKAN_RATE;
+            player_transition_rate = PLAYER_HOKAN_BLEND_PER_TICK;
             initial_frame = player_transition_slot == 4 ?
                 mapped_player_motion_frame(player_transition_slot,
                                            player_animation_frame, motion) : 5;
             break;
         case 4:
             player_transition_duration = 4;
-            player_transition_rate = PLAYER_HOKAN_RATE;
+            player_transition_rate = PLAYER_HOKAN_BLEND_PER_TICK;
             initial_frame = mapped_player_motion_frame(player_transition_slot,
                                                        player_animation_frame, motion);
             break;
         case 16:
             player_transition_duration = 8;
-            player_transition_rate = PLAYER_REVERSE_HOKAN_RATE;
+            player_transition_rate = PLAYER_REVERSE_HOKAN_BLEND_PER_TICK;
             if (player_transition_slot == 0 || player_transition_slot == 4)
                 initial_frame = mapped_player_motion_frame(player_transition_slot,
                                                            player_animation_frame, motion);
@@ -877,12 +916,12 @@ static void select_player_motion(unsigned int motion_slot,
             break;
         case 39:
             player_transition_duration = 8;
-            player_transition_rate = PLAYER_HOKAN_RATE;
+            player_transition_rate = PLAYER_HOKAN_BLEND_PER_TICK;
             break;
         case 42:
         default:
             player_transition_duration = 5;
-            player_transition_rate = PLAYER_HOKAN_RATE;
+            player_transition_rate = PLAYER_HOKAN_BLEND_PER_TICK;
             break;
         }
     }

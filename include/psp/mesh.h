@@ -95,6 +95,9 @@ int recvxRoomCutForPosition(const RecvxRoomMesh *mesh, float x, float z,
                             int floor, int current_cut);
 uint32_t recvxRoomCutAttributeForPosition(const RecvxRoomMesh *mesh, uint32_t cut,
                                          float x, float z, int floor);
+int recvxRoomCutAttributeAtPosition(const RecvxRoomMesh *mesh, uint32_t cut,
+                                   float x, float z, int floor,
+                                   uint32_t *attribute);
 uint32_t recvxRoomCameraForPosition(const RecvxRoomMesh *mesh, uint32_t cut,
                                     float x, float z, int floor);
 void recvxMeshFree(RecvxRoomMesh *mesh);

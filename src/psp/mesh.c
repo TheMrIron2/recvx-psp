@@ -1303,24 +1303,36 @@ int recvxRoomCutForPosition(const RecvxRoomMesh *mesh, float x, float z,
     return selected;
 }
 
-uint32_t recvxRoomCutAttributeForPosition(const RecvxRoomMesh *mesh, uint32_t cut,
-                                         float x, float z, int floor)
+int recvxRoomCutAttributeAtPosition(const RecvxRoomMesh *mesh, uint32_t cut,
+                                   float x, float z, int floor,
+                                   uint32_t *attribute)
 {
     const RecvxRoomCut *room_cut;
     uint32_t i;
     if (mesh == NULL || mesh->cuts == NULL || mesh->cut_areas == NULL ||
-        cut >= mesh->cut_count)
+        attribute == NULL || cut >= mesh->cut_count)
         return 0;
     room_cut = &mesh->cuts[cut];
-    if (room_cut->area_first > mesh->cut_area_count ||
+    if (!room_cut->active || room_cut->area_first > mesh->cut_area_count ||
         room_cut->area_count > mesh->cut_area_count - room_cut->area_first)
         return 0;
     for (i = 0; i < room_cut->area_count; ++i) {
         const RecvxCutArea *area = &mesh->cut_areas[room_cut->area_first + i];
-        if (cut_area_contains(area, x, z, floor))
-            return area->attr;
+        if (area->floor == floor && area->min_x <= x && area->max_x > x &&
+            area->min_z <= z && area->max_z > z) {
+            *attribute = area->attr;
+            return 1;
+        }
     }
     return 0;
+}
+
+uint32_t recvxRoomCutAttributeForPosition(const RecvxRoomMesh *mesh, uint32_t cut,
+                                         float x, float z, int floor)
+{
+    uint32_t attribute;
+    return recvxRoomCutAttributeAtPosition(mesh, cut, x, z, floor,
+                                           &attribute) ? attribute : 0;
 }
 
 uint32_t recvxRoomCameraForPosition(const RecvxRoomMesh *mesh, uint32_t cut,
