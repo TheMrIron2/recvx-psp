@@ -13,6 +13,7 @@
 #include "../../../ps2/veronica/prog/main.h"
 
 // 100% matching! 
+#if !defined(RECVX_ENGINE_PLAYER_TEST)
 unsigned char* bhGetFreeMemory(int size, int param) // second parameter is not present on the debugging symbols  
 {
     unsigned char *temp; // not from the debugging symbols
@@ -34,6 +35,7 @@ unsigned char* bhGetFreeMemory(int size, int param) // second parameter is not p
     
     return temp;
 }
+#endif
 
 // 100% matching! 
 void bhCalcLinkModel(BH_PWORK* pp)

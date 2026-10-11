@@ -5,7 +5,6 @@
 
 extern SYS_WORK recvxEngineEventSys;
 extern ROM_WORK recvxEngineEventRoom;
-extern BH_PWORK recvxEngineEventPlayer;
 
 void recvxEngineEventRuntimeReset(void);
 

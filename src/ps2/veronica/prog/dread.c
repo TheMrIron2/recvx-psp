@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include "../../../ps2/veronica/prog/dread.h"
 #include "../../../ps2/veronica/prog/binfunc.h"
 #include "../../../ps2/veronica/prog/njplus.h"

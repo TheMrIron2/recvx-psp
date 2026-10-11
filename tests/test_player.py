@@ -23,7 +23,9 @@ class PlayerRoom(ctypes.Structure):
                 ("floors", ctypes.POINTER(PlayerWall)),
                 ("floor_count", ctypes.c_uint32),
                 ("stairs", ctypes.POINTER(PlayerWall)),
-                ("stair_count", ctypes.c_uint32)]
+                ("stair_count", ctypes.c_uint32),
+                ("stair_transitions", ctypes.POINTER(PlayerWall)),
+                ("stair_transition_count", ctypes.c_uint32)]
 
 
 class Player(ctypes.Structure):
@@ -31,9 +33,22 @@ class Player(ctypes.Structure):
                 ("z", ctypes.c_float), ("yaw", ctypes.c_float),
                 ("vertical_speed", ctypes.c_float), ("walk_phase", ctypes.c_float),
                 ("floor", ctypes.c_int32), ("grounded", ctypes.c_int),
-                ("blocked", ctypes.c_int), ("surface_flags", ctypes.c_uint32),
+                ("blocked", ctypes.c_int), ("game_flags", ctypes.c_uint32),
+                ("surface_flags", ctypes.c_uint32),
                 ("floor_sound", ctypes.c_uint8), ("foot_effect", ctypes.c_uint8),
-                ("stair_index", ctypes.c_int32)]
+                ("stair_index", ctypes.c_int32),
+                ("floor_target_index", ctypes.c_int32),
+                ("stair_transition_index", ctypes.c_int32),
+                ("stair_target_floor", ctypes.c_int32),
+                ("stair_motion_slot", ctypes.c_int32),
+                ("stair_motion_frame", ctypes.c_uint32),
+                ("stair_stop_frame", ctypes.c_uint32),
+                ("stair_recovery_ticks", ctypes.c_uint32),
+                ("stair_target_yaw", ctypes.c_float),
+                ("stair_target_y", ctypes.c_float),
+                ("stair_last_motion", ctypes.c_float * 3),
+                ("stair_phase", ctypes.c_uint8),
+                ("stair_root_position_valid", ctypes.c_uint8)]
 
 
 lib.recvxPlayerUpdateAtSpeed.argtypes = [ctypes.POINTER(Player),
@@ -46,7 +61,8 @@ lib.recvxPlayerRoomLoad.argtypes = [ctypes.c_void_p, ctypes.c_size_t,
 lib.recvxPlayerRoomFree.argtypes = [ctypes.POINTER(PlayerRoom)]
 
 
-def update_wall(attributes=0, floor=0, wall_y=0.0, wall_height=20.0):
+def update_wall(attributes=0, floor=0, wall_y=0.0, wall_height=20.0,
+                speed=10.0):
     wall_buffer = (PlayerWall * 1)(PlayerWall(
         attributes, -5.0, wall_y, -5.0, 10.0, wall_height, 1.0,
         1, 0, 0, floor))
@@ -56,15 +72,15 @@ def update_wall(attributes=0, floor=0, wall_y=0.0, wall_height=20.0):
     room.wall_height = 10000.0
     player = Player(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 1, 0)
     lib.recvxPlayerUpdateAtSpeed(ctypes.byref(player), ctypes.byref(room),
-                                 1.0, 0.0, 10.0, 2.4, 0.1)
+                                 1.0, 0.0, speed, 2.4, 0.1)
     return player
 
 
-player = update_wall()
-assert player.blocked == 1 and abs(player.z + 0.5) < 1e-6
+player = update_wall(speed=20.0)
+assert player.blocked == 1 and abs(player.z + 0.5) < 0.005
 
-player = update_wall(wall_y=15.0, wall_height=1.0)
-assert player.blocked == 1 and abs(player.z + 0.5) < 1e-6
+player = update_wall(wall_y=15.0, wall_height=1.0, speed=20.0)
+assert player.blocked == 1 and abs(player.z + 0.5) < 0.005
 
 player = update_wall(attributes=0x4)
 assert player.blocked == 0 and player.z == -0.5

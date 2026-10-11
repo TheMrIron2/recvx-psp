@@ -88,6 +88,8 @@ def extract(args):
         raise ValueError("costume index must be between 0 and 3")
     if args.weapon_id < 0 or args.weapon_id > 29:
         raise ValueError("weapon ID must be between 0 and 29")
+    if args.effect_entry is not None and args.effect_entry < 0:
+        raise ValueError("effect entry must not be negative")
 
     player_id = 10 + args.character_id + args.costume * 4
     weapon_id = 20 + args.character_id * 30 + args.weapon_id
@@ -100,6 +102,9 @@ def extract(args):
         archive = read_afs_index(iso, archive_file.lba, archive_file.size)
         player_data = read_afs_entry(iso, archive, player_id)
         weapon_data = read_afs_entry(iso, archive, weapon_id)
+        effect_data = None
+        if args.effect_entry is not None:
+            effect_data = read_afs_entry(iso, archive, args.effect_entry)
 
     player_info, components = inspect_player(player_data)
     args.output.mkdir(parents=True, exist_ok=True)
@@ -108,6 +113,8 @@ def extract(args):
         (args.output / f"{player_stem}_{suffix}.bin").write_bytes(component)
     (args.output / f"{player_stem}.afsentry").write_bytes(player_data)
     (args.output / f"weapon_{args.character_id}_{args.weapon_id}.afsentry").write_bytes(weapon_data)
+    if effect_data is not None:
+        (args.output / f"effect_{args.effect_entry}.afsentry").write_bytes(effect_data)
 
     report = {
         "archive": "SYSTEM.AFS",
@@ -122,8 +129,17 @@ def extract(args):
                    "sha256": hashlib.sha256(weapon_data).hexdigest(),
                    "first_16_bytes": weapon_data[:16].hex()},
     }
+    if effect_data is not None:
+        report["effect_entry"] = {
+            "entry_id": args.effect_entry,
+            "file_size": len(effect_data),
+            "sha256": hashlib.sha256(effect_data).hexdigest(),
+        }
     (args.output / "player-assets.json").write_text(json.dumps(report, indent=2) + "\n")
-    print(f"Extracted SYSTEM.AFS entries {player_id} and {weapon_id} to {args.output}")
+    entries = [str(player_id), str(weapon_id)]
+    if effect_data is not None:
+        entries.append(str(args.effect_entry))
+    print(f"Extracted SYSTEM.AFS entries {', '.join(entries)} to {args.output}")
     print(f"Player payload: {len(player_data):,} bytes; model stream "
           f"{player_info['components']['models']['size']:,}, motion stream "
           f"{player_info['components']['motions']['size']:,}, textures "
@@ -137,6 +153,8 @@ if __name__ == "__main__":
     parser.add_argument("--character-id", type=int, default=0)
     parser.add_argument("--costume", type=int, default=0)
     parser.add_argument("--weapon-id", type=int, default=0)
+    parser.add_argument("--effect-entry", type=int,
+                        help="also extract a SYSTEM.AFS effect initialization entry")
     try:
         extract(parser.parse_args())
     except (OSError, ValueError, struct.error) as error:

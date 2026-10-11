@@ -27,6 +27,11 @@ void recvxRendererUpdate(const RecvxScene *scene, RecvxRoomMesh *mesh,
                          const RecvxPlayerRoom *player_room,
                          const char *room_name,
                          const RecvxInputState *input);
+int recvxRendererUpdateEngineSnapshot(
+    const RecvxScene *scene, RecvxRoomMesh *mesh,
+    const RecvxTextureSet *textures, RecvxRoomActors *room_actors,
+    const RecvxPlayer *player, const char *room_name,
+    uint32_t motion_slot, uint32_t motion_frame);
 void recvxRendererDraw(int wait_for_vblank);
 void recvxRendererSetOverlay(const char *text);
 void recvxRendererStop(void);

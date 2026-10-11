@@ -2,6 +2,7 @@
 #include "../../../ps2/veronica/prog/MdlPut.h"
 #include "../../../ps2/veronica/prog/binfunc.h"
 #include "../../../ps2/veronica/prog/camera.h"
+#include "../../../ps2/veronica/prog/cut.h"
 #include "../../../ps2/veronica/prog/dread.h"
 #include "../../../ps2/veronica/prog/effect.h"
 #include "../../../ps2/veronica/prog/eneset.h"
@@ -12,6 +13,7 @@
 #include "../../../ps2/veronica/prog/njplus.h"
 #include "../../../ps2/veronica/prog/objitm.h"
 #include "../../../ps2/veronica/prog/player.h"
+#include "../../../ps2/veronica/prog/ps2_texture.h"
 #include "../../../ps2/veronica/prog/pwksub.h"
 #include "../../../ps2/veronica/prog/screen.h"
 #include "../../../ps2/veronica/prog/sdfunc.h"
@@ -732,7 +734,7 @@ void bhSetObjMdl(unsigned char* datp, ETTY_WORK* ep, int mdlno, int eno) // thir
     {
         npSetMemory((unsigned char*)epp->mdl, sizeof(O_WRK) / 50, 0);
         
-        if (((unsigned char*)datp[0] == (unsigned char*)'M') && ((unsigned char*)datp[1] == (unsigned char*)'D') && ((unsigned char*)datp[2] == (unsigned char*)'L')) 
+        if (datp[0] == 'M' && datp[1] == 'D' && datp[2] == 'L')
         {
             bhMlbBinRealize(datp, epp->mdl);
         }

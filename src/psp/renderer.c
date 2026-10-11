@@ -42,6 +42,7 @@ static uint32_t fixed_camera_attribute;
 static int camera_cut_initialized;
 static int fixed_camera_attribute_initialized;
 static int player_mode;
+static int engine_snapshot_mode;
 static const RecvxRoomMesh *player_model_mesh;
 static RecvxRoomMesh *player_actor_mesh;
 static RecvxRoomActors *room_actor_set;
@@ -78,7 +79,7 @@ typedef struct RecvxRendererFrameState {
     RecvxRoomMesh *mesh;
     const RecvxTextureSet *textures;
     RecvxRoomActors *actors;
-    RecvxPlayer *player;
+    const RecvxPlayer *player;
     const RecvxPlayerRoom *player_room;
     const char *room_name;
     ScePspFVector3 eye, center, up;
@@ -938,6 +939,7 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
     pspDebugScreenEnableBackColor(0);
     display_mode = mesh && mesh->vertices ? (textures && textures->count ? 4 : 0) : 3;
     player_mode = player != NULL;
+    engine_snapshot_mode = 0;
     player_model_mesh = actor_mesh;
     player_actor_mesh = actor_mesh;
     player_actor_assets = actor_assets;
@@ -1293,6 +1295,79 @@ void recvxRendererUpdate(const RecvxScene *scene, RecvxRoomMesh *mesh,
     frame_state.near_plane = near_plane;
     frame_state.far_plane = far_plane;
     frame_state.update_cost_us = recvxPlatformTimeUs() - now;
+    engine_snapshot_mode = 0;
+}
+
+int recvxRendererUpdateEngineSnapshot(
+    const RecvxScene *scene, RecvxRoomMesh *mesh,
+    const RecvxTextureSet *textures, RecvxRoomActors *actors,
+    const RecvxPlayer *player, const char *room_name,
+    uint32_t motion_slot, uint32_t motion_frame)
+{
+    uint64_t now = recvxPlatformTimeUs();
+    float near_plane, far_plane;
+    ScePspFVector3 eye, up = {0, 1, 0};
+    const RecvxPlayerMotionAsset *motion;
+    int changed;
+
+    if (!initialized || scene == NULL || player == NULL ||
+        player_actor_assets == NULL || player_actor_mesh == NULL ||
+        motion_slot >= player_actor_assets->motion_count)
+        return -1;
+    engine_snapshot_mode = 1;
+    motion = &player_actor_assets->motions[motion_slot];
+    if (!motion->present || motion_frame >= motion->frame_count ||
+        recvxPosePlayerMesh(&player_actor_assets->models[0], motion,
+                            motion_frame, player_actor_mesh) != 0)
+        return -2;
+
+    player_animation_slot = motion_slot;
+    player_animation_frame = (float)motion_frame;
+    player_speed_per_tick = 0.0f;
+    changed = update_player_culling(mesh, player, (int)camera_cut);
+    configure_fixed_camera(mesh, player, 0);
+    if (fixed_camera_active) {
+        fixed_camera_position(mesh, player, &eye);
+        center.x = eye.x + fixed_camera_forward.x;
+        center.y = eye.y + fixed_camera_forward.y;
+        center.z = eye.z + fixed_camera_forward.z;
+        up = fixed_camera_up;
+    } else {
+        center.x = player->x;
+        center.y = player->y + 0.9f;
+        center.z = player->z;
+        yaw = player->yaw;
+    }
+    focus = center;
+    if (changed > 0)
+        apply_room_lighting(mesh);
+    pitch = fmaxf(0.16f, fminf(0.58f, pitch));
+    distance = fmaxf(fmaxf(4.0f, radius * 0.07f),
+                     fminf(fmaxf(10.0f, radius * 0.5f), distance));
+    if (!fixed_camera_active) {
+        eye.x = center.x + sinf(yaw) * cosf(pitch) * distance;
+        eye.y = center.y + sinf(pitch) * distance;
+        eye.z = center.z + cosf(yaw) * cosf(pitch) * distance;
+    }
+    near_plane = fixed_camera_active ? fmaxf(0.05f, radius * 0.001f) :
+                                       radius * 0.01f;
+    far_plane = fixed_camera_active ? fmaxf(radius * 4.0f, near_plane * 3200.0f) :
+                                      radius * 32.0f;
+    frame_state.scene = scene;
+    frame_state.mesh = mesh;
+    frame_state.textures = textures;
+    frame_state.actors = actors;
+    frame_state.player = player;
+    frame_state.player_room = NULL;
+    frame_state.room_name = room_name;
+    room_actor_set = actors;
+    frame_state.eye = eye;
+    frame_state.center = center;
+    frame_state.up = up;
+    frame_state.near_plane = near_plane;
+    frame_state.far_plane = far_plane;
+    frame_state.update_cost_us = recvxPlatformTimeUs() - now;
+    return 0;
 }
 
 void recvxRendererDraw(int wait_for_vblank)
@@ -1301,7 +1376,7 @@ void recvxRendererDraw(int wait_for_vblank)
     RecvxRoomMesh *mesh = frame_state.mesh;
     const RecvxTextureSet *textures = frame_state.textures;
     RecvxRoomActors *actors = frame_state.actors;
-    RecvxPlayer *player = frame_state.player;
+    const RecvxPlayer *player = frame_state.player;
     const RecvxPlayerRoom *player_room = frame_state.player_room;
     const char *room_name = frame_state.room_name;
     ScePspFVector3 eye = frame_state.eye;
@@ -1436,6 +1511,7 @@ void recvxRendererDraw(int wait_for_vblank)
     pspDebugScreenSetTextColor(0xffffffff);
     pspDebugScreenSetXY(1, 1);
     pspDebugScreenPrintf("%s   %s", room_name,
+                         engine_snapshot_mode ? "Original player snapshot" :
                          player_mode ? "Player prototype" :
                          display_mode == 4 ? "Room model textured" : display_mode == 3 ? "Spatial viewer" :
                          display_mode == 1 ? "Room model wireframe" : "Room model solid");
@@ -1473,10 +1549,12 @@ void recvxRendererDraw(int wait_for_vblank)
     pspDebugScreenSetXY(1, 29);
     pspDebugScreenPrintf("SELECT: solid / wire / bounds / spatial / textured");
     pspDebugScreenSetXY(1, 31);
-    pspDebugScreenPrintf(player_mode ? "Stick move/turn  D-pad tank controls  R run  Fixed room camera" :
+    pspDebugScreenPrintf(engine_snapshot_mode ? "Original engine player; no gameplay tick" :
+                         player_mode ? "Stick move/turn  D-pad tank controls  R run  Fixed room camera" :
                          "D-pad orbit  Stick pan  L/R zoom  TRIANGLE reset");
     pspDebugScreenSetXY(1, 32);
-    pspDebugScreenPrintf(player_mode ? "CROSS door  SQUARE return  TRIANGLE reset  START exit" :
+    pspDebugScreenPrintf(engine_snapshot_mode ? "START exits" :
+                         player_mode ? "CROSS door  SQUARE return  TRIANGLE reset  START exit" :
                          "CROSS camera  CIRCLE cut  SQUARE rooms  START exit");
     if (wait_for_vblank)
         sceDisplayWaitVblankStartCB();

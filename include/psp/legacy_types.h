@@ -7,7 +7,7 @@
 
 typedef uint8_t u_char;
 typedef uint16_t u_short;
-typedef uint32_t u_int;
+typedef unsigned int u_int;
 typedef uint32_t u_long;
 typedef struct RecvxUint128 {
     uint32_t words[4];
