@@ -28,7 +28,7 @@ void bhInitEffect(void)
     size = *(int *)sys->memp;
     data += 4;
 
-    for (index = 0; effect_info[index].flg != -1; ++index) {
+    for (index = 0; effect_info[index].flg != (unsigned int)-1; ++index) {
         sys->ef_tn[index] = sys->ef_ct;
         sys->ef_ct += effect_info[index].nbAnim;
         if (effect_info[index].flg & 1) {

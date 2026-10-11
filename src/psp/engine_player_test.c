@@ -10,6 +10,7 @@
 
 #include "ps2/veronica/prog/types.h"
 #include "ps2/veronica/prog/camera.h"
+#include "ps2/veronica/prog/cut.h"
 #include "ps2/veronica/prog/dread.h"
 #include "ps2/veronica/prog/effect.h"
 #include "ps2/veronica/prog/eneset.h"
@@ -18,14 +19,19 @@
 #include "ps2/veronica/prog/player.h"
 #include "ps2/veronica/prog/pwksub.h"
 #include "ps2/veronica/prog/room.h"
+#include "ps2/veronica/prog/system.h"
+#include "psp/engine_pad_adapter.h"
 #include "psp/engine_event_runtime.h"
 #include "psp/engine_original_fault.h"
+#include "psp/engine_original_matrix.h"
 #include "psp/engine_original_memory.h"
 #include "psp/engine_original_texture.h"
 #include "psp/engine_original_view.h"
 #include "psp/engine_room_owner.h"
+#include "psp/live_task_dispatch.h"
 #include "psp/mesh.h"
 #include "psp/ninja_math.h"
+#include "psp/platform.h"
 #include "psp/player.h"
 #include "psp/renderer.h"
 #include "psp/scene.h"
@@ -45,6 +51,8 @@ static RecvxRoomMesh room_mesh, player_mesh;
 static RecvxTextureSet room_textures, player_textures;
 static RecvxPlayerAssets player_assets;
 static RecvxPlayer engine_snapshot;
+static RecvxInputState callback_input;
+static RecvxLiveTaskProc callback_task_table[23];
 static unsigned char *engine_arena_raw;
 static unsigned char *engine_arena;
 static unsigned char *room_file_copy;
@@ -61,14 +69,27 @@ static char test_fault[128];
 static char data_directory[512] = "data";
 static FILE *test_report;
 
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+static int callback_fault;
+static uint32_t callback_order;
+static uint32_t callback_pad_ticks;
+static uint32_t callback_game_ticks;
+#endif
+
 static void reportf(const char *format, ...)
 {
     va_list args;
     char path[640];
 
     if (test_report == NULL) {
-        if (snprintf(path, sizeof(path), "%s/package4a-report.txt",
-                     data_directory) >= (int)sizeof(path))
+        const char *report_name;
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+        report_name = "package4b-report.txt";
+#else
+        report_name = "package4a-report.txt";
+#endif
+        if (snprintf(path, sizeof(path), "%s/%s", data_directory,
+                     report_name) >= (int)sizeof(path))
             return;
         remove(path);
         test_report = fopen(path, "w");
@@ -179,6 +200,7 @@ static int prepare_original_room(void)
 
     recvxEngineEventRuntimeReset();
     recvxEngineOriginalFaultReset();
+    recvxEngineOriginalViewReset();
     recvxEngineOriginalTextureReset();
     reportf("stage: original state reset\n");
     engine_arena_raw = malloc(ENGINE_ARENA_SIZE + 63u);
@@ -336,6 +358,15 @@ static int prepare_original_room(void)
         return -16;
     reportf("stage: entering original bhFinishRoom\n");
     bhFinishRoom();
+#ifdef RECVX_ENGINE_ORIGINAL_CAMERA_TEST
+    sys->sp_flg = -1;
+    bhCheckCut(1);
+    if (recvxEngineOriginalFault() != NULL) {
+        snprintf(test_fault, sizeof(test_fault), "initial original camera cut: %s",
+                 recvxEngineOriginalFault());
+        return -17;
+    }
+#endif
     recvxEngineOriginalTextureSetMetadataOnly(0);
     recvxEngineOriginalMemoryObserve();
     reportf("stage: room finished floors=%d floor-table=%08x extra-floors=%d player=%08x model=%08x room=%08x floor=%d arena-high-water=%u\n",
@@ -355,6 +386,7 @@ static int prepare_original_room(void)
 static int prepare_engine_snapshot(void)
 {
     unsigned int frame;
+    int result;
     if (plp->mtn_no >= player_assets.motion_count)
         return -1;
     frame = plp->frm_no < 0 ? 0u : (unsigned int)plp->frm_no / 65536u;
@@ -364,10 +396,110 @@ static int prepare_engine_snapshot(void)
     engine_snapshot.yaw = recvxNinjaAngleRadians((RecvxNinjaAngle)plp->ay);
     engine_snapshot.floor = plp->flr_no;
     engine_snapshot.grounded = 1;
-    return recvxRendererUpdateEngineSnapshot(
+    result = recvxRendererUpdateEngineSnapshot(
         &scene, &room_mesh, &room_textures, NULL, &engine_snapshot,
         "RM_0010 original player", plp->mtn_no, frame);
+    if (result != 0)
+        return result;
+#ifdef RECVX_ENGINE_ORIGINAL_CAMERA_TEST
+#ifndef RECVX_ENGINE_GAME_CALLBACK_TEST
+    bhControlCamera();
+    if (recvxEngineOriginalFault() != NULL) {
+        snprintf(test_fault, sizeof(test_fault), "original camera update: %s",
+                 recvxEngineOriginalFault());
+        return -2;
+    }
+#endif
+    result = recvxRendererUseOriginalCamera(
+        cam.mtx[0], recvxEngineOriginalViewProjectionDistance());
+    if (result != 0) {
+        snprintf(test_fault, sizeof(test_fault),
+                 "original camera handoff rejected (%d)", result);
+        return -3;
+    }
+#endif
+    return 0;
 }
+
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+static void callback_pad_task(void)
+{
+    callback_order = callback_order * 10 + 6;
+    if (recvxEnginePadAdapterUpdate(&callback_input) != 0) {
+        callback_fault = -1;
+        return;
+    }
+    bhSysCallPad();
+    ++callback_pad_ticks;
+    if (recvxEnginePadAdapterFaulted())
+        callback_fault = -2;
+}
+
+static void callback_game_task(void)
+{
+    callback_order = callback_order * 10 + 7;
+    if (callback_fault != 0)
+        return;
+    bhSysCallGame();
+    ++callback_game_ticks;
+    if (recvxEngineOriginalFault() != NULL)
+        callback_fault = -3;
+}
+
+static int prepare_game_callback_test(void)
+{
+    memset(callback_task_table, 0, sizeof(callback_task_table));
+    callback_task_table[6] = callback_pad_task;
+    callback_task_table[7] = callback_game_task;
+    memset(&callback_input, 0, sizeof(callback_input));
+    callback_input.analog_x = 128;
+    callback_input.analog_y = 128;
+    callback_order = 0;
+    callback_fault = 0;
+    callback_pad_ticks = 0;
+    callback_game_ticks = 0;
+    recvxEnginePadAdapterReset();
+    recvxEnginePadAdapterResetFault();
+    recvxPlatformInputInit();
+
+    // The integration checkpoint runs original pad/game slots before SCD0 admission
+    sys->tk_flg = (1u << 6) | (1u << 7);
+    sys->ts_flg &= ~((1u << 6) | (1u << 7));
+    sys->ts_flg |= 1u << 8;
+    sys->sp_flg &= ~0x2;
+    if ((sys->sp_flg & 0x1) == 0 || (sys->sp_flg & 0x2) != 0)
+        return -1;
+    reportf("stage: original dispatcher slots 6/7 active; event slot 8 paused; actor admission held before SCD0\n");
+    reportf("stage: room flags sp=%08x tk=%08x ts=%08x\n",
+            (unsigned int)sys->sp_flg, (unsigned int)sys->tk_flg,
+            (unsigned int)sys->ts_flg);
+    return 0;
+}
+
+static int run_game_callback_tick(void)
+{
+    uint32_t unsupported;
+    int input_result = recvxPlatformReadInput(&callback_input);
+
+    if (input_result < 0)
+        return -1;
+    if (input_result == 0) {
+        callback_input.buttons = 0;
+        callback_input.pressed = 0;
+        callback_input.released = 0;
+        callback_input.repeat = 0;
+        callback_input.analog_x = 128;
+        callback_input.analog_y = 128;
+    }
+    callback_order = 0;
+    unsupported = recvxRunLiveTaskSlots(&sys->tk_flg, &sys->ts_flg,
+                                         callback_task_table, 23);
+    if (unsupported != 0 || callback_fault != 0 || callback_order != 67 ||
+        callback_pad_ticks != callback_game_ticks)
+        return -2;
+    return 0;
+}
+#endif
 
 static int should_exit(void)
 {
@@ -387,7 +519,7 @@ static void wait_for_start(void)
 int main(int argc, char **argv)
 {
     int result;
-    char overlay[192];
+    char overlay[256];
     int renderer_ready = 0;
     int renderer_frame_ready = 0;
 
@@ -398,8 +530,13 @@ int main(int argc, char **argv)
             snprintf(data_directory, sizeof(data_directory), "%.*s/data",
                      (int)(last_slash - argv[0]), argv[0]);
     }
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+    reportf("Package 4b original game callback test\ndata=%s\n",
+            data_directory);
+#else
     reportf("Package 4a original player test\ndata=%s\n",
             data_directory);
+#endif
     recvxEngineOriginalTextureReset();
     result = load_view_assets();
     if (result != 0) {
@@ -426,14 +563,69 @@ int main(int argc, char **argv)
             snprintf(test_fault, sizeof(test_fault), "original init stage %d", result);
         goto done;
     }
-    if (prepare_engine_snapshot() != 0) {
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+    result = prepare_game_callback_test();
+    if (result == 0)
+        result = run_game_callback_tick();
+    if (result != 0) {
         snprintf(test_fault, sizeof(test_fault),
-                 "unsupported original motion %u frame %d",
-                 (unsigned int)plp->mtn_no, plp->frm_no);
+                 "first original callback tick failed (%d), pad=%u game=%u dependency=%s",
+                 result, (unsigned int)callback_pad_ticks,
+                 (unsigned int)callback_game_ticks,
+                 recvxEngineOriginalFault() != NULL ?
+                     recvxEngineOriginalFault() : "none");
+        result = -19;
+        goto done;
+    }
+#endif
+    result = prepare_engine_snapshot();
+    if (result != 0) {
+        if (test_fault[0] == '\0')
+            snprintf(test_fault, sizeof(test_fault),
+                     "unsupported original motion %u frame %d",
+                     (unsigned int)plp->mtn_no, plp->frm_no);
         result = -18;
         goto done;
     }
     renderer_frame_ready = 1;
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+    reportf("PASS: original dispatcher pad slot 6 then bhSysCallGame slot 7; event slot 8 and actor 67 held pending SCD0\n");
+    reportf("first trace pos=(%.4f,%.4f,%.4f) floor=%d angle=%d motion=%u frame=%d camera=%d/%d\n",
+            plp->px, plp->py, plp->pz, (int)plp->flr_no, (int)plp->ay,
+            (unsigned int)plp->mtn_no, plp->frm_no, cam.ncut, cam.camver);
+    snprintf(overlay, sizeof(overlay),
+             "Package 4b original game callback\n"
+             "Pad slot 6 -> game slot 7 -> passive GU\n"
+             "Position %.2f %.2f floor %d motion %u frame %d\n"
+             "Actor 67 and event 8 held before SCD0; START exits",
+             plp->px, plp->pz, (int)plp->flr_no,
+             (unsigned int)plp->mtn_no, plp->frm_no / 65536);
+#else
+#ifdef RECVX_ENGINE_ORIGINAL_CAMERA_TEST
+    reportf("PASS: original room/player setup and camera matrix handoff; no gameplay tick\n");
+    reportf("matrix pop underflows: %u first call=%p\n",
+            recvxEngineOriginalMatrixUnderflowCount(),
+            recvxEngineOriginalMatrixFirstUnderflow());
+    reportf("camera cut=%d variant=%d sp_flg=%08x pos=(%.3f,%.3f,%.3f) angle=(%d,%d,%d) lens=%.3f perspective=%u distance=%.3f\n",
+            cam.ncut, cam.camver, (unsigned int)sys->sp_flg,
+            cam.px, cam.py, cam.pz, cam.ax, cam.ay, cam.az, cam.ln,
+            (unsigned int)cam.pers,
+            recvxEngineOriginalViewProjectionDistance());
+    reportf("view matrix storage: %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f\n",
+            cam.mtx[0][0], cam.mtx[0][1], cam.mtx[0][2], cam.mtx[0][3],
+            cam.mtx[0][4], cam.mtx[0][5], cam.mtx[0][6], cam.mtx[0][7],
+            cam.mtx[0][8], cam.mtx[0][9], cam.mtx[0][10], cam.mtx[0][11],
+            cam.mtx[0][12], cam.mtx[0][13], cam.mtx[0][14], cam.mtx[0][15]);
+    snprintf(overlay, sizeof(overlay),
+             "Original camera matrix handoff; no gameplay tick\n"
+             "Room actor work %u; original motion %u frame %d\n"
+             "Matrix pop false returns %u (original behavior)\n"
+             "Engine arena high-water %u KiB; START exits",
+             (unsigned int)room_owner.active_enemy_count,
+             (unsigned int)plp->mtn_no,
+             plp->frm_no, recvxEngineOriginalMatrixUnderflowCount(),
+             (unsigned int)(recvxEngineOriginalMemoryHighWater() / 1024));
+#else
     reportf("PASS: original room and player setup; no gameplay tick\n");
     snprintf(overlay, sizeof(overlay),
              "4a stationary original player/model/room\n"
@@ -442,12 +634,50 @@ int main(int argc, char **argv)
              (unsigned int)room_owner.active_enemy_count,
              (unsigned int)plp->mtn_no,
              plp->frm_no, (unsigned int)(recvxEngineOriginalMemoryHighWater() / 1024));
+#endif
+#endif
     recvxRendererSetOverlay(overlay);
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+    while (!should_exit()) {
+        if (run_game_callback_tick() != 0) {
+            snprintf(test_fault, sizeof(test_fault),
+                     "original callback tick failed, pad=%u game=%u dependency=%s actor_gate=%u",
+                     (unsigned int)callback_pad_ticks,
+                     (unsigned int)callback_game_ticks,
+                     recvxEngineOriginalFault() != NULL ?
+                         recvxEngineOriginalFault() : "none",
+                     (unsigned int)((sys->sp_flg & 0x2) != 0));
+            result = -20;
+            break;
+        }
+        if (prepare_engine_snapshot() != 0) {
+            result = -21;
+            break;
+        }
+        snprintf(overlay, sizeof(overlay),
+                 "Package 4b original game callback\n"
+                 "Pad slot 6 -> game slot 7 -> passive GU\n"
+                 "Position %.2f %.2f floor %d motion %u frame %d\n"
+                 "Actor 67 and event 8 held before SCD0; START exits",
+                 plp->px, plp->pz, (int)plp->flr_no,
+                 (unsigned int)plp->mtn_no, plp->frm_no / 65536);
+        recvxRendererSetOverlay(overlay);
+        recvxRendererDraw(1);
+    }
+    if (result == 0)
+        reportf("ticks=%u pad=%u game=%u final pos=(%.4f,%.4f,%.4f) floor=%d angle=%d motion=%u frame=%d camera=%d/%d\n",
+                (unsigned int)callback_game_ticks,
+                (unsigned int)callback_pad_ticks,
+                (unsigned int)callback_game_ticks, plp->px, plp->py, plp->pz,
+                (int)plp->flr_no, (int)plp->ay, (unsigned int)plp->mtn_no,
+                plp->frm_no, cam.ncut, cam.camver);
+#else
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
     while (!should_exit())
         recvxRendererDraw(1);
     result = 0;
+#endif
 
 done:
     if (result != 0)

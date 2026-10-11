@@ -15,6 +15,9 @@
 #include "../../../ps2/veronica/prog/system.h"
 #include "../../../ps2/veronica/prog/ps2_dummy.h"
 #include "../../../ps2/veronica/prog/main.h"
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+#include "psp/engine_original_fault.h"
+#endif
 
 // 100% matching! 
 void bhMainSequence()
@@ -35,6 +38,10 @@ void bhMainSequence()
     {
         sys->loop_now = i;
         
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+        if ((sys->cb_flg & 0x2) || sys->cine_an)
+            recvxEngineOriginalFaultSet("screen fade or cinesco is outside locomotion test");
+#else
         if ((sys->cb_flg & 0x2)) 
         {
             bhControlScreenFade();
@@ -44,6 +51,7 @@ void bhMainSequence()
         {
             bhControlCinesco();
         }
+#endif
         
         bhControlEnemy();
         bhControlPlayer();
@@ -60,6 +68,7 @@ void bhMainSequence()
             
         if (i == (sys->loop_ct - 1)) 
         {
+#if !defined(RECVX_ENGINE_PASSIVE_RENDER)
             if ((sys->gm_flg & 0x200))
             {
                 bhDrawSmallScreenRenderTexture();
@@ -110,6 +119,7 @@ void bhMainSequence()
             {
                 bhDrawScreenFade();
             }
+#endif
         }
         
         if (((sys->st_flg & 0x200000)) && (!(sys->cb_flg & 0x1)))
@@ -295,6 +305,10 @@ void bhMainSequence()
             bhCheckCut(1);
         }
         
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+        if (sys->loop_ct > 1)
+            recvxEngineOriginalFaultSet("multi-loop game callback is outside locomotion test");
+#else
         if (sys->loop_ct > 1) 
         {
             if ((sys->st_flg & 0x200)) 
@@ -311,6 +325,7 @@ void bhMainSequence()
             
             bhControlEvent();
         }
+#endif
     }
 }
 

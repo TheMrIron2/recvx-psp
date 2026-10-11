@@ -49,6 +49,12 @@ static uint32_t instruction_count;
 static uint32_t instruction_count_this_call;
 static uint32_t flag_write_count;
 static RecvxEventCoreFault event_fault;
+static uint32_t scenario_start;
+static uint32_t scenario_end;
+static int scenario_active;
+
+static int has_task_bytes(const unsigned char *pc, size_t count);
+static unsigned int dispatch_instruction(void);
 
 #ifdef RECVX_EVENT_CORE_TEST
 #define RECVX_EVENT_CORE(opcode, handler) [opcode] = handler,
@@ -159,6 +165,9 @@ void recvxEventCoreReset(void)
     instruction_count = 0;
     instruction_count_this_call = 0;
     flag_write_count = 0;
+    scenario_start = 0;
+    scenario_end = 0;
+    scenario_active = 0;
 }
 
 int recvxEventCoreBindSection(const void *bytes, size_t size)
@@ -208,6 +217,54 @@ int recvxEventCoreUnbindSection(void)
     event_table_size = 0;
     event_table_count = 0;
     return 0;
+}
+
+int recvxEventCoreRunScenario(uint32_t offset)
+{
+    uint32_t start0, start1, end;
+
+    if (event_fault.code != RECVX_EVENT_FAULT_NONE || event_section == NULL ||
+        event_table_count < 3 || scenario_active)
+        return -1;
+    start0 = read_u32(event_section);
+    start1 = read_u32(event_section + sizeof(uint32_t));
+    if (offset == start0) {
+        end = start1;
+    } else if (offset == start1) {
+        end = read_u32(event_section + 2 * sizeof(uint32_t));
+    } else {
+        set_fault(RECVX_EVENT_FAULT_BAD_SECTION, 0, NULL);
+        return -1;
+    }
+    if (end < offset || end > event_section_size) {
+        set_fault(RECVX_EVENT_FAULT_BAD_SECTION, 0, NULL);
+        return -1;
+    }
+
+    scenario_start = offset;
+    scenario_end = end;
+    scenario_active = 1;
+    current_task = RECVX_EVENT_NO_TASK;
+    instruction_count_this_call = 0;
+    bhIfelFlg = 0;
+    bhScePtr = (unsigned char *)event_section + offset;
+    while (event_fault.code == RECVX_EVENT_FAULT_NONE) {
+        while (event_fault.code == RECVX_EVENT_FAULT_NONE &&
+               dispatch_instruction() != 0)
+            ;
+        if (event_fault.code != RECVX_EVENT_FAULT_NONE || bhIfelFlg <= 0)
+            break;
+        if (G_Sp == NULL || !has_task_bytes((unsigned char *)G_Sp,
+                                            sizeof(*G_Sp))) {
+            set_fault(RECVX_EVENT_FAULT_BAD_TASK, 0, bhScePtr);
+            break;
+        }
+        bhScePtr = (unsigned char *)--G_Sp;
+        --bhIfelFlg;
+    }
+    current_task = RECVX_EVENT_NO_TASK;
+    scenario_active = 0;
+    return event_fault.code == RECVX_EVENT_FAULT_NONE ? 0 : -1;
 }
 
 const RecvxEventCoreFault *recvxEventCoreGetFault(void)
@@ -357,14 +414,19 @@ static int has_task_bytes(const unsigned char *pc, size_t count)
     uintptr_t address, base;
     uint32_t offset;
 
-    if (current_task >= RECVX_EVENT_TASK_COUNT ||
-        !task_bounds_valid[current_task] || event_section == NULL || pc == NULL)
+    if (event_section == NULL || pc == NULL)
         return 0;
     address = (uintptr_t)pc;
     base = (uintptr_t)event_section;
     if (address < base || address - base > event_section_size)
         return 0;
     offset = (uint32_t)(address - base);
+    if (scenario_active)
+        return offset >= scenario_start && offset <= scenario_end &&
+               count <= scenario_end - offset;
+    if (current_task >= RECVX_EVENT_TASK_COUNT ||
+        !task_bounds_valid[current_task])
+        return 0;
     return offset >= task_start[current_task] &&
            offset <= task_end[current_task] &&
            count <= task_end[current_task] - offset;
@@ -390,7 +452,11 @@ static int validate_core_instruction(unsigned int opcode)
 {
     size_t extent = 1;
 
-    if (opcode == 5) {
+    if (opcode == 0) {
+        extent = 1;
+    } else if (opcode == 1) {
+        extent = 3;
+    } else if (opcode == 5) {
         unsigned int type, word, operation;
         extent = 6;
         if (!has_task_bytes(bhScePtr, extent)) {
@@ -514,6 +580,13 @@ unsigned int bhSet(void)
     }
     ++flag_write_count;
     return 1;
+}
+
+// Extracted from original event.c::bhEnd
+unsigned int bhEnd(void)
+{
+    bhIfelFlg = 0;
+    return 0;
 }
 
 unsigned int bhSleep(void)

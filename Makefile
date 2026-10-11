@@ -20,7 +20,18 @@ PSP_PLATFORM_SOURCES := src/psp/platform_psp.c
 PSP_LEGACY_SOURCES := src/psp/legacy_runtime.c src/psp/legacy_platform.c src/psp/legacy_script.c src/ps2/veronica/prog/system_init.c
 GAME_SOURCES := src/ps2/veronica/prog/flag.c src/ps2/veronica/prog/ps2_NaMem.c
 SOURCES := src/psp/main.c src/psp/renderer.c $(PORT_SOURCES) $(PSP_PLATFORM_SOURCES) $(GAME_SOURCES) $(PSP_LEGACY_SOURCES)
-LEGACY_PORTABLE_SOURCES := src/ps2/veronica/prog/main.c src/ps2/veronica/prog/system_init.c src/ps2/veronica/prog/system.c src/ps2/veronica/prog/pad_task.c src/ps2/veronica/prog/game.c src/ps2/veronica/prog/player.c src/ps2/veronica/prog/dread.c src/ps2/veronica/prog/room.c src/ps2/veronica/prog/subpl.c src/ps2/veronica/prog/eneset.c src/ps2/veronica/prog/cut.c src/ps2/veronica/prog/binfunc.c src/ps2/veronica/prog/Motion.c src/ps2/veronica/prog/camera.c src/ps2/veronica/prog/playpch.c src/ps2/veronica/prog/playpch2.c src/ps2/veronica/prog/pwksub.c src/ps2/veronica/prog/hitchk.c src/ps2/veronica/prog/hitchkl.c src/ps2/veronica/prog/rutchk.c
+LEGACY_PORTABLE_SOURCES := \
+	src/ps2/veronica/prog/main.c src/ps2/veronica/prog/system_init.c \
+	src/ps2/veronica/prog/system.c src/ps2/veronica/prog/pad_task.c \
+	src/ps2/veronica/prog/game.c src/ps2/veronica/prog/player.c \
+	src/ps2/veronica/prog/dread.c src/ps2/veronica/prog/room.c \
+	src/ps2/veronica/prog/subpl.c src/ps2/veronica/prog/eneset.c \
+	src/ps2/veronica/prog/cut.c src/ps2/veronica/prog/event.c \
+	src/ps2/veronica/prog/binfunc.c src/ps2/veronica/prog/Motion.c \
+	src/ps2/veronica/prog/camera.c src/ps2/veronica/prog/playpch.c \
+	src/ps2/veronica/prog/playpch2.c src/ps2/veronica/prog/pwksub.c \
+	src/ps2/veronica/prog/hitchk.c src/ps2/veronica/prog/hitchkl.c \
+	src/ps2/veronica/prog/rutchk.c
 LEGACY_PORTABLE_OBJECTS := $(addprefix build/psp/legacy-objects/,$(notdir $(LEGACY_PORTABLE_SOURCES:.c=.o)))
 INCDIR := include include/ps2/veronica/prog
 CFLAGS := -std=gnu11 -O2 -g -G0 -Wall -Wextra -MMD -MP -idirafter include/recvx-decomp-katana/KATANA/Include
@@ -30,6 +41,33 @@ LIBS := -lpspgum -lpspgu -lpsppower -lm
 EVENT_TEST_SHARED_SOURCES := src/psp/event_core.c src/psp/engine_event_runtime.c src/psp/engine_event_tests.c src/psp/event_data.c src/psp/sha256.c src/psp/expand.c src/psp/room.c src/psp/room_check.c src/psp/file_stdio.c
 ROOM_OWNER_SOURCES := src/psp/engine_room_owner.c
 ENGINE_TASK_SOURCES := src/psp/live_task_dispatch.c src/psp/engine_pacer.c src/psp/original_clock.c
+ENGINE_PLAYER_SOURCES := src/psp/engine_player_test.c src/psp/renderer.c \
+	src/psp/ninja_math.c src/psp/timing.c src/psp/scene.c \
+	src/psp/mesh.c src/psp/texture.c src/psp/player_asset.c \
+	src/psp/actors.c $(PSP_PLATFORM_SOURCES) \
+	src/psp/expand.c src/psp/event_data.c src/psp/file_stdio.c \
+	src/psp/room.c src/psp/room_check.c src/psp/event_core.c \
+	src/psp/engine_event_runtime.c $(ROOM_OWNER_SOURCES) \
+	src/psp/engine_original_fault.c src/psp/engine_original_math.c \
+	src/psp/engine_original_mask.c src/psp/engine_original_cut.c \
+	src/psp/engine_original_memory.c src/psp/engine_original_model.c \
+	src/psp/engine_original_texture.c src/psp/engine_original_object.c \
+	src/ps2/veronica/prog/player.c src/ps2/veronica/prog/dread.c \
+	src/ps2/veronica/prog/room.c src/ps2/veronica/prog/eneset.c \
+	src/ps2/veronica/prog/system.c src/ps2/veronica/prog/camera.c \
+	src/ps2/veronica/prog/binfunc.c src/ps2/veronica/prog/Motion.c \
+	src/ps2/veronica/prog/MdlPut.c src/ps2/veronica/prog/pwksub.c \
+	src/ps2/veronica/prog/playpch.c src/psp/engine_original_effect.c \
+	src/psp/engine_original_effect_init.c \
+	src/ps2/veronica/prog/hitchk.c src/ps2/veronica/prog/ps2_NaMem.c \
+	src/ps2/veronica/prog/light.c src/psp/engine_original_screen.c \
+	src/psp/engine_original_view.c src/ps2/veronica/prog/flag.c
+ENGINE_PLAYER_CONTROL_SOURCES := $(filter-out src/psp/engine_player_test.c,$(ENGINE_PLAYER_SOURCES)) \
+	src/ps2/veronica/prog/game.c src/ps2/veronica/prog/pad.c \
+	src/ps2/veronica/prog/pad_task.c src/psp/engine_pad_adapter.c \
+	src/psp/engine_original_clock_psp.c \
+	src/psp/engine_pad_faults.c src/psp/live_task_dispatch.c \
+	src/ps2/veronica/prog/ps2_NaColi.c
 ifeq ($(BUILD_PROFILE),engine-event-test)
 BUILD_DIR := build/psp-engine-event-test
 TARGET := $(BUILD_DIR)/recvx-event-test
@@ -61,26 +99,40 @@ PSP_LARGE_MEMORY := 1
 CFLAGS += -fsigned-char -ffunction-sections -fdata-sections -DRECVX_ENGINE_PLAYER_TEST
 LDFLAGS += -Wl,--undefined=module_info
 SOURCES := src/psp/engine_player_test.c src/psp/renderer.c \
-	src/psp/ninja_math.c src/psp/timing.c src/psp/scene.c \
-	src/psp/mesh.c src/psp/texture.c src/psp/player_asset.c \
-	src/psp/actors.c $(PSP_PLATFORM_SOURCES) \
-	src/psp/expand.c src/psp/event_data.c src/psp/file_stdio.c \
-	src/psp/room.c src/psp/room_check.c src/psp/event_core.c \
-	src/psp/engine_event_runtime.c $(ROOM_OWNER_SOURCES) \
-	src/psp/engine_original_fault.c src/psp/engine_original_math.c \
-	src/psp/engine_original_mask.c src/psp/engine_original_cut.c \
-	src/psp/engine_original_memory.c src/psp/engine_original_model.c \
-	src/psp/engine_original_texture.c src/psp/engine_original_object.c \
-	src/ps2/veronica/prog/player.c src/ps2/veronica/prog/dread.c \
-	src/ps2/veronica/prog/room.c src/ps2/veronica/prog/eneset.c \
-	src/ps2/veronica/prog/system.c src/ps2/veronica/prog/camera.c \
-	src/ps2/veronica/prog/binfunc.c src/ps2/veronica/prog/Motion.c \
-	src/ps2/veronica/prog/MdlPut.c src/ps2/veronica/prog/pwksub.c \
-	src/ps2/veronica/prog/playpch.c src/psp/engine_original_effect.c \
-	src/psp/engine_original_effect_init.c \
-	src/ps2/veronica/prog/hitchk.c src/ps2/veronica/prog/ps2_NaMem.c \
-	src/ps2/veronica/prog/light.c src/psp/engine_original_screen.c \
-	src/psp/engine_original_view.c src/ps2/veronica/prog/flag.c
+	$(filter-out src/psp/engine_player_test.c src/psp/renderer.c,$(ENGINE_PLAYER_SOURCES))
+else ifeq ($(BUILD_PROFILE),engine-player-matrix-test)
+BUILD_DIR := build/psp-engine-player-matrix-test
+TARGET := $(BUILD_DIR)/recvx-engine-player-matrix-test
+PSP_LARGE_MEMORY := 1
+CFLAGS += -fsigned-char -ffunction-sections -fdata-sections \
+	-DRECVX_ENGINE_PLAYER_TEST -DRECVX_ENGINE_ORIGINAL_MATRIX_CPU \
+	-DRECVX_ENGINE_ORIGINAL_CAMERA_TEST
+ENGINE_CAMERA_SERVICES_SOURCE := $(BUILD_DIR)/engine_original_camera_services.c
+ENGINE_CAMERA_SERVICES_OBJECT := $(BUILD_DIR)/engine_original_camera_services.o
+SOURCES := $(filter-out src/psp/engine_original_cut.c,$(ENGINE_PLAYER_SOURCES)) \
+	src/ps2/veronica/prog/cut.c src/ps2/veronica/prog/ps2_event.c \
+	$(ENGINE_CAMERA_SERVICES_OBJECT) src/psp/engine_original_matrix_cpu.c
+else ifeq ($(BUILD_PROFILE),engine-player-control-test)
+BUILD_DIR := build/psp-engine-player-control-test
+TARGET := $(BUILD_DIR)/recvx-engine-player-control-test
+PSP_LARGE_MEMORY := 1
+CFLAGS += -fsigned-char -ffunction-sections -fdata-sections \
+	-DRECVX_ENGINE_PLAYER_TEST -DRECVX_ENGINE_ORIGINAL_MATRIX_CPU \
+	-DRECVX_ENGINE_ORIGINAL_CAMERA_TEST -DRECVX_ENGINE_GAME_CALLBACK_TEST \
+	-DRECVX_ENGINE_PASSIVE_RENDER
+LDFLAGS += -Wl,--undefined=module_info
+ENGINE_CAMERA_SERVICES_SOURCE := $(BUILD_DIR)/engine_original_camera_services.c
+ENGINE_CAMERA_SERVICES_OBJECT := $(BUILD_DIR)/engine_original_camera_services.o
+ENGINE_OBJECT_RUNTIME_SOURCE := $(BUILD_DIR)/engine_original_object_runtime.c
+ENGINE_OBJECT_RUNTIME_OBJECT := $(BUILD_DIR)/engine_original_object_runtime.o
+ENGINE_EFFECT_RUNTIME_SOURCE := $(BUILD_DIR)/engine_original_effect_runtime.c
+ENGINE_EFFECT_RUNTIME_OBJECT := $(BUILD_DIR)/engine_original_effect_runtime.o
+SOURCES := src/psp/engine_player_test.c \
+	$(filter-out src/psp/engine_original_cut.c,$(ENGINE_PLAYER_CONTROL_SOURCES)) \
+	src/ps2/veronica/prog/cut.c src/ps2/veronica/prog/ps2_event.c \
+	$(ENGINE_CAMERA_SERVICES_OBJECT) $(ENGINE_OBJECT_RUNTIME_OBJECT) \
+	$(ENGINE_EFFECT_RUNTIME_OBJECT) \
+	src/psp/engine_original_matrix_cpu.c
 else ifneq ($(BUILD_PROFILE),viewer)
 $(error Unknown BUILD_PROFILE '$(BUILD_PROFILE)')
 endif
@@ -88,7 +140,7 @@ endif
 OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SOURCES))
 DEPS := $(OBJS:.o=.d)
 
-ifeq ($(BUILD_PROFILE),engine-player-test)
+ifneq ($(filter engine-player-test engine-player-matrix-test engine-player-control-test,$(BUILD_PROFILE)),)
 ENGINE_PLAYER_OBJECTS := $(OBJS)
 OBJS := $(BUILD_DIR)/engine-player-core.o
 DEPS := $(ENGINE_PLAYER_OBJECTS:.o=.d)
@@ -107,6 +159,10 @@ else ifeq ($(BUILD_PROFILE),engine-dispatch-test)
 PSP_EBOOT_TITLE := RECVX Original Task Dispatch Test
 else ifeq ($(BUILD_PROFILE),engine-player-test)
 PSP_EBOOT_TITLE := RECVX Package 4a Original Player Test
+else ifeq ($(BUILD_PROFILE),engine-player-matrix-test)
+PSP_EBOOT_TITLE := RECVX Package 4 Original Camera Cut Test
+else ifeq ($(BUILD_PROFILE),engine-player-control-test)
+PSP_EBOOT_TITLE := RECVX Package 4 Original Game Callback Test
 endif
 PSP_EBOOT_ICON := src/psp/EBOOT/ICON0.png
 PSP_EBOOT_PIC1 := src/psp/EBOOT/PIC0.png
@@ -114,7 +170,7 @@ PSP_EBOOT_SND0 := src/psp/EBOOT/SND0.at3
 EXTRA_TARGETS := $(PSP_EBOOT)
 EXTRA_CLEAN := $(DEPS) $(TARGET).map
 
-.PHONY: psp bootstrap engine-event-test engine-event-test-assets engine-64 engine-64-assets engine-dispatch-test engine-dispatch-test-assets engine-player-test engine-player-test-assets
+.PHONY: psp bootstrap engine-event-test engine-event-test-assets engine-64 engine-64-assets engine-dispatch-test engine-dispatch-test-assets engine-player-test engine-player-test-assets engine-player-matrix-test engine-player-matrix-test-assets engine-player-control-test engine-player-control-test-assets
 psp bootstrap: all
 
 engine-event-test:
@@ -142,9 +198,50 @@ engine-player-test-assets:
 	$(MAKE) BUILD_PROFILE=engine-player-test assets ISO="$(ISO)" ROOM=RM_0010.RDX
 	$(MAKE) BUILD_PROFILE=engine-player-test player-assets ISO="$(ISO)" SYSTEM_EFFECT_ENTRY=1
 
+engine-player-matrix-test:
+	$(MAKE) BUILD_PROFILE=engine-player-matrix-test all
+
+engine-player-matrix-test-assets:
+	$(MAKE) BUILD_PROFILE=engine-player-matrix-test assets ISO="$(ISO)" ROOM=RM_0010.RDX
+	$(MAKE) BUILD_PROFILE=engine-player-matrix-test player-assets ISO="$(ISO)" SYSTEM_EFFECT_ENTRY=1
+
+engine-player-control-test:
+	$(MAKE) BUILD_PROFILE=engine-player-control-test all
+
+engine-player-control-test-assets:
+	$(MAKE) BUILD_PROFILE=engine-player-control-test assets ISO="$(ISO)" ROOM=RM_0010.RDX
+	$(MAKE) BUILD_PROFILE=engine-player-control-test player-assets ISO="$(ISO)" SYSTEM_EFFECT_ENTRY=1
+
 $(BUILD_DIR)/%.o: %.c Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+ifneq ($(strip $(ENGINE_CAMERA_SERVICES_SOURCE)),)
+$(ENGINE_CAMERA_SERVICES_SOURCE): tools/extract_original_camera_services.py src/ps2/veronica/prog/event.c
+	python3 $< src/ps2/veronica/prog/event.c $@
+
+$(ENGINE_CAMERA_SERVICES_OBJECT): $(ENGINE_CAMERA_SERVICES_SOURCE) Makefile
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+endif
+
+ifneq ($(strip $(ENGINE_OBJECT_RUNTIME_SOURCE)),)
+$(ENGINE_OBJECT_RUNTIME_SOURCE): tools/extract_original_object_runtime.py src/ps2/veronica/prog/objitm.c
+	python3 $< src/ps2/veronica/prog/objitm.c $@
+
+$(ENGINE_OBJECT_RUNTIME_OBJECT): $(ENGINE_OBJECT_RUNTIME_SOURCE) Makefile
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+endif
+
+ifneq ($(strip $(ENGINE_EFFECT_RUNTIME_SOURCE)),)
+$(ENGINE_EFFECT_RUNTIME_SOURCE): tools/extract_original_effect_runtime.py src/ps2/veronica/prog/effect.c src/ps2/veronica/prog/effsub1.c
+	python3 $< src/ps2/veronica/prog/effect.c src/ps2/veronica/prog/effsub1.c $@
+
+$(ENGINE_EFFECT_RUNTIME_OBJECT): $(ENGINE_EFFECT_RUNTIME_SOURCE) Makefile
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+endif
 
 $(BUILD_DIR):
 	mkdir -p $@
@@ -190,17 +287,25 @@ HOST_ENGINE_PACER_TEST := build/host/engine-pacer-test
 HOST_ORIGINAL_CLOCK_TEST := build/host/original-clock-test
 HOST_ENGINE_PAD_TEST := build/host/engine-pad-adapter-test
 HOST_ENGINE_OBJECT_TEST := build/host/engine-original-object-test
+HOST_ENGINE_MATRIX_TEST := build/host/engine-original-matrix-test
+HOST_ENGINE_CAMERA_TEST := build/host/engine-original-camera-test
+HOST_ENGINE_CUT_TEST := build/host/engine-original-cut-test
+HOST_ENGINE_COLLISION_TEST := build/host/engine-original-collision-test
+HOST_ENGINE_SPLINE_TEST := build/host/engine-original-spline-test
 HOST_FLAGS := -std=c11 -O1 -g -Wall -Wextra -Werror -Iinclude -Iinclude/ps2/veronica/prog
 HOST_EVENT_FLAGS := $(HOST_FLAGS) -fsigned-char -D__PSP__ -DRECVX_EVENT_CORE_HOST_TEST -DRECVX_EVENT_CORE_TEST -idirafter include/recvx-decomp-katana/KATANA/Include
+HOST_ORIGINAL_ENGINE_FLAGS := $(HOST_FLAGS) -fsigned-char -D__PSP__ -idirafter include/recvx-decomp-katana/KATANA/Include
 HOST_HEADERS := include/psp/abi.h include/psp/ninja_math.h include/psp/timing.h include/psp/input.h include/psp/game_tasks.h include/psp/services.h include/psp/event_data.h include/psp/engine_event_core.h include/psp/engine_event_test.h include/psp/engine_event_runtime.h include/psp/sha256.h include/psp/file.h include/psp/expand.h include/psp/selftest.h include/psp/room.h include/psp/scene.h include/psp/mesh.h include/psp/texture.h include/psp/player.h include/psp/player_asset.h include/psp/actors.h include/psp/legacy_types.h include/psp/live_task_dispatch.h include/psp/engine_pacer.h include/psp/original_clock.h \
 	include/ps2/veronica/prog/expand.h include/ps2/veronica/prog/flag.h \
 	include/ps2/veronica/prog/ps2_NaMem.h include/ps2/veronica/prog/override_katana.h \
 	include/ps2/veronica/prog/event.h include/ps2/veronica/prog/main.h \
 	include/ps2/veronica/prog/types.h include/ps2/veronica/prog/event_dispatch_table.inc \
-	include/psp/engine_room_owner.h include/psp/engine_pad_adapter.h
+	include/psp/engine_room_owner.h include/psp/engine_pad_adapter.h \
+	include/psp/engine_original_matrix.h include/psp/engine_original_fault.h \
+	include/psp/engine_original_view.h
 
 .PHONY: test
-test: $(HOST_TEST) $(HOST_SHARED) $(HOST_EVENT_TEST) $(HOST_ROOM_OWNER_TEST) $(HOST_TASK_DISPATCH_TEST) $(HOST_ENGINE_PACER_TEST) $(HOST_ORIGINAL_CLOCK_TEST) $(HOST_ENGINE_PAD_TEST) $(HOST_ENGINE_OBJECT_TEST)
+test: $(HOST_TEST) $(HOST_SHARED) $(HOST_EVENT_TEST) $(HOST_ROOM_OWNER_TEST) $(HOST_TASK_DISPATCH_TEST) $(HOST_ENGINE_PACER_TEST) $(HOST_ORIGINAL_CLOCK_TEST) $(HOST_ENGINE_PAD_TEST) $(HOST_ENGINE_OBJECT_TEST) $(HOST_ENGINE_MATRIX_TEST) $(HOST_ENGINE_CAMERA_TEST) $(HOST_ENGINE_CUT_TEST) $(HOST_ENGINE_COLLISION_TEST) $(HOST_ENGINE_SPLINE_TEST)
 # LeakSanitizer cannot run under this environment's process tracing. The
 # address/undefined-behavior checks still run, and test allocations are freed.
 	ASAN_OPTIONS=detect_leaks=0 $(HOST_TEST)
@@ -212,6 +317,11 @@ test: $(HOST_TEST) $(HOST_SHARED) $(HOST_EVENT_TEST) $(HOST_ROOM_OWNER_TEST) $(H
 	$(HOST_ORIGINAL_CLOCK_TEST)
 	$(HOST_ENGINE_PAD_TEST)
 	$(HOST_ENGINE_OBJECT_TEST)
+	ASAN_OPTIONS=detect_leaks=0 $(HOST_ENGINE_MATRIX_TEST)
+	ASAN_OPTIONS=detect_leaks=0 $(HOST_ENGINE_CAMERA_TEST)
+	ASAN_OPTIONS=detect_leaks=0 $(HOST_ENGINE_CUT_TEST)
+	ASAN_OPTIONS=detect_leaks=0 $(HOST_ENGINE_COLLISION_TEST)
+	ASAN_OPTIONS=detect_leaks=0 $(HOST_ENGINE_SPLINE_TEST)
 	@if [ -f build/psp/data/rooms/RM_0010.meta ]; then \
 		$(HOST_ROOM_OWNER_TEST) build/psp/data; \
 	else \
@@ -264,6 +374,47 @@ $(HOST_ENGINE_OBJECT_TEST): tests/engine_original_object_test.c src/psp/engine_o
 	$(HOST_CC) $(HOST_FLAGS) -fsigned-char -D__PSP__ \
 		-idirafter include/recvx-decomp-katana/KATANA/Include \
 		$< src/psp/engine_original_object.c -o $@
+
+$(HOST_ENGINE_MATRIX_TEST): tests/engine_original_matrix_test.c src/psp/engine_original_matrix_cpu.c src/psp/engine_original_math.c src/psp/engine_original_fault.c $(HOST_HEADERS) Makefile
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -fsanitize=address,undefined \
+		-fno-omit-frame-pointer $< src/psp/engine_original_matrix_cpu.c \
+		src/psp/engine_original_math.c src/psp/engine_original_fault.c -lm -o $@
+
+$(HOST_ENGINE_CAMERA_TEST): tests/engine_original_camera_test.c src/ps2/veronica/prog/camera.c src/psp/engine_original_matrix_cpu.c src/psp/engine_original_view.c src/psp/engine_original_memory.c src/psp/engine_original_math.c src/psp/engine_original_fault.c $(HOST_HEADERS) Makefile
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_ENGINE_ORIGINAL_MATRIX_CPU \
+		-ffunction-sections -fdata-sections \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		tests/engine_original_camera_test.c src/ps2/veronica/prog/camera.c \
+		src/psp/engine_original_matrix_cpu.c src/psp/engine_original_view.c \
+		src/psp/engine_original_memory.c src/psp/engine_original_math.c \
+		src/psp/engine_original_fault.c -Wl,--gc-sections -lm -o $@
+
+$(HOST_ENGINE_CUT_TEST): tests/engine_original_cut_test.c src/ps2/veronica/prog/cut.c $(HOST_HEADERS) Makefile
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -Wno-error \
+		-ffunction-sections -fdata-sections \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		tests/engine_original_cut_test.c src/ps2/veronica/prog/cut.c \
+		-Wl,--gc-sections -lm -o $@
+
+$(HOST_ENGINE_COLLISION_TEST): tests/engine_original_collision_test.c src/ps2/veronica/prog/hitchk.c src/ps2/veronica/prog/ps2_NaColi.c src/psp/engine_original_math.c src/psp/engine_original_fault.c $(HOST_HEADERS) Makefile
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -Wno-error \
+		-ffunction-sections -fdata-sections \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		tests/engine_original_collision_test.c \
+		src/ps2/veronica/prog/hitchk.c src/ps2/veronica/prog/ps2_NaColi.c \
+		src/psp/engine_original_math.c src/psp/engine_original_fault.c \
+		-Wl,--gc-sections -lm -o $@
+
+$(HOST_ENGINE_SPLINE_TEST): tests/engine_original_spline_test.c src/psp/engine_original_math.c src/psp/engine_original_fault.c $(HOST_HEADERS) Makefile
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -O1 -g -Wall -Wextra -Werror \
+		-fsanitize=address,undefined -fno-omit-frame-pointer $< \
+		src/psp/engine_original_math.c src/psp/engine_original_fault.c \
+		-Wl,--gc-sections -lm -o $@
 
 ISO ?= recvx.iso
 ROOM ?=

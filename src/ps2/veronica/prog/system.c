@@ -35,6 +35,9 @@
 #include "../../../ps2/veronica/prog/sub1.h"
 #include "../../../ps2/veronica/prog/sync.h"
 #include "../../../ps2/veronica/prog/main.h"
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+#include "psp/engine_original_fault.h"
+#endif
 
 #include <string.h>
 #if defined(__PSP__)
@@ -465,6 +468,14 @@ void bhSysCallGame()
 }
 
 // 99.69% matching
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+void bhCheckSubTask()
+{
+    if (sys->cb_flg != 0 || (sys->pad_ps & 0xE000) != 0 ||
+        (sys->ss_flg & 0x80000000))
+        recvxEngineOriginalFaultSet("pause or system-menu callback is outside locomotion test");
+}
+#else
 void bhCheckSubTask()
 {
     if ((!(sys->ss_flg & 0x80000000)) && (!(sys->st_flg & 0x1C040008)) && (!(sys->cb_flg & 0x3)) && ((sys->ts_flg & 0x1000)))
@@ -561,7 +572,8 @@ void bhCheckSubTask()
             return; 
         }
     }
-} 
+}
+#endif 
 
 // 100% matching! 
 void bhSysCallEvent()

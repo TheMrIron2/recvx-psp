@@ -16,6 +16,9 @@
 #include "psp/renderer.h"
 #include "psp/ninja_math.h"
 #include "psp/timing.h"
+#ifdef RECVX_ENGINE_PLAYER_TEST
+#include "psp/engine_original_view.h"
+#endif
 
 #define SCREEN_WIDTH 480
 #define SCREEN_HEIGHT 272
@@ -43,6 +46,9 @@ static int camera_cut_initialized;
 static int fixed_camera_attribute_initialized;
 static int player_mode;
 static int engine_snapshot_mode;
+static int engine_original_camera_active;
+static float engine_original_camera_fov;
+static ScePspFMatrix4 engine_original_camera_view;
 static const RecvxRoomMesh *player_model_mesh;
 static RecvxRoomMesh *player_actor_mesh;
 static RecvxRoomActors *room_actor_set;
@@ -73,6 +79,9 @@ static uint32_t fixed_camera_transition_duration;
 static int fixed_camera_pose_initialized;
 static int fixed_camera_player_focus_initialized;
 static int fixed_camera_transition_active;
+
+_Static_assert(sizeof(ScePspFMatrix4) == sizeof(float) * 16,
+               "original camera and GU matrix sizes must match");
 
 typedef struct RecvxRendererFrameState {
     const RecvxScene *scene;
@@ -940,6 +949,7 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
     display_mode = mesh && mesh->vertices ? (textures && textures->count ? 4 : 0) : 3;
     player_mode = player != NULL;
     engine_snapshot_mode = 0;
+    engine_original_camera_active = 0;
     player_model_mesh = actor_mesh;
     player_actor_mesh = actor_mesh;
     player_actor_assets = actor_assets;
@@ -1296,6 +1306,7 @@ void recvxRendererUpdate(const RecvxScene *scene, RecvxRoomMesh *mesh,
     frame_state.far_plane = far_plane;
     frame_state.update_cost_us = recvxPlatformTimeUs() - now;
     engine_snapshot_mode = 0;
+    engine_original_camera_active = 0;
 }
 
 int recvxRendererUpdateEngineSnapshot(
@@ -1315,6 +1326,7 @@ int recvxRendererUpdateEngineSnapshot(
         motion_slot >= player_actor_assets->motion_count)
         return -1;
     engine_snapshot_mode = 1;
+    engine_original_camera_active = 0;
     motion = &player_actor_assets->motions[motion_slot];
     if (!motion->present || motion_frame >= motion->frame_count ||
         recvxPosePlayerMesh(&player_actor_assets->models[0], motion,
@@ -1370,6 +1382,38 @@ int recvxRendererUpdateEngineSnapshot(
     return 0;
 }
 
+int recvxRendererUseOriginalCamera(const float view_matrix[16],
+                                   float projection_distance)
+{
+    unsigned int index;
+    float vertical_fov;
+    float gu_view[16];
+
+    if (!engine_snapshot_mode || view_matrix == NULL ||
+        !isfinite(projection_distance) || projection_distance <= 0.0f)
+        return -1;
+    for (index = 0; index < 16; ++index) {
+        if (!isfinite(view_matrix[index]))
+            return -2;
+    }
+    vertical_fov = 2.0f * atanf((SCREEN_HEIGHT * 0.5f) /
+                               projection_distance) *
+                   (180.0f / 3.14159265358979323846f);
+    if (!isfinite(vertical_fov) || vertical_fov <= 0.0f ||
+        vertical_fov >= 180.0f)
+        return -3;
+    memcpy(gu_view, view_matrix, sizeof(gu_view));
+    for (index = 0; index < 4; ++index) {
+        gu_view[index * 4 + 1] = -gu_view[index * 4 + 1];
+        gu_view[index * 4 + 2] = -gu_view[index * 4 + 2];
+    }
+    memcpy(&engine_original_camera_view, gu_view,
+           sizeof(engine_original_camera_view));
+    engine_original_camera_fov = vertical_fov;
+    engine_original_camera_active = 1;
+    return 0;
+}
+
 void recvxRendererDraw(int wait_for_vblank)
 {
     const RecvxScene *scene = frame_state.scene;
@@ -1384,23 +1428,47 @@ void recvxRendererDraw(int wait_for_vblank)
     ScePspFVector3 up = frame_state.up;
     float near_plane = frame_state.near_plane;
     float far_plane = frame_state.far_plane;
+#ifdef RECVX_ENGINE_PLAYER_TEST
+    Float original_near_plane, original_far_plane;
+#endif
     uint64_t submit_started = recvxPlatformTimeUs();
 
     if (!initialized || scene == NULL)
         return;
 
+#ifdef RECVX_ENGINE_PLAYER_TEST
+    if (engine_original_camera_active) {
+        recvxEngineOriginalViewClipPlanes(&original_near_plane,
+                                          &original_far_plane);
+        near_plane = -original_near_plane;
+        far_plane = -original_far_plane;
+    }
+#endif
+
     sceGuStart(GU_DIRECT, command_list);
+#ifdef RECVX_ENGINE_PLAYER_TEST
+    sceGuClearColor(engine_original_camera_active ?
+                        recvxEngineOriginalViewBackgroundColor() :
+                        0xff18120e);
+#else
     sceGuClearColor(0xff18120e);
+#endif
     sceGuClearDepth(0);
     sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
     sceGumMatrixMode(GU_PROJECTION);
     sceGumLoadIdentity();
-    sceGumPerspective(player_mode && fixed_camera_active ? fixed_camera_fov : 50.0f,
+    sceGumPerspective(engine_original_camera_active ?
+                          engine_original_camera_fov :
+                          player_mode && fixed_camera_active ?
+                              fixed_camera_fov : 50.0f,
                       (float)SCREEN_WIDTH / SCREEN_HEIGHT,
                       near_plane, far_plane);
     sceGumMatrixMode(GU_VIEW);
     sceGumLoadIdentity();
-    sceGumLookAt(&eye, &center, &up);
+    if (engine_original_camera_active)
+        sceGumLoadMatrix(&engine_original_camera_view);
+    else
+        sceGumLookAt(&eye, &center, &up);
     sceGumMatrixMode(GU_MODEL);
     sceGumLoadIdentity();
     if (display_mode == 4 && mesh && textures) {

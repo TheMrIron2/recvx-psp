@@ -21,6 +21,9 @@
 #include "../../../ps2/veronica/prog/sdfunc.h"
 #include "../../../ps2/veronica/prog/sub1.h"
 #include "../../../ps2/veronica/prog/weapon.h"
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+#include "psp/engine_original_fault.h"
+#endif
 
 ETTY_WORK lkmtab[2] = 
 {
@@ -1333,6 +1336,12 @@ void bhCheckEvtTimer()
     }
 }
 
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+void (*bhCtrPly_mode0[9])() = {
+    [0] = bhSetPlayer,
+    [1] = bhCPM0_action
+};
+#else
 void (*bhCtrPly_mode0[9])() = 
 {
     bhSetPlayer,
@@ -1345,6 +1354,7 @@ void (*bhCtrPly_mode0[9])() =
     bhCPM0_event,
     bhCPM0_nothing
 }; 
+#endif
 
 #pragma divbyzerocheck on 
 
@@ -1417,6 +1427,13 @@ void bhControlPlayer()
             }
         }
         
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+        if ((unsigned int)plp->mode0 >= 9 ||
+            bhCtrPly_mode0[plp->mode0] == NULL) {
+            recvxEngineOriginalFaultSet("unsupported player mode0");
+            return;
+        }
+#endif
         bhCtrPly_mode0[plp->mode0]();
         
         if ((plp->flg & 0x100000)) 
@@ -1809,6 +1826,13 @@ void bhCPM0_action()
         bhControlPlayerPad();
     }
     
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+    if (plp->mode1 != 0) {
+        recvxEngineOriginalFaultSet("player attack mode is outside locomotion test");
+        return;
+    }
+    bhCPM1_act_bas();
+#else
     if (plp->mode1 == 0) 
     {
         bhCPM1_act_bas();
@@ -1817,6 +1841,7 @@ void bhCPM0_action()
     {
         bhCPM1_act_atk();
     }
+#endif
 }
 
 // 100% matching!
@@ -1995,6 +2020,29 @@ void bhCPM1_act_bas()
     
     p = plp;
     
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+    switch (plp->mode2) {
+    case 0: bhCPM2_act_std(); break;
+    case 1: p->ay -= (int)(182.04445f * (7.2f * ((EXP_WORK*)plp->exp0)->rtspd));
+            plp->mtn_add = -65536; bhCPM2_act_srt(); break;
+    case 2: p->ay += (int)(182.04445f * (7.2f * ((EXP_WORK*)plp->exp0)->rtspd));
+            plp->mtn_add = 65536; bhCPM2_act_srt(); break;
+    case 3: bhCPM2_act_wlk(); break;
+    case 4: p->ay -= (int)(182.04445f * (4.0f * ((EXP_WORK*)plp->exp0)->rtspd));
+            bhCPM2_act_wlk(); break;
+    case 5: p->ay += (int)(182.04445f * (4.0f * ((EXP_WORK*)plp->exp0)->rtspd));
+            bhCPM2_act_wlk(); break;
+    case 6: bhCPM2_act_run(); break;
+    case 9: bhCPM2_act_bak(); break;
+    case 10: p->ay -= (int)(182.04445f * (4.0f * ((EXP_WORK*)plp->exp0)->rtspd));
+             bhCPM2_act_bak(); break;
+    case 11: p->ay += (int)(182.04445f * (4.0f * ((EXP_WORK*)plp->exp0)->rtspd));
+             bhCPM2_act_bak(); break;
+    case 12: bhCPM2_act_bk2(); break;
+    default: recvxEngineOriginalFaultSet("player action is outside locomotion test");
+             break;
+    }
+#else
     switch (plp->mode2) 
     {
     case 0:           
@@ -2077,6 +2125,7 @@ void bhCPM1_act_bas()
         bhCPM2_act_rpsh();
         break;
     }
+#endif
     
     if (plp->mode2 != 3) 
     {

@@ -35,17 +35,23 @@ void recvxEnginePadAdapterResetFault(void)
 }
 
 void njFogDisable(void) { mark_pad_dependency("njFogDisable"); }
+#ifndef RECVX_ENGINE_GAME_CALLBACK_TEST
 void njSetBackColor(Uint32 a, Uint32 b, Uint32 c)
 {
     (void)a; (void)b; (void)c;
     mark_pad_dependency("njSetBackColor");
 }
+#endif
+#ifndef RECVX_ENGINE_GAME_CALLBACK_TEST
 void bhReturnTitle(void) { mark_pad_dependency("bhReturnTitle"); }
+#endif
+#ifndef RECVX_ENGINE_GAME_CALLBACK_TEST
 void bhSetScreenFade(unsigned int a, float b)
 {
     (void)a; (void)b;
     mark_pad_dependency("bhSetScreenFade");
 }
+#endif
 void RequestAllStopSoundEx(int a, int b, int c)
 {
     (void)a; (void)b; (void)c;
@@ -63,9 +69,11 @@ float bhMesLen(unsigned short *text)
     mark_pad_dependency("bhMesLen");
     return 0.0f;
 }
+#ifndef RECVX_ENGINE_GAME_CALLBACK_TEST
 Float njSin(Angle angle)
 {
     (void)angle;
     mark_pad_dependency("njSin");
     return 0.0f;
 }
+#endif

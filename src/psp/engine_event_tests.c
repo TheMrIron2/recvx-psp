@@ -141,6 +141,91 @@ fail:
     return -1;
 }
 
+static int test_scenario_runner(RecvxEngineEventTestReport *report)
+{
+    unsigned char section[25];
+    unsigned char *body = section + 12;
+
+    memset(section, 0, sizeof(section));
+    write_u32(section, 12);
+    write_u32(section + 4, 20);
+    write_u32(section + 8, 24);
+    write_flag_set(body, 0);
+    body[6] = 0;
+    body[12] = 0;
+    body[13] = 0;
+    recvxEngineEventRuntimeReset();
+    if (!expect(report, "scenario section bind",
+                bind_fixture(section, sizeof(section)) == 0,
+                "valid SCD0/SCD1/event table was rejected"))
+        goto fail;
+    bhCetask = &bhEtask[0];
+    if (!expect(report, "original scenario runner",
+                recvxEventCoreRunScenario(12) == 0,
+                "bounded SCD0 command stream faulted"))
+        goto fail;
+    if (!expect(report, "scenario flag write and terminus",
+                sys->ky_flg[0] == 0x80000000u && bhScePtr == body + 6 &&
+                bhIfelFlg == 0,
+                "scenario did not execute original bhSet/bhEnd state"))
+        goto fail;
+    if (!expect(report, "scenario does not advance event timer",
+                Event_T_timer == 0 &&
+                recvxEventCoreFlagWriteCount() == 1 &&
+                recvxEventCoreInstructionCount() == 2,
+                "scenario setup changed task timer or command counts"))
+        goto fail;
+    if (!expect(report, "SCD1 scenario span",
+                recvxEventCoreRunScenario(20) == 0 &&
+                bhScePtr == body + 8 && Event_T_timer == 0,
+                "bounded SCD1 terminator did not preserve timer"))
+        goto fail;
+
+    memset(section, 0, sizeof(section));
+    write_u32(section, 12);
+    write_u32(section + 4, 15);
+    write_u32(section + 8, 16);
+    body = section + 12;
+    body[0] = 5;
+    body[1] = 2;
+    recvxEngineEventRuntimeReset();
+    if (!expect(report, "truncated scenario section bind",
+                bind_fixture(section, 17) == 0,
+                "truncated SCD0 fixture was rejected before execution"))
+        goto fail;
+    if (!expect(report, "truncated scenario operand fault",
+                recvxEventCoreRunScenario(12) != 0 &&
+                recvxEventCoreGetFault()->code == RECVX_EVENT_FAULT_TRUNCATED &&
+                recvxEventCoreGetFault()->section_pc == 12 &&
+                recvxEventCoreGetFault()->opcode == 5,
+                "truncated scenario operand was not reported at its opcode"))
+        goto fail;
+
+    memset(section, 0, sizeof(section));
+    write_u32(section, 12);
+    write_u32(section + 4, 13);
+    write_u32(section + 8, 14);
+    section[12] = 42;
+    recvxEngineEventRuntimeReset();
+    if (!expect(report, "unsupported scenario section bind",
+                bind_fixture(section, 15) == 0,
+                "valid unsupported-opcode fixture was rejected at bind"))
+        goto fail;
+    if (!expect(report, "unsupported scenario opcode fault",
+                recvxEventCoreRunScenario(12) != 0 &&
+                recvxEventCoreGetFault()->code == RECVX_EVENT_FAULT_UNSUPPORTED &&
+                recvxEventCoreGetFault()->section_pc == 12 &&
+                recvxEventCoreGetFault()->opcode == 42,
+                "unsupported scenario opcode was not reported precisely"))
+        goto fail;
+    recvxEngineEventRuntimeReset();
+    return 0;
+
+fail:
+    recvxEngineEventRuntimeReset();
+    return -1;
+}
+
 static int test_unaligned_event_bytes(RecvxEngineEventTestReport *report)
 {
     unsigned char storage[32];
@@ -623,7 +708,8 @@ int recvxEngineEventTestsRun(const void *expanded_room, size_t room_size,
         test_disabled_scheduler(report) != 0 ||
         test_unaligned_event_bytes(report) != 0 ||
         test_sleep_and_task_order(report) != 0 ||
-        test_yield(report) != 0 || test_faults(report) != 0)
+        test_yield(report) != 0 || test_faults(report) != 0 ||
+        test_scenario_runner(report) != 0)
         return -1;
     if (test_original_event(expanded_room, room_size, report) != 0)
         return -1;

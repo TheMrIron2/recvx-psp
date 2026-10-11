@@ -32,6 +32,8 @@ int recvxRendererUpdateEngineSnapshot(
     const RecvxTextureSet *textures, RecvxRoomActors *room_actors,
     const RecvxPlayer *player, const char *room_name,
     uint32_t motion_slot, uint32_t motion_frame);
+int recvxRendererUseOriginalCamera(const float view_matrix[16],
+                                   float projection_distance);
 void recvxRendererDraw(int wait_for_vblank);
 void recvxRendererSetOverlay(const char *text);
 void recvxRendererStop(void);

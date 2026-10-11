@@ -28,6 +28,7 @@ typedef struct RecvxEventCoreFault {
 void recvxEventCoreReset(void);
 int recvxEventCoreBindSection(const void *bytes, size_t size);
 int recvxEventCoreUnbindSection(void);
+int recvxEventCoreRunScenario(uint32_t section_offset);
 const RecvxEventCoreFault *recvxEventCoreGetFault(void);
 const char *recvxEventCoreFaultName(enum RecvxEventCoreFaultCode code);
 uint32_t recvxEventCoreTaskPc(unsigned int task);

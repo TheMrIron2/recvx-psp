@@ -38,6 +38,7 @@ void npCnkFlatOff(NJS_CNK_OBJECT *objp)
         npCnkFlatOff(objp->sibling);
 }
 
+#ifndef RECVX_ENGINE_ORIGINAL_MATRIX_CPU
 static void gum_model_mode(void)
 {
     sceGumMatrixMode(GU_MODEL);
@@ -117,6 +118,101 @@ void njTranslate(NJS_MATRIX *matrix, Float x, Float y, Float z)
     sceGumTranslate(&offset);
 }
 
+static void rotate_matrix(NJS_MATRIX *matrix, int axis, Angle angle)
+{
+    float radians = (float)((uint32_t)angle & 0xffffu) *
+                    (6.2831853071795864769f / 65536.0f);
+    if (matrix != NULL) {
+        NJS_MATRIX current;
+        gum_model_mode();
+        sceGumPushMatrix();
+        sceGumLoadMatrix((const ScePspFMatrix4 *)matrix);
+        if (axis == 0)
+            sceGumRotateX(radians);
+        else if (axis == 1)
+            sceGumRotateY(radians);
+        else
+            sceGumRotateZ(radians);
+        sceGumStoreMatrix((ScePspFMatrix4 *)current);
+        sceGumPopMatrix();
+        memcpy(matrix, current, sizeof(current));
+        return;
+    }
+    gum_model_mode();
+    if (axis == 0)
+        sceGumRotateX(radians);
+    else if (axis == 1)
+        sceGumRotateY(radians);
+    else
+        sceGumRotateZ(radians);
+}
+
+void njRotateX(NJS_MATRIX *matrix, Angle angle)
+{
+    rotate_matrix(matrix, 0, angle);
+}
+
+void njRotateY(NJS_MATRIX *matrix, Angle angle)
+{
+    rotate_matrix(matrix, 1, angle);
+}
+
+void njRotateZ(NJS_MATRIX *matrix, Angle angle)
+{
+    rotate_matrix(matrix, 2, angle);
+}
+
+void njTranslateV(NJS_MATRIX *matrix, NJS_VECTOR *offset)
+{
+    if (offset == NULL)
+        return;
+    njTranslate(matrix, offset->x, offset->y, offset->z);
+}
+
+void njScale(NJS_MATRIX *matrix, Float x, Float y, Float z)
+{
+    ScePspFVector3 scale = {x, y, z};
+    if (matrix != NULL) {
+        NJS_MATRIX current;
+        gum_model_mode();
+        sceGumPushMatrix();
+        sceGumLoadMatrix((const ScePspFMatrix4 *)matrix);
+        sceGumScale(&scale);
+        sceGumStoreMatrix((ScePspFMatrix4 *)current);
+        sceGumPopMatrix();
+        memcpy(matrix, current, sizeof(current));
+        return;
+    }
+    gum_model_mode();
+    sceGumScale(&scale);
+}
+
+void njScaleV(NJS_MATRIX *matrix, NJS_VECTOR *scale)
+{
+    if (scale == NULL)
+        return;
+    njScale(matrix, scale->x, scale->y, scale->z);
+}
+
+void njMultiMatrix(NJS_MATRIX *destination, NJS_MATRIX *source)
+{
+    if (source == NULL)
+        return;
+    if (destination != NULL) {
+        NJS_MATRIX current;
+        gum_model_mode();
+        sceGumPushMatrix();
+        sceGumLoadMatrix((const ScePspFMatrix4 *)destination);
+        sceGumMultMatrix((const ScePspFMatrix4 *)source);
+        sceGumStoreMatrix((ScePspFMatrix4 *)current);
+        sceGumPopMatrix();
+        memcpy(destination, current, sizeof(current));
+        return;
+    }
+    gum_model_mode();
+    sceGumMultMatrix((const ScePspFMatrix4 *)source);
+}
+
 void njRotateXYZ(NJS_MATRIX *matrix, Angle angle_x, Angle angle_y, Angle angle_z)
 {
     const float scale = 6.2831853071795864769f / 65536.0f;
@@ -167,6 +263,22 @@ static void calculate_point(const float *matrix, const float source[4],
                            current[12 + row] * source[3];
 }
 
+void njCalcVector(NJS_MATRIX *matrix, NJS_VECTOR *source,
+                  NJS_VECTOR *destination)
+{
+    float input[4], output[4];
+    if (source == NULL || destination == NULL)
+        return;
+    input[0] = source->x;
+    input[1] = source->y;
+    input[2] = source->z;
+    input[3] = 0.0f;
+    calculate_point(matrix != NULL ? *matrix : NULL, input, output);
+    destination->x = output[0];
+    destination->y = output[1];
+    destination->z = output[2];
+}
+
 void njCalcPoint(NJS_MATRIX *matrix, NJS_POINT3 *source, NJS_POINT3 *destination)
 {
     float input[4] = {source->x, source->y, source->z, 1.0f};
@@ -187,6 +299,7 @@ void njCalcPoint4(NJS_MATRIX *matrix, NJS_POINT4 *source, NJS_POINT4 *destinatio
     destination->z = output[2];
     destination->w = output[3];
 }
+#endif
 
 // Extracted from original njplus.c skin conversion
 void npSkinConvPreparation(NJS_CNK_OBJECT *objp)

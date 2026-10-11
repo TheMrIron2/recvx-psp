@@ -21,8 +21,6 @@ enum {
     DS_SQUARE = 0x8000
 };
 
-int pd_port = 0;
-
 static PDS_PERIPHERAL engine_peripheral;
 static uint32_t previous_raw_buttons;
 

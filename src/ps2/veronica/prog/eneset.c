@@ -1,4 +1,7 @@
 #include "../../../ps2/veronica/prog/eneset.h"
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+#include "psp/engine_original_fault.h"
+#endif
 #include "../../../ps2/veronica/prog/en01.h"
 #include "../../../ps2/veronica/prog/en02.h"
 #include "../../../ps2/veronica/prog/en03.h"
@@ -48,6 +51,13 @@
 
 typedef void (*JumpEnemy_proc)(BH_PWORK*);
 
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+JumpEnemy_proc bhJumpEnemy[100] = {
+#ifdef RECVX_ENGINE_ACTOR_EVENT_TEST
+    [67] = bhSubpl
+#endif
+};
+#else
 JumpEnemy_proc bhJumpEnemy[100] = 
 {
 	bhEne00,
@@ -151,6 +161,7 @@ JumpEnemy_proc bhJumpEnemy[100] =
 	bhSubpl,
 	bhSubpl
 };
+#endif
 CPCL En00CapColTab[5] =
 {
     { 0, 0,   35 },
@@ -343,6 +354,12 @@ void bhCheckEneWorkNum()
 // 100% matching!
 void bhControlEnemy()
 {
+#if defined(RECVX_ENGINE_GAME_CALLBACK_TEST) && !defined(RECVX_ENGINE_ACTOR_EVENT_TEST)
+    if (sys->sp_flg & 0x2)
+        recvxEngineOriginalFaultSet("RM_0010 actor callback is not active in locomotion profile");
+    plp->ofz = 0;
+    plp->ofx = 0;
+#else
     BH_PWORK* ep;
     unsigned int i;
     
@@ -369,10 +386,21 @@ void bhControlEnemy()
                 ep->ayb = ep->ay;
                 ep->azb = ep->az;
                 
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+                if ((unsigned int)ep->id >= 100 || bhJumpEnemy[ep->id] == NULL) {
+                    recvxEngineOriginalFaultSet("unsupported RM_0010 enemy handler");
+                    return;
+                }
+                if (ep->id > 90) {
+                    recvxEngineOriginalFaultSet("unsupported masked enemy handler");
+                    return;
+                }
+#else
                 if (ep->id > 90) 
                 {
                     bhControlMask(ep);
                 }
+#endif
                 
                 bhJumpEnemy[ep->id](ep);
                 
@@ -385,6 +413,7 @@ void bhControlEnemy()
             }
         }
     }
+#endif
 }
 
 // 98.23% matching (matches on GC)

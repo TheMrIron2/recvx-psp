@@ -234,6 +234,7 @@ static int run_engine_test(void)
     recvxRendererUpdate(&scene, NULL, NULL, NULL, NULL, NULL,
                         "Original task test", &neutral_input);
     recvxPlatformInputInit();
+    pd_port = 0;
     recvxEnginePadAdapterReset();
     recvxEnginePadAdapterResetFault();
     prepare_tasks();

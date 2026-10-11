@@ -233,7 +233,8 @@ int bhSetMemPvpTexture(NJS_TEXLIST *list, unsigned char *data, int offset)
         if (remaining - cursor < 8) {
             snprintf(texture_fault_detail, sizeof(texture_fault_detail),
                      "PVP chunk %08x size header truncated at +%u/%u bytes",
-                     code, (unsigned int)cursor, (unsigned int)remaining);
+                     (unsigned int)code, (unsigned int)cursor,
+                     (unsigned int)remaining);
             texture_fault = texture_fault_detail;
             return -1;
         }
