@@ -46,21 +46,6 @@ static int point_in_triangle(float x, float z, const float triangle[6])
              (c0 > 0 || c1 > 0 || c2 > 0));
 }
 
-static float segment_distance_squared(float x, float z, float ax, float az,
-                                      float bx, float bz)
-{
-    float dx = bx - ax, dz = bz - az;
-    float length = dx * dx + dz * dz;
-    float t = length > 0.0f ? ((x - ax) * dx + (z - az) * dz) / length : 0.0f;
-    float px, pz;
-    t = fmaxf(0.0f, fminf(1.0f, t));
-    px = ax + t * dx;
-    pz = az + t * dz;
-    dx = x - px;
-    dz = z - pz;
-    return dx * dx + dz * dz;
-}
-
 static void triangle_for_wall(const RecvxPlayerWall *wall, float triangle[6])
 {
     float x0 = fminf(wall->px, wall->px + wall->w);
@@ -91,18 +76,134 @@ static void triangle_for_wall(const RecvxPlayerWall *wall, float triangle[6])
     }
 }
 
-static int circle_intersects_triangle(float x, float z, float radius,
-                                      const float triangle[6])
+static int point_in_wall_quad(float x, float z, const float quad[8])
 {
-    float radius_squared = radius * radius;
-    if (point_in_triangle(x, z, triangle))
-        return 1;
-    return segment_distance_squared(x, z, triangle[0], triangle[1],
-                                    triangle[2], triangle[3]) <= radius_squared ||
-           segment_distance_squared(x, z, triangle[2], triangle[3],
-                                    triangle[4], triangle[5]) <= radius_squared ||
-           segment_distance_squared(x, z, triangle[4], triangle[5],
-                                    triangle[0], triangle[1]) <= radius_squared;
+    float slope0, slope1, delta_x, delta_z0, delta_z1, delta_z2, delta_z3;
+    float minimum, maximum, swap;
+    delta_x = quad[2] - quad[0];
+    delta_z0 = quad[3] - quad[1];
+    delta_z1 = quad[5] - quad[1];
+    delta_z2 = quad[7] - quad[3];
+    delta_z3 = quad[7] - quad[5];
+    if (z < quad[1] || z >= quad[7])
+        return 0;
+    slope0 = slope1 = 0.0f;
+    if (delta_x > 0.0f) {
+        if (delta_z1 != 0.0f)
+            slope0 = (quad[4] - quad[0]) / delta_z1;
+        if (delta_z0 != 0.0f)
+            slope1 = delta_x / delta_z0;
+    } else {
+        if (delta_z0 != 0.0f)
+            slope0 = delta_x / delta_z0;
+        if (delta_z1 != 0.0f)
+            slope1 = (quad[4] - quad[0]) / delta_z1;
+    }
+    if (z < quad[3]) {
+        minimum = quad[0] + slope0 * (z - quad[1]);
+        maximum = quad[0] + slope1 * (z - quad[1]);
+    } else if (z < quad[5]) {
+        if (delta_x > 0.0f) {
+            slope1 = delta_z2 != 0.0f ? (quad[6] - quad[2]) / delta_z2 : 0.0f;
+            minimum = quad[0] + slope0 * (z - quad[1]);
+            maximum = quad[2] + slope1 * (z - quad[3]);
+        } else {
+            slope0 = delta_z2 != 0.0f ? (quad[6] - quad[2]) / delta_z2 : 0.0f;
+            minimum = quad[2] + slope0 * (z - quad[3]);
+            maximum = quad[0] + slope1 * (z - quad[1]);
+        }
+    } else if (delta_x > 0.0f) {
+        slope0 = delta_z2 != 0.0f ? (quad[6] - quad[2]) / delta_z2 : 0.0f;
+        slope1 = delta_z3 != 0.0f ? (quad[6] - quad[4]) / delta_z3 : 0.0f;
+        minimum = quad[4] + slope1 * (z - quad[5]);
+        maximum = quad[2] + slope0 * (z - quad[3]);
+    } else {
+        slope0 = delta_z3 != 0.0f ? (quad[6] - quad[4]) / delta_z3 : 0.0f;
+        slope1 = delta_z2 != 0.0f ? (quad[6] - quad[2]) / delta_z2 : 0.0f;
+        minimum = quad[2] + slope1 * (z - quad[3]);
+        maximum = quad[4] + slope0 * (z - quad[5]);
+    }
+    if (minimum > maximum) {
+        swap = minimum;
+        minimum = maximum;
+        maximum = swap;
+    }
+    return minimum <= x && x < maximum;
+}
+
+static int point_in_wall_triangle(const RecvxPlayerWall *wall, float x, float z)
+{
+    float px = wall->px, pz = wall->pz, width = wall->w, depth = wall->d;
+    float radius = PLAYER_RADIUS, min_x, max_x, min_z, max_z;
+    float quad[8], slope, vertical_distance;
+    if (width > 0.0f) {
+        min_x = px;
+        max_x = radius + (min_x + width);
+    } else {
+        max_x = px;
+        min_x = (max_x + width) - radius;
+    }
+    if (depth > 0.0f) {
+        min_z = pz;
+        max_z = radius + (min_z + depth);
+    } else {
+        max_z = pz;
+        min_z = (max_z + depth) - radius;
+    }
+    if (min_x > x || max_x <= x || min_z > z || max_z <= z)
+        return 0;
+    switch (wall->id) {
+    case 0:
+        quad[0] = px + width; quad[1] = pz;
+        quad[2] = quad[0] + radius; quad[3] = quad[1] + radius;
+        quad[4] = px; quad[5] = pz + depth;
+        quad[6] = quad[4] + radius; quad[7] = quad[5] + radius;
+        px += radius; pz += radius;
+        if (point_in_wall_quad(x, z, quad))
+            return 1;
+        if (px > x || pz > z)
+            return 0;
+        break;
+    case 1:
+        quad[0] = px + radius; quad[1] = (pz + depth) - radius;
+        quad[2] = quad[0] - radius; quad[3] = quad[1] + radius;
+        quad[4] = radius + (px + width); quad[5] = pz - radius;
+        quad[6] = quad[4] - radius; quad[7] = quad[5] + radius;
+        px += radius; pz -= radius;
+        if (point_in_wall_quad(x, z, quad))
+            return 1;
+        if (px > x || pz <= z)
+            return 0;
+        break;
+    case 2:
+        quad[0] = px + width; quad[1] = pz;
+        quad[2] = quad[0] - radius; quad[3] = quad[1] + radius;
+        quad[4] = px; quad[5] = pz + depth;
+        quad[6] = quad[4] - radius; quad[7] = quad[5] + radius;
+        px -= radius; pz += radius;
+        if (point_in_wall_quad(x, z, quad))
+            return 1;
+        if (px <= x || pz > z)
+            return 0;
+        break;
+    case 3:
+        quad[0] = px - radius; quad[1] = (pz + depth) - radius;
+        quad[2] = px; quad[3] = pz + depth;
+        quad[4] = (px + width) - radius; quad[5] = pz - radius;
+        quad[6] = px + width; quad[7] = pz + radius;
+        px -= radius; pz -= radius;
+        if (point_in_wall_quad(x, z, quad))
+            return 1;
+        if (px <= x || pz <= z)
+            return 0;
+        break;
+    default:
+        return 0;
+    }
+    slope = width == 0.0f ? INFINITY :
+            x == px ? 0.0f : fabsf(depth / (width / (x - px)));
+    vertical_distance = fabsf((pz + depth) - z);
+    return vertical_distance > slope;
 }
 
 static int circle_intersects_rectangle(float x, float z, float px, float pz,
@@ -114,6 +215,9 @@ static int circle_intersects_rectangle(float x, float z, float px, float pz,
     float max_z = fmaxf(pz, pz + depth);
     float dx = x < min_x ? min_x - x : x > max_x ? x - max_x : 0.0f;
     float dz = z < min_z ? min_z - z : z > max_z ? z - max_z : 0.0f;
+    if (x < min_x - radius || x >= max_x + radius ||
+        z < min_z - radius || z >= max_z + radius)
+        return 0;
     return dx * dx + dz * dz <= radius * radius;
 }
 
@@ -237,9 +341,7 @@ static int wall_overlaps(const RecvxPlayer *player, const RecvxPlayerRoom *room,
     }
     case 4:
     case 5: {
-        float triangle[6];
-        triangle_for_wall(wall, triangle);
-        return circle_intersects_triangle(x, z, PLAYER_RADIUS, triangle);
+        return point_in_wall_triangle(wall, x, z);
     }
     case 6:
         return 0;

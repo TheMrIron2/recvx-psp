@@ -600,10 +600,12 @@ flag changes in the production path.
    After switching the desktop to 2560×1440 and PPSSPP to software rendering,
    the refreshed `m2-player-room-0030-camera-*` captures are full-screen
    2560×1440 images with the HUD visible. In the latest clean run,
-   `camera-transition-near` reports cut 1/4 at (14.0, 92.8), and
-   `camera-transition-settled` reports cut 3/4 at (23.6, 91.6) with `Wall`
-   active. The player remains visible as the automatic cut changes; this route
-   reaches the barrier before cut 4, so it does not confirm the full path.
+   `camera-transition-near` reports cut 2/4 at (9.4, 145.3), while
+   `camera-transition` and `camera-transition-settled` report cut 4/4 at
+   (20.0, 143.9) and (33.2, 142.3). Claire remains visible through the
+   automatic cuts and reaches the far side of the metallic heap without a wall
+   hit on this route. Direct contact with the heap remains an intended
+   obstruction, confirmed separately by the sustained wall-hold capture.
    Source review found that follow-mode angular limits clamp the desired
    player-relative view around the base angle while preventing backward camera
    motion; `tracking_camera_angle` now follows that rule and handles signed
@@ -614,17 +616,21 @@ flag changes in the production path.
    `m2-follow-camera-walk-*.png`), but forward input met the workbench and
    produced no observable camera movement. Those frames do not validate the
    tracking rule.
-   A source comparison of `bhCheckWall` found that type-7 wall edges apply the
-   floor attribute, use the room wall height when their authored height is
-   zero, and test vertical overlap against the wall edge. The diagnostic PSP
-   predicate now follows those rules. A refreshed software-rendered PPSSPP run
-   held forward and run input into the `RM_0030` debris and wall area; its
-   2560×1440 `m2-focus-room-0030-wall-hold.png` capture shows Claire at
-   `(-22.5, 71.6)` with `Wall` active. This confirms the diagnostic collision
-   result, not an original-runtime match. The attempted continuation of this
-   wall-hold path stayed in cut 1 because Claire remained against the
-   obstruction; the separate camera-transition run above provides the cut
-   evidence.
+   A source comparison of `bhCheckWall` found that rectangular walls use the
+   player radius at their corners; `circle_intersects_rectangle` now preserves
+   that rounded boundary instead of stopping at the square-expanded corners.
+   The PSP triangle-wall predicate now ports the source `bhCheckInnerTriangle`
+   checks for all four triangle orientations. This removes the extra collision
+   area that stopped Claire before the open route around the heap; the heap
+   itself remains solid. Type-7 wall edges apply the floor attribute, use the
+   room wall height when their authored height is zero, and test vertical
+   overlap against the wall edge. The diagnostic PSP predicate now follows
+   those rules. A refreshed software-rendered PPSSPP run held forward and run
+   input into the `RM_0030` debris and wall area; its 2560×1440
+   `m2-focus-room-0030-wall-hold.png` capture shows Claire at `(-22.9, 71.6)`
+   with `Wall` active. This confirms the diagnostic collision result, not an
+   original-runtime match. A separate route now passes around the heap and
+   reaches cut 4, as recorded above.
    Static inspection of all 205 packed rooms found active type-1 stair records
    in 54 rooms. Claire's extracted normal stair motions 31, 32, 35, and 36 each
    have 27 frames and root position tracks; her initial archive has no tracks
