@@ -262,10 +262,18 @@ _Static_assert(offsetof(RecvxRoomDiskActorPlacement, x) == 0x0c,
                "room actor position offset");
 _Static_assert(offsetof(RecvxRoomDiskActorPlacement, angle_x) == 0x18,
                "room actor angle offset");
+_Static_assert(offsetof(RecvxRoomDiskActorPlacement, work_no) == 0x0a,
+               "room actor work index offset");
 _Static_assert(offsetof(RecvxRoomDiskActorPlacement, hide) == 0x20,
                "room actor hide flags offset");
 _Static_assert(sizeof(RecvxRoomDiskActorPlacement) == 0x24,
                "room actor placement size");
+_Static_assert(offsetof(RecvxRoomDiskHeaderPrefix, rom_work_offset) == 0x10,
+               "room ROM_WORK offset");
+_Static_assert(offsetof(RecvxRoomDiskHeaderPrefix, event_offset) == 0x1c,
+               "room event-directory offset");
+_Static_assert(offsetof(RecvxRoomDiskHeaderPrefix, texture_directory_offset) == 0x20,
+               "room texture-directory offset");
 _Static_assert(offsetof(RecvxRoomDiskEffect, lock_flags) == 0x28,
                "room effect lock flags offset");
 _Static_assert(offsetof(RecvxRoomDiskEffect, parameter) == 0x40,

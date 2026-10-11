@@ -28,7 +28,17 @@ typedef struct RecvxRoomFileInfo {
 typedef struct RecvxRoomData {
     unsigned char *bytes;
     size_t size;
+    void *allocator_context;
+    void (*release)(void *context, void *memory);
 } RecvxRoomData;
+
+typedef struct RecvxRoomAllocator {
+    void *context;
+    void *(*allocate)(void *context, size_t size);
+    void (*release)(void *context, void *memory);
+} RecvxRoomAllocator;
+
+// Custom allocator context must outlive returned data until it is released
 
 #define RECVX_ROOM_NAME_SIZE 17
 #define RECVX_MAX_ROOM_CATALOG 205
@@ -56,6 +66,10 @@ int recvxLoadRoomData(const char *directory, RecvxRoomFileInfo *info,
                       RecvxRoomData *data);
 int recvxLoadNamedRoomData(const char *directory, const char *name,
                            RecvxRoomFileInfo *info, RecvxRoomData *data);
+int recvxLoadNamedRoomDataWithAllocator(const char *directory, const char *name,
+                                        RecvxRoomFileInfo *info,
+                                        RecvxRoomData *data,
+                                        const RecvxRoomAllocator *allocator);
 void recvxRoomDataFree(RecvxRoomData *data);
 
 #endif

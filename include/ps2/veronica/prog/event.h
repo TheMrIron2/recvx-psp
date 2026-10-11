@@ -3,6 +3,17 @@
 
 #include "types.h"
 
+extern unsigned char* bhScePtr;
+extern unsigned short* bhScdPtr;
+extern unsigned short* bhScd2Ptr;
+extern unsigned char* bhEvdPtr;
+extern unsigned int* G_Sp;
+extern int bhIfelFlg;
+extern BH_SCEWORK* bhCetask;
+extern BH_SCEWORK bhEtask[16];
+extern unsigned int Event_T_timer;
+extern unsigned int (*bhScenarioJmpT[256])();
+
 typedef struct VIEW_CLIP 
 {
 	// total size: 0xC

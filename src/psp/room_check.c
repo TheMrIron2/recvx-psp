@@ -24,6 +24,23 @@ static int valid_room_name(const char *name)
     return 1;
 }
 
+static void *room_allocate(const RecvxRoomAllocator *allocator, size_t size)
+{
+    if (allocator == NULL)
+        return malloc(size);
+    return allocator->allocate(allocator->context, size);
+}
+
+static void room_release(const RecvxRoomAllocator *allocator, void *memory)
+{
+    if (memory == NULL)
+        return;
+    if (allocator == NULL)
+        free(memory);
+    else
+        allocator->release(allocator->context, memory);
+}
+
 int recvxLoadRoomCatalog(const char *directory,
                          char (*names)[RECVX_ROOM_NAME_SIZE], size_t capacity,
                          size_t *count)
@@ -68,7 +85,8 @@ invalid:
 }
 
 static int load_room_file(const char *directory, const char *name,
-                          RecvxRoomFileInfo *info, unsigned char **data)
+                          RecvxRoomFileInfo *info, unsigned char **data,
+                          const RecvxRoomAllocator *allocator)
 {
     char path[512];
     unsigned char metadata[32];
@@ -82,6 +100,9 @@ static int load_room_file(const char *directory, const char *name,
     if (data == NULL)
         return 2;
     *data = NULL;
+    if (allocator != NULL &&
+        (allocator->allocate == NULL || allocator->release == NULL))
+        return 2;
     if (directory == NULL || info == NULL || (name != NULL && !valid_room_name(name)))
         return 2;
     memset(info, 0, sizeof(*info));
@@ -112,9 +133,13 @@ static int load_room_file(const char *directory, const char *name,
         info->expanded_size > 12 * 1024 * 1024 ||
         info->packed_size + info->expanded_size > 14 * 1024 * 1024)
         goto done;
-    packed = malloc(info->packed_size);
-    expanded = malloc(info->expanded_size);
-    if (packed == NULL || expanded == NULL) {
+    packed = room_allocate(allocator, info->packed_size);
+    if (packed == NULL) {
+        result = 4;
+        goto done;
+    }
+    expanded = room_allocate(allocator, info->expanded_size);
+    if (expanded == NULL) {
         result = 4;
         goto done;
     }
@@ -150,56 +175,74 @@ done:
         *data = expanded;
         expanded = NULL;
     }
-    free(expanded);
-    free(packed);
+    room_release(allocator, expanded);
+    room_release(allocator, packed);
     return result;
 }
 
 int recvxLoadRoomFile(const char *directory, RecvxRoomFileInfo *info,
                       unsigned char **data)
 {
-    return load_room_file(directory, NULL, info, data);
+    return load_room_file(directory, NULL, info, data, NULL);
 }
 
 int recvxLoadNamedRoomFile(const char *directory, const char *name,
                            RecvxRoomFileInfo *info, unsigned char **data)
 {
-    return load_room_file(directory, name, info, data);
+    return load_room_file(directory, name, info, data, NULL);
 }
 
 static int load_room_data(const char *directory, const char *name,
-                          RecvxRoomFileInfo *info, RecvxRoomData *data)
+                          RecvxRoomFileInfo *info, RecvxRoomData *data,
+                          const RecvxRoomAllocator *allocator)
 {
     int result;
     if (data == NULL)
         return 2;
-    data->bytes = NULL;
-    data->size = 0;
-    result = load_room_file(directory, name, info, &data->bytes);
-    if (result == 0)
+    memset(data, 0, sizeof(*data));
+    if (allocator != NULL &&
+        (allocator->allocate == NULL || allocator->release == NULL))
+        return 2;
+    result = load_room_file(directory, name, info, &data->bytes, allocator);
+    if (result == 0) {
         data->size = info->expanded_size;
+        if (allocator != NULL) {
+            data->allocator_context = allocator->context;
+            data->release = allocator->release;
+        }
+    }
     return result;
 }
 
 int recvxLoadRoomData(const char *directory, RecvxRoomFileInfo *info,
                       RecvxRoomData *data)
 {
-    return load_room_data(directory, NULL, info, data);
+    return load_room_data(directory, NULL, info, data, NULL);
 }
 
 int recvxLoadNamedRoomData(const char *directory, const char *name,
                            RecvxRoomFileInfo *info, RecvxRoomData *data)
 {
-    return load_room_data(directory, name, info, data);
+    return load_room_data(directory, name, info, data, NULL);
+}
+
+int recvxLoadNamedRoomDataWithAllocator(const char *directory, const char *name,
+                                        RecvxRoomFileInfo *info,
+                                        RecvxRoomData *data,
+                                        const RecvxRoomAllocator *allocator)
+{
+    return load_room_data(directory, name, info, data, allocator);
 }
 
 void recvxRoomDataFree(RecvxRoomData *data)
 {
     if (data == NULL)
         return;
-    free(data->bytes);
-    data->bytes = NULL;
-    data->size = 0;
+    if (data->bytes != NULL && data->release != NULL)
+        data->release(data->allocator_context, data->bytes);
+    else if (data->bytes != NULL)
+        free(data->bytes);
+    memset(data, 0, sizeof(*data));
 }
 
 int recvxCheckRoomFile(const char *directory, RecvxRoomFileInfo *info)

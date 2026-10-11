@@ -1,5 +1,6 @@
 #include "../../../ps2/veronica/prog/event.h"
 #include "../../../ps2/veronica/prog/MdlPut.h"
+#include "../../../ps2/veronica/prog/camera.h"
 #include "../../../ps2/veronica/prog/Motion.h"
 #include "../../../ps2/veronica/prog/cut.h"
 #include "../../../ps2/veronica/prog/effect.h"
@@ -10,6 +11,8 @@
 #include "../../../ps2/veronica/prog/face.h"
 #include "../../../ps2/veronica/prog/hitchk.h"
 #include "../../../ps2/veronica/prog/message.h"
+#include "../../../ps2/veronica/prog/light.h"
+#include "../../../ps2/veronica/prog/objitm.h"
 #include "../../../ps2/veronica/prog/player.h"
 #include "../../../ps2/veronica/prog/ps2_NaColi.h"
 #include "../../../ps2/veronica/prog/ps2_NaFog.h"
@@ -24,19 +27,11 @@
 #include "../../../ps2/veronica/prog/sub1.h"
 #include "../../../ps2/veronica/prog/system.h"
 #include "../../../ps2/veronica/prog/zonzon.h"
+#include "../../../ps2/veronica/prog/weapon.h"
 #include "../../../ps2/veronica/prog/main.h"
 
 #pragma optimization_level 4 // TODO: remove this pragma and compile the file passing the -O4,p flag instead 
 
-unsigned char* bhScePtr;
-unsigned short* bhScdPtr;
-unsigned short* bhScd2Ptr;
-unsigned char* bhEvdPtr;
-unsigned int* G_Sp;
-int bhIfelFlg;
-BH_SCEWORK* bhCetask;
-BH_SCEWORK bhEtask[16];
-unsigned int Event_T_timer;
 float GameNear;
 float GameFar;
 
@@ -58,262 +53,11 @@ BP_WORK evnt_BldTbl2 =
 };
 unsigned int (*bhScenarioJmpT[256])() = 
 {
-	bhEnd, 
-	bhIfelCk, 
-	bhElseCk, 
-	bhEndif, 
-	bhCk, 
-	bhSet, 
-	bhCmpB, 
-	bhCmpW, 
-	bhSv, 
-	bhSvW, 
-	bhWalAtariSet, 
-	bhEtcAtariSet, 
-	bhFlrAtariSet, 
-	bhDieCk, 
-	bhItmCk, 
-	bhUseItemClear, 
-	bhUseItemCheck, 
-	bhPlItemCheck, 
-	bhCineSet, 
-	bhCamSet, 
-	bhEvtOn, 
-	bhBgmOn, 
-	bhBgmOff, 
-	bhSeOn, 
-	bhSeOff, 
-	bhVoiceOn, 
-	bhVoiceOff, 
-	bhAdxCk, 
-	bhBGSeOn, 
-	bhBGSeOff, 
-	bhAdxTimeCk, 
-	bhMessageSet, 
-	bhSetDispObj, 
-	bhDieEventCk, 
-	bhEneSetCk, 
-	bhItmSetCk, 
-	bhInitModelSet, 
-	bhEtcAtariSet2, 
-	bhArmsItemCheck, 
-	bhArmsItemChange, 
-	bhSubStatus, 
-	bhCamPauseSet, 
-	bhCamSet2, 
-	bhMotionPauseSet, 
-	bhEffectSet, 
-	bhInitMotionPause, 
-	bhMotionPauseSetPly, 
-	bhInitSetKage, 
-	bhInitMotionPauseEx, 
-	bhPlItemLost, 
-	bhObjLinkSet, 
-	bhSetDoorCall, 
-	bhObjLinkSetPly, 
-	bhLightSet, 
-	bhFadeSet, 
-	bhRoomCaseNo, 
-	bhFrameCheck, 
-	bhCamInfoSet, 
-	bhMutekiSetPl, 
-	bhDefModelSet, 
-	bhMaskSet, 
-	bhLipSet, 
-	bhMaskStart, 
-	bhLipStart, 
-	bhLookGsetPlStart, 
-	bhLookGsetPlStop, 
-	bhItmAspdSet, 
-	bhEffDispSet, 
-	bhEffAmbSet, 
-	bhDelObjSe, 
-	bhSetNextRoomBgm, 
-	bhSetNextRoomBgSe, 
-	bhFootSeCall, 
-	bhWeaponSeCall, 
-	bhYakkyouSet, 
-	bhLightTypeSet, 
-	bhFogColorSet, 
-	bhPlItemBlockCk, 
-	bhEffBloodSet, 
-	bhCyoutenHenkeiSet, 
-	bhSetObjMotion, 
-	bhObjLinkSetObjEne, 
-	bhObjLinkSetObjItem, 
-	bhObjLinkSetEneItem, 
-	bhObjLinkSetEneEne, 
-	bhCyoutenHenkeiStart, 
-	bhEffBloodPoolSet, 
-	bhFixEventCamPly, 
-	bhEffBloodPoolSet2, 
-	bhObjLinkSetObjObj, 
-	bhCamYureSet, 
-	bhInitCamSet, 
-	bhMesDispEndSet, 
-	bhPadCheck, 
-	bhMovieStart, 
-	bhMovieStop, 
-	bhTFrameCheck, 
-	bhEventTimerClr, 
-	bhCamCheck, 
-	bhRandamSet, 
-	bhPlCtr, 
-	bhLoadWork, 
-	bhObjCtr, 
-	bhSubCtr, 
-	bhLoadWork2, 
-	bhCommonCtr, 
-	bhEventSkipSet, 
-	bhDelYakkyou, 
-	bhObjAlphaSet, 
-	bhCyodanSet, 
-	bhHEffectSet, 
-	bhObjLinkSetObjPly, 
-	bhEffPush, 
-	bhEffPop, 
-	bhAreaSearchObj, 
-	bhLightParameterCSet, 
-	bhLightParameterStart, 
-	bhInitMidiSlotSet, 
-	bh3dSoundFlagSet, 
-	bhSoundVolumeSet, 
-	bhLightParameterSet, 
-	bhEneSeOn, 
-	bhEneSeOff, 
-	bhWalAtariSet2, 
-	bhFlrAtariSet2, 
-	bhMotionPosSetEnePly, 
-	bhKageSwSet, 
-	bhSoundPanSet, 
-	bhInitPonySet, 
-	bhSubMapBusyCk, 
-	bhSetDebugLoopEx, 
-	bhSoundFadeOut, 
-	bhCyoutenHenkeiSetEX, 
-	bhCyoutenHenkeiStartEX, 
-	bhEasySESet, 
-	bhSoundFlagReSet, 
-	bhEffUVSet, 
-	bhPlayerChangeSet, 
-	bhPlayerPoisonCk, 
-	bhAddObjSe, 
-	bhRandTest, 
-	bhEvtComSet, 
-	bhZombieUpDieCk, 
-	bhFacePauseSet, 
-	bhFaceReSet, 
-	bhEffModeSet, 
-	bhBGSeOff2, 
-	bhBgmOff2, 
-	bhBGSeOn2, 
-	bhBgmOn2, 
-	bhEffectSensyaSet, 
-	bhEffectKokuenSet, 
-	bhEffectSandSet, 
-	bhEnemyHpUp, 
-	bhFaceRep, 
-	bhMovieCk, 
-	bhSetItmMotion, 
-	bhObjAspdSet, 
-	bhPuruPuruFlagSet, 
-	bhPuruPuruStart, 
-	bhMapSystemOn, 
-	bhTrapDamageSet, 
-	bhEvtLighterFireSet, 
-	bhObjLinkSetPlyItem, 
-	bhPlayerKaidanMotion, 
-	bhEneRenderSet, 
-	bhBgmOnEx, 
-	bhBgmOn2Ex, 
-	bhFogParameterCSet, 
-	bhFogParameterStart, 
-	bhEffUVSet2, 
-	bhBGColorSet, 
-	bhMovieTimeCk, 
-	bhEffTypeSet, 
-	bhPlayerPoison2Cr, 
-	bhPlyHandChange, 
-	bhHEffectSet2, 
-	bhObjDposCk, 
-	bhItemGetGet, 
-	bhEtcAtariEnePosSet, 
-	bhEtcAtariEvtPosSet, 
-	bhLoadWorkEx, 
-	bhRoomSoundCase, 
-	bhItemPlToSBox, 
-	bhItemSBoxToIBox, 
-	bhGrdPosSet, 
-	bhGrdPosMoveCSet, 
-	bhGrdPosMoveStart, 
-	bhEvtKill, 
-	bhReTryPointSet, 
-	bhPlyDposCk, 
-	bhPlItemLostEx, 
-	bhCyodanSetEx, 
-	bhArmsItemSet, 
-	bhItemGetGetEx, 
-	bhEffectSandSetMatsumoto, 
-	bhVoiceWait, 
-	bhVoiceStart, 
-	bhGameOverSet, 
-	bhPlItemChangeM, 
-	bhEffBakuDrmSet, 
-	bhPlItemTamaSet, 
-	bhEffClearEvt, 
-	bhEvtTimerSet, 
-	bhEneLookFlgSet, 
-	bhReturnTitleEvt, 
-	bhSyukanModeSet, 
-	bhExGameItemInit, 
-	bhEneLifeSetM, 
-	bhEffSSizeSet, 
-	bhEffLinkOffsetSet, 
-	bhRankingCall, 
-	bhCallSysSe, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	dm0, 
-	bhEwhile2, 
-	bhComNext, 
-	dm0, 
-	dm0, 
-	dm0, 
-	bhSleep, 
-	bhSleeping, 
-	bhFor, 
-	bhNext, 
-	bhWhile, 
-	bhEwhile, 
-	bhEvtNext, 
-	bhEvtEnd
+#define RECVX_EVENT_CORE(opcode, handler) [opcode] = handler,
+#define RECVX_EVENT_FULL(opcode, handler) [opcode] = handler,
+#include "event_dispatch_table.inc"
+#undef RECVX_EVENT_FULL
+#undef RECVX_EVENT_CORE
 };
 /*unsigned char G_Mess_flag;
 unsigned int Event_T_timer_bak;
@@ -550,116 +294,6 @@ unsigned int bhCk()
     return v1 ^ (((int)(v2 << (v3 & 0x1F))) < 0);
 }
 
-// 100% matching!
-unsigned int bhSet()
-{
-    int v0;             
-    int* a0;            
-    unsigned int v1;   
-    unsigned short* a1; 
-    
-    a1 = (unsigned short*)bhScePtr;
-
-    a1 += 3;
-    
-    bhScePtr = (unsigned char*)a1;
-
-    a1 -= 3;
-    
-    switch (*a1 >> 8) 
-    {                              
-    case 1:                                         
-        a0 = (int*)&sys->ev_flg; 
-		break;
-    case 2:                                         
-        a0 = (int*)&sys->ky_flg; 
-		break;
-    case 3:                                         
-        a0 = (int*)&sys->ed_flg; 
-		break;
-    case 4:                                         
-        a0 = (int*)&sys->rm_flg; 
-		break; 
-    case 5:                                         
-        a0 = (int*)&sys->st_flg; 
-		break;
-    case 6:                                         
-        a0 = (int*)&sys->sp_flg; 
-		break;
-    case 7:
-        a0 = (int*)sys->it_flg; 
-		break;
-    case 8:
-        a0 = (int*)sys->mp_flg; 
-		break;
-    case 9:
-        a0 = (int*)sys->ic_flg; 
-		break;
-    case 11:
-        a0 = (int*)&sys->gm_flg; 
-		break;
-    case 12:
-        a0 = (int*)&sys->ts_flg; 
-		break;
-    case 10:
-        a0 = (int*)&sys->cb_flg; 
-		break;
-    case 13:
-        a0 = (int*)plp; 
-		break;
-    case 14:
-        a0 = (int*)&plp->stflg; 
-		break;
-    case 15:
-        a0 = (int*)&plp->flg2; 
-		break;
-    case 16:
-        a0 = (int*)&sys->ssd_flg; 
-		break;
-    case 0:
-        break;
-    }
-
-    a1++; 
-    
-    v1 = *a1;
-    
-    a0 += (v1 & 0x3E0) >> 5;
-    
-    v0 = v1 & 0x1F;
-    
-    a1++;
-    
-    v1 = *a1;
-    
-    switch (v1 >> 8) 
-    {                            
-    case 0:                                         
-        *a0 |= 0x80000000 >> v0;
-        
-        return 1;
-    case 1:                                         
-        *a0 &= ~(0x80000000 >> v0);
-        
-        return 1;
-    case 2:                                         
-        *a0 ^= 0x80000000 >> v0;
-        
-        return 1;
-    case 3:                                         
-        *a0 |= 0xFFFFFFFF >> v0;
-        
-        return 1;
-    case 4:                                         
-        *a0 &= ~(0xFFFFFFFF >> v0);
-        
-        return 1;
-    case 5:                                         
-        *a0 ^= 0xFFFFFFFF >> v0;
-        
-        return 1;
-    }
-}
 
 // 100% matching!
 unsigned int bhCmpB()
@@ -9096,37 +8730,7 @@ unsigned int bhCallSysSe()
 	return 1;
 }
 
-// 100% matching! 
-unsigned int bhSleep()
-{
-    bhCetask->loop++;
-    
-    bhCetask->cnt[bhCetask->loop] = *(unsigned short*)&bhScePtr[2];
-    
-    bhScePtr++;
-    
-    if (--bhCetask->cnt[bhCetask->loop] == 0) 
-    {
-        bhScePtr += 3;
-        
-        bhCetask->loop--;
-    }
-    
-    return 0;
-}
 
-// 100% matching!
-unsigned int bhSleeping()
-{
-	if (--bhCetask->cnt[bhCetask->loop] == 0) 
-	{
-		bhScePtr += 3;
-
-		bhCetask->loop--;
-	}
-
-	return 0;
-}
 
 // 100% matching! 
 unsigned int bhWhile()
@@ -9192,13 +8796,6 @@ unsigned int bhEwhile2()
     return 1;
 }
 
-// 100% matching! 
-unsigned int bhEvtNext()
-{
-	*bhScePtr++;
-
-	return 0;
-}
 
 // 100% matching! 
 unsigned int bhComNext()
@@ -9208,16 +8805,6 @@ unsigned int bhComNext()
 	return 1;
 }
 
-// 100% matching! 
-unsigned int bhEvtEnd()
-{
-	bhCetask->status = 0;
-
-	*bhScePtr++;
-	*bhScePtr++;
-
-	return 0;
-}
 
 // 100% matching! 
 unsigned int bhFor()
@@ -9740,8 +9327,9 @@ int Obj_controll()
         bhScePtr++;
         break;
     default:
-        return;
+        return 0;
     }
+    return 0;
 }
 
 // 100% matching!
@@ -12952,117 +12540,8 @@ unsigned int bhLoadWork2()
     return 1;
 }
 
-// 100% matching!
-int Event_init(BH_SCEWORK* a0, unsigned int evt_id) 
-{
-    a0->status = 1;
-    
-    *(short*)&a0->mode0 = 0;
-    
-    a0->data = (unsigned char*)rom->evtp;
-    a0->data = (unsigned char*)a0->data + ((int*)rom->evtp)[evt_id + ((sizeof(EVT_WORK) / 4) - 1)];
-    
-    a0->loop = -1;
-    
-    a0->ips[0][0] = 0;
-    a0->ips[0][1] = 0;
-    a0->ips[0][2] = 0;
-    
-    a0->ips[1][0] = 0;
-    a0->ips[1][1] = 0;
-    a0->ips[1][2] = 0;
-    
-    a0->ips[2][0] = 0;
-    a0->ips[2][1] = 0;
-    a0->ips[2][2] = 0;
-    
-    a0->ips[3][0] = 0;
-    a0->ips[3][1] = 0;
-    a0->ips[3][2] = 0;
-    
-    a0->ian[0][0] = 0;
-    a0->ian[0][1] = 0;
-    a0->ian[0][2] = 0;
-    
-    a0->ian[1][0] = 0;
-    a0->ian[1][1] = 0;
-    a0->ian[1][2] = 0;
-    
-    a0->ian[2][0] = 0;
-    a0->ian[2][1] = 0;
-    a0->ian[2][2] = 0;
-    
-    a0->ian[3][0] = 0;
-    a0->ian[3][1] = 0;
-    a0->ian[3][2] = 0;
-}
 
-// 100% matching!
-int Event_exec(unsigned int task_level, unsigned int evt_id)
-{
-    if (task_level >= 16)
-    {
-        task_level = 0;
-        
-        while ((bhEtask[task_level].status != 0) && (task_level != 15))
-        {
-            task_level++;
-        }
-    }
 
-    return Event_init(&bhEtask[task_level], evt_id);
-}
-
-// 100% matching!
-int bhEventScheduler2()
-{
-    unsigned int level;      
-    unsigned int t_time_flg; 
-    unsigned char* gsp; // not from DWARF
-    BH_SCEWORK* scep;   // not from DWARF
-
-    if ((sys->sp_flg & 0x10)) 
-    {
-        scep = bhEtask;
-        
-        t_time_flg = 0;
-        
-        for (level = 0; level < 16; level++, scep++) 
-        {
-            bhCetask = scep;
-            
-            if (scep->status != 0) 
-            {
-                if (t_time_flg == 0) 
-                {
-                    Event_T_timer++;
-                }
-                
-                t_time_flg = 1;
-                
-                bhScePtr = scep->data;
-                
-                while (TRUE) 
-                {
-                    while (bhScenarioJmpT[*bhScePtr]() != 0);
-                    
-                    if (bhIfelFlg <= 0)
-                    {
-                        break;
-                    }
-                    
-                    gsp = (unsigned char*)--G_Sp;
-                    
-                    bhIfelFlg--;
-                    
-                    bhScePtr = gsp;
-                }
-                
-                bhCetask->data = bhScePtr;
-            }
-        } 
-    }
-}
 
 // 100% matching!
 void bhScenarioCheck(unsigned char* next_ptr)
