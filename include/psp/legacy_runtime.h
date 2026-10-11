@@ -43,6 +43,9 @@ size_t recvxLegacyArenaUsed(void);
 void recvxLegacyVsyncTick(void);
 int recvxLegacyGetClip(float *near_plane, float *far_plane);
 void recvxLegacyEventReset(void);
+void recvxLegacyModelVisibilitySet(unsigned int type, unsigned int index,
+                                  int visible);
+int recvxLegacyModelVisibilityGet(unsigned int type, unsigned int index);
 int recvxLegacyEventStart(unsigned int task_level, unsigned int event_id,
                           unsigned int script_index, size_t script_bytes);
 const RecvxLegacyEventTask *recvxLegacyEventGet(unsigned int task_level);

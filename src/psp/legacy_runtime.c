@@ -20,6 +20,7 @@ static void *legacy_arena_allocation;
 static unsigned char *legacy_arena;
 static int legacy_init_complete;
 static RecvxLegacyEventTask legacy_event_tasks[16];
+static int8_t legacy_model_visibility[4][256];
 
 extern void bhSysCallInit(void);
 
@@ -73,6 +74,21 @@ void recvxLegacyRuntimeShutdown(void)
 void recvxLegacyEventReset(void)
 {
     memset(legacy_event_tasks, 0, sizeof(legacy_event_tasks));
+    memset(legacy_model_visibility, -1, sizeof(legacy_model_visibility));
+}
+
+void recvxLegacyModelVisibilitySet(unsigned int type, unsigned int index,
+                                  int visible)
+{
+    if (type < 4 && index < 256)
+        legacy_model_visibility[type][index] = visible != 0;
+}
+
+int recvxLegacyModelVisibilityGet(unsigned int type, unsigned int index)
+{
+    if (type >= 4 || index >= 256 || legacy_model_visibility[type][index] < 0)
+        return -1;
+    return legacy_model_visibility[type][index];
 }
 
 int recvxLegacyEventStart(unsigned int task_level, unsigned int event_id,

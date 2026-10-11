@@ -15,6 +15,7 @@
 #include "psp/input.h"
 #include "psp/legacy_runtime.h"
 #include "psp/services.h"
+#include "psp/actors.h"
 
 PSP_MODULE_INFO("RECVX PSP", PSP_MODULE_USER, 0, 6);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);
@@ -27,6 +28,7 @@ static RecvxPlayerRoom player_room;
 static RecvxEventData event_data;
 static RecvxPlayer player;
 static RecvxRoomMesh player_mesh;
+static RecvxRoomActors room_actors;
 static RecvxPlayerAssets player_assets;
 static RecvxTextureSet player_textures;
 static RecvxGameTaskDispatcher game_tasks;
@@ -62,6 +64,7 @@ static void render_game_task(void *context)
 {
     (void)context;
     recvxRendererFrame(&scene, &mesh, &textures,
+                       &room_actors,
                        game_task_playing ? &player : NULL,
                        game_task_playing ? &player_room : NULL,
                        room_name, &game_task_input);
@@ -229,6 +232,7 @@ static void show_checks(const char *data_directory)
     recvxSceneFree(&scene);
     recvxMeshFree(&mesh);
     recvxTexturesFree(&textures);
+    recvxRoomActorsFree(&room_actors);
     recvxPlayerRoomFree(&player_room);
     recvxLegacyEventReset();
     recvxEventDataFree(&event_data);
@@ -306,7 +310,7 @@ static void show_checks(const char *data_directory)
             event_data_status = recvxEventDataLoad(room_data.bytes,
                                                    room_data.size,
                                                    &event_data);
-            if (event_data_status == 0 && !legacy_scenario_attempted &&
+            if (event_data_status == 0 &&
                 strcmp(info.name, "RM_0000.RDX") == 0) {
                 size_t script_size;
                 const unsigned char *script =
@@ -347,6 +351,28 @@ static void show_checks(const char *data_directory)
                                      (unsigned int)mesh.model_count, (unsigned int)mesh.triangle_count);
             else
                 pspDebugScreenPrintf("Model geometry: FAIL (%d)\n\n", result);
+            stage_started = recvxPlatformTimeUs();
+            result = recvxBuildRoomActors(room_data.bytes, room_data.size,
+                                          &room_actors);
+            if (result == 0) {
+                for (unsigned int entity = 0;
+                     entity < room_actors.entity_count; ++entity) {
+                    RecvxRoomEntity *actor = &room_actors.entities[entity];
+                    int visible = recvxLegacyModelVisibilityGet(
+                        actor->type, actor->source_index);
+                    if (visible >= 0)
+                        actor->visible = (uint8_t)visible;
+                }
+                pspDebugScreenPrintf("Room entities: READY (%u, %u triangles)\n\n",
+                                     (unsigned int)room_actors.entity_count,
+                                     (unsigned int)room_actors.triangle_count);
+                if (room_actors.unsupported_model_count != 0)
+                    pspDebugScreenPrintf("Entity models skipped: %u\n\n",
+                                         (unsigned int)room_actors.unsupported_model_count);
+            } else {
+                pspDebugScreenPrintf("Room entities: FAIL (%d)\n\n", result);
+            }
+            room_mesh_build_us += recvxPlatformTimeUs() - stage_started;
             stage_started = recvxPlatformTimeUs();
             result = recvxBuildRoomTextures(room_data.bytes, room_data.size, &textures);
             if (result == 0)
@@ -537,6 +563,7 @@ int main(int argc, char **argv)
             }
             if (!viewing && (pressed & RECVX_BUTTON_CROSS) && player_ready) {
                 if (recvxRendererStart(&scene, &mesh, &textures, &player,
+                                       &room_actors,
                                        player_asset_status == 0 ? &player_assets : NULL,
                                        player_mesh_status == 0 ? &player_mesh : NULL,
                                        player_texture_status == 0 ? &player_textures : NULL,
@@ -556,6 +583,7 @@ int main(int argc, char **argv)
                     show_checks(data_directory);
                 } else if (scene.vertices != NULL) {
                     if (recvxRendererStart(&scene, &mesh, &textures, NULL,
+                                           &room_actors,
                                            NULL, NULL, NULL, 0) == 0)
                         viewing = 1;
                     else
@@ -618,6 +646,7 @@ int main(int argc, char **argv)
     recvxPlayerRoomFree(&player_room);
     recvxEventDataFree(&event_data);
     recvxMeshFree(&player_mesh);
+    recvxRoomActorsFree(&room_actors);
     free(player_model_data);
     free(player_motion_data);
     free(player_extra_data);

@@ -14,7 +14,7 @@ PSP_FW_VERSION := 600
 PSP_LARGE_MEMORY := 0
 
 # Keep the source list explicit as systems are ported to PSP.
-PORT_SOURCES := src/psp/expand.c src/psp/selftest.c src/psp/ninja_math.c src/psp/timing.c src/psp/input.c src/psp/game_tasks.c src/psp/services.c src/psp/event_data.c src/psp/file_stdio.c src/psp/room.c src/psp/room_check.c src/psp/scene.c src/psp/mesh.c src/psp/texture.c src/psp/player.c src/psp/player_asset.c
+PORT_SOURCES := src/psp/expand.c src/psp/selftest.c src/psp/ninja_math.c src/psp/timing.c src/psp/input.c src/psp/game_tasks.c src/psp/services.c src/psp/event_data.c src/psp/file_stdio.c src/psp/room.c src/psp/room_check.c src/psp/scene.c src/psp/mesh.c src/psp/texture.c src/psp/player.c src/psp/player_asset.c src/psp/actors.c
 PSP_PLATFORM_SOURCES := src/psp/platform_psp.c
 PSP_LEGACY_SOURCES := src/psp/legacy_runtime.c src/psp/legacy_platform.c src/psp/legacy_script.c src/ps2/veronica/prog/system_init.c
 GAME_SOURCES := src/ps2/veronica/prog/flag.c src/ps2/veronica/prog/ps2_NaMem.c
@@ -82,7 +82,7 @@ HOST_CC ?= cc
 HOST_TEST := build/host/port-test
 HOST_SHARED := build/host/librecvx-test.so
 HOST_FLAGS := -std=c11 -O1 -g -Wall -Wextra -Werror -Iinclude -Iinclude/ps2/veronica/prog
-HOST_HEADERS := include/psp/abi.h include/psp/ninja_math.h include/psp/timing.h include/psp/input.h include/psp/game_tasks.h include/psp/services.h include/psp/event_data.h include/psp/file.h include/psp/expand.h include/psp/selftest.h include/psp/room.h include/psp/scene.h include/psp/mesh.h include/psp/texture.h include/psp/player.h include/psp/player_asset.h include/psp/legacy_types.h \
+HOST_HEADERS := include/psp/abi.h include/psp/ninja_math.h include/psp/timing.h include/psp/input.h include/psp/game_tasks.h include/psp/services.h include/psp/event_data.h include/psp/file.h include/psp/expand.h include/psp/selftest.h include/psp/room.h include/psp/scene.h include/psp/mesh.h include/psp/texture.h include/psp/player.h include/psp/player_asset.h include/psp/actors.h include/psp/legacy_types.h \
 	include/ps2/veronica/prog/expand.h include/ps2/veronica/prog/flag.h \
 	include/ps2/veronica/prog/ps2_NaMem.h include/ps2/veronica/prog/override_katana.h
 

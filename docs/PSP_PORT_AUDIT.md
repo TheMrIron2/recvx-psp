@@ -548,7 +548,13 @@ flag changes in the production path.
    local material slots with their UVs, palettes, sampler flags, alpha, and
    diffuse color.
    PPSSPP captures show the textured actor while walking; other player models
-   and a frame-by-frame pose comparison remain open.
+   and a frame-by-frame pose comparison remain open. The user's unarmed
+   PCSX2 idle capture confirms the original hand geometry and resting arm pose,
+   but is not a same-frame comparison for the diagnostic. In the PSP smoke
+   capture, the spread-arm pose remains at `M0:12` with transition blending
+   temporarily disabled, so fixed-sample motion blending is not sufficient to
+   explain it. Compare a matching unarmed walk or turn before changing the
+   skinning or motion path.
 4. Milestone 2: bring original movement, collision, and camera behavior onto
    the PSP runtime. The state controller remains diagnostic; room camera poses
    and automatic cut selection use original room records. Tests cover camera

@@ -266,6 +266,18 @@ static int execute_simple(const unsigned char *script, size_t size,
         *pc += 4;
         return 1;
     }
+    case 36:
+        if (!has_bytes(size, *pc, 4) || script[*pc + 1] >= 4)
+            return -2;
+        recvxLegacyModelVisibilitySet(script[*pc + 1], script[*pc + 2],
+                                      script[*pc + 3] != 0);
+        *pc += 4;
+        return 1;
+    case 47:
+        if (!has_bytes(size, *pc, 4))
+            return -2;
+        *pc += 4;
+        return 1;
     default:
         return -1;
     }

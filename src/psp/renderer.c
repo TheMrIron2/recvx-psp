@@ -44,6 +44,7 @@ static int fixed_camera_attribute_initialized;
 static int player_mode;
 static const RecvxRoomMesh *player_model_mesh;
 static RecvxRoomMesh *player_actor_mesh;
+static RecvxRoomActors *room_actor_set;
 static const RecvxPlayerAssets *player_actor_assets;
 static const RecvxTextureSet *player_actor_textures;
 static unsigned int player_animation_slot;
@@ -179,7 +180,11 @@ static void draw_memory_hud(const RecvxScene *scene, const RecvxRoomMesh *mesh,
                          (unsigned int)(sizeof(command_list) / 1024),
                          (unsigned int)(command_list_high_water / 1024));
     pspDebugScreenSetXY(1, 9);
-    pspDebugScreenPrintf("Floor target %d",
+    pspDebugScreenPrintf("Actors %u, %u unsupported  Floor target %d",
+                         room_actor_set != NULL ?
+                             (unsigned int)room_actor_set->entity_count : 0,
+                         room_actor_set != NULL ?
+                             (unsigned int)room_actor_set->unsupported_model_count : 0,
                          player != NULL ? (int)player->floor_target_index : -1);
 }
 
@@ -662,6 +667,86 @@ static void draw_player_model(const RecvxPlayer *player,
     sceGumPopMatrix();
 }
 
+static void draw_room_entity(const RecvxRoomEntity *entity,
+                             const RecvxTextureSet *textures)
+{
+    ScePspFVector3 position = {entity->position[0], entity->position[1],
+                               entity->position[2]};
+    float angle_scale = 3.14159265358979323846f / 32768.0f;
+    uint32_t part, batch_index;
+    sceGumPushMatrix();
+    sceGumTranslate(&position);
+    sceGumRotateX(entity->angle_x * angle_scale);
+    sceGumRotateZ(entity->angle_z * angle_scale);
+    sceGumRotateY(entity->angle_y * angle_scale);
+    for (part = 0; part < entity->part_count; ++part) {
+        const RecvxRoomMesh *mesh = &entity->parts[part];
+        for (batch_index = 0; batch_index < mesh->batch_count; ++batch_index) {
+            const RecvxMeshBatch *batch = &mesh->batches[batch_index];
+            const RecvxTexture *texture = NULL;
+            if (batch->vertex_count == 0)
+                continue;
+            if (textures != NULL && textures->textures != NULL &&
+                batch->texture_index < textures->count)
+                texture = &textures->textures[batch->texture_index];
+            set_batch_blending(batch);
+            if (texture != NULL) {
+                sceGuEnable(GU_TEXTURE_2D);
+                sceGuClutLoad(32, texture->palette);
+                sceGuTexImage(0, texture->width, texture->height,
+                              texture->width, texture->pixels);
+                sceGuTexWrap(batch->flags & 1 ? GU_CLAMP : GU_REPEAT,
+                             batch->flags & 2 ? GU_CLAMP : GU_REPEAT);
+                sceGuTexFilter(batch->flags & 4 ? GU_LINEAR : GU_NEAREST,
+                               batch->flags & 4 ? GU_LINEAR : GU_NEAREST);
+                sceGuTexFlush();
+            } else {
+                sceGuDisable(GU_TEXTURE_2D);
+            }
+            sceGumDrawArray(GU_TRIANGLES,
+                            GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_NORMAL_32BITF |
+                            GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+                            (int)batch->vertex_count, NULL,
+                            mesh->vertices + batch->first_vertex);
+        }
+    }
+    sceGuDisable(GU_BLEND);
+    sceGuDisable(GU_ALPHA_TEST);
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGumPopMatrix();
+}
+
+static void draw_room_entities(const RecvxRoomActors *actors,
+                               const RecvxTextureSet *textures)
+{
+    uint32_t i;
+    if (actors == NULL)
+        return;
+    if (textures != NULL && textures->count != 0) {
+        sceGuTexMode(GU_PSM_T8, 0, 0, 1);
+        sceGuClutMode(GU_PSM_8888, 0, 0xff, 0);
+        sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
+        sceGuAlphaFunc(GU_GREATER, 0, 0xff);
+        sceGuEnable(GU_ALPHA_TEST);
+    }
+    for (i = 0; i < actors->entity_count; ++i) {
+        const RecvxRoomEntity *entity = &actors->entities[i];
+        unsigned int hide_index;
+        int show = entity->visible && (entity->flags & 1);
+        if (!show)
+            continue;
+        if (entity->flags & 0x40000000u) {
+            show = 0;
+            for (hide_index = 0; hide_index < 4; ++hide_index)
+                if (entity->hide[hide_index] == (int8_t)camera_cut)
+                    show = 1;
+            if (!show)
+                continue;
+        }
+        draw_room_entity(entity, textures);
+    }
+}
+
 static void add_player_vertex(uint32_t color, float x, float y, float z,
                               const RecvxPlayer *player)
 {
@@ -764,6 +849,7 @@ static void reset_camera(const RecvxScene *scene, const RecvxRoomMesh *mesh,
 
 int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
                        const RecvxTextureSet *textures, const RecvxPlayer *player,
+                       RecvxRoomActors *actors,
                        const RecvxPlayerAssets *actor_assets,
                        RecvxRoomMesh *actor_mesh,
                        const RecvxTextureSet *actor_textures,
@@ -777,6 +863,7 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
     read_module_footprint();
     command_list_bytes = command_list_high_water = 0;
     player_source_bytes = actor_source_bytes;
+    room_actor_set = actors;
     draw_buffer = NULL;
     sceGuStart(GU_DIRECT, command_list);
     sceGuDrawBuffer(GU_PSM_8888, draw_buffer, BUFFER_WIDTH);
@@ -804,6 +891,14 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
         sceKernelDcacheWritebackRange(mesh->vertices, mesh->storage_bytes);
     if (actor_mesh && actor_mesh->vertices)
         sceKernelDcacheWritebackRange(actor_mesh->vertices, actor_mesh->storage_bytes);
+    if (actors != NULL)
+        for (uint32_t entity = 0; entity < actors->entity_count; ++entity)
+            for (uint32_t part = 0; part < actors->entities[entity].part_count; ++part) {
+                RecvxRoomMesh *part_mesh = &actors->entities[entity].parts[part];
+                if (part_mesh->vertices != NULL)
+                    sceKernelDcacheWritebackRange(part_mesh->vertices,
+                                                  part_mesh->storage_bytes);
+            }
     if (actor_textures)
         for (uint32_t i = 0; i < actor_textures->count; ++i) {
             const RecvxTexture *texture = &actor_textures->textures[i];
@@ -1043,6 +1138,7 @@ static void update_player_simulation(RecvxPlayer *player,
 }
 
 void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const RecvxTextureSet *textures,
+                        RecvxRoomActors *actors,
                         RecvxPlayer *player, const RecvxPlayerRoom *player_room,
                         const char *room_name,
                         const RecvxInputState *input)
@@ -1208,6 +1304,7 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
                                 (int)batch->vertex_count, NULL, mesh->textured_vertices + batch->first_vertex);
             }
         }
+    room_actor_set = actors;
         sceGuDisable(GU_BLEND);
         sceGuDisable(GU_ALPHA_TEST);
         sceGuDisable(GU_TEXTURE_2D);
@@ -1227,6 +1324,8 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
         }
         sceGuDisable(GU_BLEND);
     }
+    if (display_mode == 0 || display_mode == 4)
+        draw_room_entities(actors, display_mode == 4 ? textures : NULL);
     if (display_mode == 1 && mesh && mesh->wire_vertices) {
         sceGuDisable(GU_BLEND);
         sceGuDisable(GU_TEXTURE_2D);
