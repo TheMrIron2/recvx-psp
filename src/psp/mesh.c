@@ -836,12 +836,14 @@ int recvxBlendPlayerMeshPose(const RecvxPlayerModelAsset *model,
         reader.bind_matrices = bind_matrices;
         memset(visited, 0, reader.object_count);
         reader.motion = NULL;
+        reader.from_motion = NULL;
         result = hierarchy_matrices(&reader, 0, &identity, 0, bind_matrices,
                                     NULL);
         if (result != 0)
             return result;
         memset(visited, 0, reader.object_count);
         reader.motion = motion;
+        reader.from_motion = from_motion;
         result = hierarchy_matrices(&reader, 0, &identity, 0, posed_matrices,
                                     posed_parent_matrices);
         if (result != 0)

@@ -668,14 +668,14 @@ flag changes in the production path.
    motion slot 36, the 25-tick turn, 19 root-motion frames, 10 recovery ticks,
    and the floor-0 snap. This uses a test-only spawn override under the ignored
    smoke directory; the packaged `build/psp/data` room stays unchanged. It does
-   not compare stair poses against the original runtime. The jail-cell
-   comparison is also state-dependent: the PSP diagnostic starts at the
-   `RM_0000` closed-door spawn before the lighter sequence, while the user's
-   PCSX2 save is after that sequence. The user confirmed Claire can walk in
-   and out of the cell in the post-sequence state, with no physical obstacle.
-   The diagnostic does not yet apply the original event-driven wall changes,
-   so the closed gate is not evidence of a static collision defect; reproducing
-   that state change belongs to Milestone 3. Special hatch motion, reference
+   not compare stair poses against the original runtime. The original first
+   gameplay spawn is the closed jail cell in `RM_0000`, matching the PSP
+   diagnostic spawn; the cell door blocks Claire from leaving before the
+   lighter sequence. The user's PCSX2 save is after that sequence, where
+   Claire can walk in and out of the cell. These are different scripted states,
+   not conflicting collision results. The diagnostic does not yet apply the
+   original event-driven wall changes, so reproducing the lighter sequence and
+   its door state belongs to Milestone 3. Special hatch motion, reference
    traces for animation/collision/camera, and original camera-pose comparisons
    remain open.
 5. Milestone 3: execute the queued event body and build the first original
