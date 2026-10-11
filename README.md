@@ -2,6 +2,8 @@
 
 A port of Resident Evil: Code Veronica X to the PSP based on the matching PS2 decomp.
 
+Place `recvx.iso` (USA) at the root of the repository and run `make assets`, then `make`.
+
 The original README continues below.
 
 # recvx-decomp
