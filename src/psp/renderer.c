@@ -57,12 +57,16 @@ static ScePspFVector3 fixed_camera_base;
 static uint16_t fixed_camera_angles[3];
 static float fixed_camera_lens;
 static float fixed_camera_fov;
+static ScePspFVector3 fixed_camera_player_focus;
 static uint32_t fixed_camera_pose_cut;
 static uint32_t fixed_camera_pose_variant;
+static uint32_t fixed_camera_player_focus_cut;
+static uint32_t fixed_camera_player_focus_variant;
 static uint16_t fixed_camera_pose_flags;
 static uint32_t fixed_camera_transition_frame;
 static uint32_t fixed_camera_transition_duration;
 static int fixed_camera_pose_initialized;
+static int fixed_camera_player_focus_initialized;
 static int fixed_camera_transition_active;
 
 typedef struct PlayerVertex {
@@ -242,6 +246,25 @@ static int32_t limited_camera_angle(int32_t base, int32_t target, int32_t limit)
     return (uint16_t)(base + delta);
 }
 
+static int32_t tracking_camera_angle(int32_t base, int32_t current,
+                                    int32_t desired, int32_t limit)
+{
+    int32_t relative = camera_angle_delta(desired, base);
+    int32_t target = current;
+    if (limit < 0)
+        limit = -limit;
+    if (relative < -limit) {
+        target = (uint16_t)(base + relative + limit);
+        if (camera_angle_delta(target, current) > 0)
+            target = current;
+    } else if (limit < relative) {
+        target = (uint16_t)(base + relative - limit);
+        if (camera_angle_delta(target, current) < 0)
+            target = current;
+    }
+    return target;
+}
+
 static float camera_rate(float rate)
 {
     if (rate <= 0.0f)
@@ -340,14 +363,14 @@ static void advance_fixed_camera_pose(const RecvxRoomCamera *camera,
 }
 
 static void fixed_camera_base_position(const RecvxRoomMesh *mesh,
-                                       const RecvxPlayer *player,
+                                       const ScePspFVector3 *player_focus,
                                        uint32_t attr,
                                        ScePspFVector3 *position)
 {
     const RecvxRoomCamera *camera =
         &mesh->cameras[camera_cut * 2 + camera_variant];
-    float x_delta = player->x - camera->cut_center_x;
-    float z_delta = player->z - camera->cut_center_z;
+    float x_delta = player_focus->x - camera->cut_center_x;
+    float z_delta = player_focus->z - camera->cut_center_z;
     position->x = camera->position[0];
     position->y = camera->position[1];
     position->z = camera->position[2];
@@ -382,10 +405,31 @@ static void configure_fixed_camera(const RecvxRoomMesh *mesh,
         camera_cut >= mesh->cut_count)
         return;
     camera = &mesh->cameras[camera_cut * 2 + camera_variant];
-    attr = recvxRoomCutAttributeForPosition(mesh, camera_cut, player->x,
-                                            player->z, player->floor);
+    if (!fixed_camera_player_focus_initialized ||
+        fixed_camera_player_focus_cut != camera_cut ||
+        fixed_camera_player_focus_variant != camera_variant) {
+        fixed_camera_player_focus.x = player->x;
+        fixed_camera_player_focus.y = player->y + camera->height;
+        fixed_camera_player_focus.z = player->z;
+        fixed_camera_player_focus_cut = camera_cut;
+        fixed_camera_player_focus_variant = camera_variant;
+        fixed_camera_player_focus_initialized = 1;
+    } else {
+        for (uint32_t tick = 0; tick < simulation_ticks; ++tick) {
+            fixed_camera_player_focus.x +=
+                0.5f * (player->x - fixed_camera_player_focus.x);
+            fixed_camera_player_focus.z +=
+                0.5f * (player->z - fixed_camera_player_focus.z);
+        }
+        fixed_camera_player_focus.y = player->y + camera->height;
+    }
+    attr = recvxRoomCutAttributeForPosition(mesh, camera_cut,
+                                            fixed_camera_player_focus.x,
+                                            fixed_camera_player_focus.z,
+                                            player->floor);
     attr = camera_variant != 0 ? attr >> 16 : attr & 0xffffu;
-    fixed_camera_base_position(mesh, player, attr, &base_position);
+    fixed_camera_base_position(mesh, &fixed_camera_player_focus, attr,
+                               &base_position);
     aim_position = base_position;
     if (fixed_camera_pose_initialized &&
         ((fixed_camera_pose_cut == camera_cut &&
@@ -394,9 +438,9 @@ static void configure_fixed_camera(const RecvxRoomMesh *mesh,
         aim_position = fixed_camera_base;
     for (unsigned int axis = 0; axis < 3; ++axis)
         angles[axis] = signed_camera_angle(camera->angles[axis]);
-    dx = player->x - aim_position.x;
-    dz = player->z - aim_position.z;
-    dy = player->y + camera->height - aim_position.y;
+    dx = fixed_camera_player_focus.x - aim_position.x;
+    dz = fixed_camera_player_focus.z - aim_position.z;
+    dy = fixed_camera_player_focus.y - aim_position.y;
     horizontal = sqrtf(dx * dx + dz * dz);
     if (camera->flags & 0x4u) {
         if (!(attr & 0x4u))
@@ -425,43 +469,12 @@ static void configure_fixed_camera(const RecvxRoomMesh *mesh,
             (int32_t)(-atan2f(dy, horizontal) * 10430.37835f);
         int32_t desired_yaw =
             (int32_t)(-atan2f(dx, dz) * 10430.37835f) + 32768;
-        int32_t delta;
-        if (camera->angle_limits[0] != 0 && !(attr & 0x4u)) {
-            if (pitch_limit < 0)
-                pitch_limit = -pitch_limit;
-            delta = camera_angle_delta(desired_pitch, angles[0]);
-            if (delta < -pitch_limit) {
-                int32_t next = (uint16_t)(angles[0] - pitch_limit);
-                if (camera_angle_delta(next, current_pitch) > 0)
-                    next = current_pitch;
-                angles[0] = next;
-            } else if (delta > pitch_limit) {
-                int32_t next = (uint16_t)(angles[0] + pitch_limit);
-                if (camera_angle_delta(next, current_pitch) < 0)
-                    next = current_pitch;
-                angles[0] = next;
-            } else {
-                angles[0] = current_pitch;
-            }
-        }
-        if (camera->angle_limits[1] != 0 && !(attr & 0x2u)) {
-            if (yaw_limit < 0)
-                yaw_limit = -yaw_limit;
-            delta = camera_angle_delta(desired_yaw, angles[1]);
-            if (delta < -yaw_limit) {
-                int32_t next = (uint16_t)(angles[1] - yaw_limit);
-                if (camera_angle_delta(next, current_yaw) > 0)
-                    next = current_yaw;
-                angles[1] = next;
-            } else if (delta > yaw_limit) {
-                int32_t next = (uint16_t)(angles[1] + yaw_limit);
-                if (camera_angle_delta(next, current_yaw) < 0)
-                    next = current_yaw;
-                angles[1] = next;
-            } else {
-                angles[1] = current_yaw;
-            }
-        }
+        if (camera->angle_limits[0] != 0 && !(attr & 0x4u))
+            angles[0] = tracking_camera_angle(angles[0], current_pitch,
+                                              desired_pitch, pitch_limit);
+        if (camera->angle_limits[1] != 0 && !(attr & 0x2u))
+            angles[1] = tracking_camera_angle(angles[1], current_yaw,
+                                              desired_yaw, yaw_limit);
     }
     if ((camera->roll_limits[0] != 0 || camera->roll_limits[1] != 0 ||
          camera->roll_limits[2] != 0 || camera->roll_limits[3] != 0) &&
@@ -786,6 +799,7 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
     camera_cut = 0;
     camera_variant = 0;
     fixed_camera_pose_initialized = 0;
+    fixed_camera_player_focus_initialized = 0;
     fixed_camera_transition_active = 0;
     fixed_camera_transition_frame = 0;
     fixed_camera_transition_duration = 0;
@@ -902,7 +916,8 @@ static void update_player_simulation(RecvxPlayer *player,
         normal_motion_slot = 39;
     else
         normal_motion_slot = 42;
-    turn_speed = (forward == 0.0f ? 3.769911184f : 2.094395102f);
+    turn_speed = forward == 0.0f ? 3.769911184f :
+                 run ? 2.356194490f : 2.094395102f;
     for (tick = 0; tick < ticks; ++tick) {
         unsigned int stair_phase = player->stair_phase;
         unsigned int motion_slot = normal_motion_slot;
@@ -950,8 +965,13 @@ static void update_player_simulation(RecvxPlayer *player,
         }
         motion = player_motion(player_animation_slot);
         if (motion != NULL && stair_phase != RECVX_PLAYER_STAIR_MOVE) {
-            player_animation_frame += 1.0f;
-            if (player_animation_frame >= motion->frame_count)
+            float frame_step = motion_slot == 39u &&
+                               stair_phase == RECVX_PLAYER_STAIR_NONE &&
+                               turn > 0.0f ? -1.0f : 1.0f;
+            player_animation_frame += frame_step;
+            if (player_animation_frame < 0.0f)
+                player_animation_frame += (float)motion->frame_count;
+            else if (player_animation_frame >= motion->frame_count)
                 player_animation_frame = fmodf(player_animation_frame,
                                                (float)motion->frame_count);
         }

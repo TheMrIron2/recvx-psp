@@ -533,16 +533,22 @@ flag changes in the production path.
    controller's per-state counts and rates: idle 5 ticks at 42598/65536,
    pivot and walk 8 at 42598/65536, reverse 8 at 49152/65536, and run 4 at
    42598/65536. Initial frames preserve the source controller's start-frame
-   or proportional frame mapping. The texture-tail decoder loads the 19
-   embedded T8 pages and draws the initial Claire body's five local material
-   slots with their UVs, palettes, sampler flags, alpha, and diffuse color.
+   or proportional frame mapping. Source control also decrements the pivot
+   frame on right turns, increments it on left turns, and turns at 4.5 degrees
+   per tick while running versus 4 degrees while walking; the PSP path now
+   follows those rates. Equal 300 ms PPSSPP captures
+   (`m2-player-room-0030-turn-right.png` and `-turn-left.png`) show pivot slot
+   39 at frame 23 for right and frame 9 for left. The texture-tail decoder
+   loads the 19 embedded T8 pages and draws the initial Claire body's five
+   local material slots with their UVs, palettes, sampler flags, alpha, and
+   diffuse color.
    PPSSPP captures show the textured actor while walking; other player models
    and a frame-by-frame pose comparison remain open.
 4. Milestone 2: bring original movement, collision, and camera behavior onto
    the PSP runtime. The state controller remains diagnostic; room camera poses
    and automatic cut selection use original room records. Tests cover camera
-   variant selection and cut-edge hysteresis, but camera movement has no
-   reference trace yet. The original player, motion, camera, and collision
+   variant selection and cut-edge hysteresis; camera movement now has PPSSPP
+   smoke traces, but no original-runtime pose comparison. The original player, motion, camera, and collision
    modules pass the PSP syntax check, and `make legacy-link-inventory` records
    their unresolved services. The player object still depends on broad combat,
    enemy, audio, effect, model, and global game services, so syntax-checking
@@ -555,8 +561,9 @@ flag changes in the production path.
    6 at x=35.49939 and remains there through tick 30. Active ETC type-2 stair
    regions with nonzero parameter 0 now produce up to four edge walls generated
    by the original `bhSetDansaLimitAtari`; neighboring stair regions suppress
-   shared edges. The four packaged opening-route rooms have no active stair
-   records, so this path is built but not exercised in PPSSPP. Wall, floor,
+   shared edges. The four opening-route rooms have no active stair records.
+   PPSSPP smoke now exercises the normal stair in `RM_1030` using a test-only
+   spawn override that places Claire just outside its trigger. Wall, floor,
    door, and stair records are room-owned. The
    player preserves original type-1 step-sound IDs and type-3 slow, water, and
    hazard surface states; slow floors apply the original 0.8 movement scale.
@@ -566,15 +573,16 @@ flag changes in the production path.
    its four cardinal facing masks, and the player flag suppression for bits
    `0x2` and `0x4`. A host trace against `RM_0000` selects floor records 2 and 3
    only for their allowed heading bins. The selected record index is exposed
-   on the player and diagnostic HUD; PPSSPP still omits the in-game text from
-   its captures. Item-use handling of the selected record, stair height/state
-   transitions, audio/effect responses, and the original player state loop
+   on the player and diagnostic HUD; hardware rendering omits this text, while
+   software-rendered PPSSPP captures show it. Item-use handling of the selected
+   record, stair height/state transitions, audio/effect responses, and the
+   original player state loop
    remain open. PPSSPP 1.19.3 was restarted from the
    refreshed EBOOT. The new `m2-player-room-0030-contact-stable.png` capture
    shows Claire holding at the visible wall boundary during sustained input.
-   The debug HUD is absent from PPSSPP's captures, so the image cannot provide
-   the player coordinates or blocked flag. A scripted RM_0030 path uses the
-   authored walk speeds and source cut areas to move from cut 2 to cut 0, then
+   That hardware-rendered image cannot provide the player coordinates or
+   blocked flag. A scripted RM_0030 path uses the authored walk speeds and
+   source cut areas to move from cut 2 to cut 0, then
    cut 1 to cut 3. The `camera-cut2`, `camera-diagonal`, and `camera-cut1`
    captures show those views; cut 3's source camera has the interpolation flag
    and speed 30, and the `camera-transition-near`, `camera-transition`, and
@@ -582,12 +590,54 @@ flag changes in the production path.
    while keeping Claire visible. The transition opens onto a large unrendered
    dark area in the room view. This confirms visible cut selection and motion
    in PPSSPP, but does not compare camera poses to the original runtime.
+   Source review found `bhInitActiveCamera` initializes the camera focus at
+   Claire's position, then `bhControlActiveCamera` moves its horizontal focus
+   halfway toward her each game tick. The renderer now keeps that focus state
+   and uses it for camera-area attributes, position offsets, and look angles;
+   a cut or camera-variant change resets the focus to Claire's current position.
+   The refreshed EBOOT repeated the RM_0030 cut path in `m2-focus-camera-*`
+   captures, including the wall hold and the cut 1-to-3 transition.
+   After switching the desktop to 2560×1440 and PPSSPP to software rendering,
+   the refreshed `m2-player-room-0030-camera-*` captures are full-screen
+   2560×1440 images with the HUD visible. In the latest clean run,
+   `camera-transition-near` reports cut 1/4 at (14.0, 92.8), and
+   `camera-transition-settled` reports cut 3/4 at (23.6, 91.6) with `Wall`
+   active. The player remains visible as the automatic cut changes; this route
+   reaches the barrier before cut 4, so it does not confirm the full path.
+   Source review found that follow-mode angular limits clamp the desired
+   player-relative view around the base angle while preventing backward camera
+   motion; `tracking_camera_angle` now follows that rule and handles signed
+   limits. The three flagged source cameras (`RM_1070`, `RM_3190`, and
+   `RM_7050`) all have zero pitch and yaw limits, so stock room data cannot
+   exercise this clamp. A test-only `RM_3190` spawn in cut 3 launched in the
+   refreshed EBOOT (`m2-follow-camera-spawn.png` and
+   `m2-follow-camera-walk-*.png`), but forward input met the workbench and
+   produced no observable camera movement. Those frames do not validate the
+   tracking rule.
+   A source comparison of `bhCheckWall` found that type-7 wall edges apply the
+   floor attribute, use the room wall height when their authored height is
+   zero, and test vertical overlap against the wall edge. The diagnostic PSP
+   predicate now follows those rules. A refreshed software-rendered PPSSPP run
+   held forward and run input into the `RM_0030` debris and wall area; its
+   2560×1440 `m2-focus-room-0030-wall-hold.png` capture shows Claire at
+   `(-22.5, 71.6)` with `Wall` active. This confirms the diagnostic collision
+   result, not an original-runtime match. The attempted continuation of this
+   wall-hold path stayed in cut 1 because Claire remained against the
+   obstruction; the separate camera-transition run above provides the cut
+   evidence.
    Static inspection of all 205 packed rooms found active type-1 stair records
    in 54 rooms. Claire's extracted normal stair motions 31, 32, 35, and 36 each
    have 27 frames and root position tracks; her initial archive has no tracks
-   in special hatch slots 62 through 65. The opening four rooms still provide
-   no stair case for PPSSPP validation. Reference traces for animation,
-   collision, and camera movement remain open.
+   in special hatch slots 62 through 65. PPSSPP captures in
+   `m2-player-room-1030-stair-*` show Claire approach and turn toward the
+   normal stair trigger; she then moves out of the fixed camera view, so the
+   images do not confirm her landing position. A focused host trace confirms
+   motion slot 36, the 25-tick turn, 19 root-motion frames, 10 recovery ticks,
+   and the floor-0 snap. This uses a test-only spawn override under the ignored
+   smoke directory; the packaged `build/psp/data` room stays unchanged. It does
+   not compare stair poses against the original runtime. Special hatch motion,
+   reference traces for animation/collision/camera, and original camera-pose
+   comparisons remain open.
 5. Milestone 3: execute the queued event body and build the first original
    interaction and door sequence. Preserve event flags, script position,
    transition completion, and state on return; keep unsupported operations

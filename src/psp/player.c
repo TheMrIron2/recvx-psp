@@ -105,15 +105,16 @@ static int circle_intersects_triangle(float x, float z, float radius,
                                     triangle[0], triangle[1]) <= radius_squared;
 }
 
-static int inside_rectangle(float x, float z, float px, float pz,
-                            float width, float depth, float radius)
+static int circle_intersects_rectangle(float x, float z, float px, float pz,
+                                       float width, float depth, float radius)
 {
     float min_x = fminf(px, px + width);
     float max_x = fmaxf(px, px + width);
     float min_z = fminf(pz, pz + depth);
     float max_z = fmaxf(pz, pz + depth);
-    return x >= min_x - radius && x < max_x + radius &&
-           z >= min_z - radius && z < max_z + radius;
+    float dx = x < min_x ? min_x - x : x > max_x ? x - max_x : 0.0f;
+    float dz = z < min_z ? min_z - z : z > max_z ? z - max_z : 0.0f;
+    return dx * dx + dz * dz <= radius * radius;
 }
 
 static int stair_contains(const RecvxPlayerRoom *room, int32_t floor,
@@ -216,15 +217,18 @@ static int wall_overlaps(const RecvxPlayer *player, const RecvxPlayerRoom *room,
                          const RecvxPlayerWall *wall, float x, float y, float z)
 {
     float height = wall->h != 0.0f ? wall->h : room->wall_height;
-    if (!wall->active || !wall_applies_to_player(player, wall) ||
-        y + PLAYER_HEIGHT < wall->py || y > wall->py + height)
+    if (!wall->active || !wall_applies_to_player(player, wall))
         return 0;
+    if (wall->type != 7) {
+        if (y + PLAYER_HEIGHT < wall->py || y > wall->py + height)
+            return 0;
+    }
 
     switch (wall->type) {
     case 0:
     case 1:
-        return inside_rectangle(x, z, wall->px, wall->pz, wall->w, wall->d,
-                                PLAYER_RADIUS);
+        return circle_intersects_rectangle(x, z, wall->px, wall->pz,
+                                           wall->w, wall->d, PLAYER_RADIUS);
     case 2:
     case 3: {
         float dx = x - wall->px, dz = z - wall->pz;
