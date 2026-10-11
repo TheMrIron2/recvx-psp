@@ -73,6 +73,22 @@ static int fixed_camera_pose_initialized;
 static int fixed_camera_player_focus_initialized;
 static int fixed_camera_transition_active;
 
+typedef struct RecvxRendererFrameState {
+    const RecvxScene *scene;
+    RecvxRoomMesh *mesh;
+    const RecvxTextureSet *textures;
+    RecvxRoomActors *actors;
+    RecvxPlayer *player;
+    const RecvxPlayerRoom *player_room;
+    const char *room_name;
+    ScePspFVector3 eye, center, up;
+    float near_plane, far_plane;
+    uint64_t update_cost_us;
+} RecvxRendererFrameState;
+
+static RecvxRendererFrameState frame_state;
+static const char *frame_overlay;
+
 typedef struct PlayerVertex {
     uint32_t color;
     float x, y, z;
@@ -179,6 +195,10 @@ static void draw_memory_hud(const RecvxScene *scene, const RecvxRoomMesh *mesh,
                          (unsigned int)(command_list_bytes / 1024),
                          (unsigned int)(sizeof(command_list) / 1024),
                          (unsigned int)(command_list_high_water / 1024));
+    if (frame_overlay != NULL) {
+        pspDebugScreenSetXY(1, 10);
+        pspDebugScreenPrintf("%s", frame_overlay);
+    }
     pspDebugScreenSetXY(1, 9);
     pspDebugScreenPrintf("Actors %u, %u unsupported  Floor target %d",
                          room_actor_set != NULL ?
@@ -860,6 +880,8 @@ int recvxRendererStart(const RecvxScene *scene, RecvxRoomMesh *mesh,
     if (sceGuInit() < 0)
         return -1;
     initialized = 1;
+    memset(&frame_state, 0, sizeof(frame_state));
+    frame_overlay = NULL;
     read_module_footprint();
     command_list_bytes = command_list_high_water = 0;
     player_source_bytes = actor_source_bytes;
@@ -1137,11 +1159,13 @@ static void update_player_simulation(RecvxPlayer *player,
     }
 }
 
-void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const RecvxTextureSet *textures,
-                        RecvxRoomActors *actors,
-                        RecvxPlayer *player, const RecvxPlayerRoom *player_room,
-                        const char *room_name,
-                        const RecvxInputState *input)
+void recvxRendererUpdate(const RecvxScene *scene, RecvxRoomMesh *mesh,
+                         const RecvxTextureSet *textures,
+                         RecvxRoomActors *actors,
+                         RecvxPlayer *player,
+                         const RecvxPlayerRoom *player_room,
+                         const char *room_name,
+                         const RecvxInputState *input)
 {
     uint64_t now = recvxPlatformTimeUs();
     float frame_dt = fminf(0.05f, (float)(now - previous_time) * 0.000001f);
@@ -1255,6 +1279,41 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
         far_plane = radius * 32.0f;
     }
 
+    frame_state.scene = scene;
+    frame_state.mesh = mesh;
+    frame_state.textures = textures;
+    frame_state.actors = actors;
+    frame_state.player = player;
+    frame_state.player_room = player_room;
+    frame_state.room_name = room_name;
+    room_actor_set = actors;
+    frame_state.eye = eye;
+    frame_state.center = center;
+    frame_state.up = up;
+    frame_state.near_plane = near_plane;
+    frame_state.far_plane = far_plane;
+    frame_state.update_cost_us = recvxPlatformTimeUs() - now;
+}
+
+void recvxRendererDraw(int wait_for_vblank)
+{
+    const RecvxScene *scene = frame_state.scene;
+    RecvxRoomMesh *mesh = frame_state.mesh;
+    const RecvxTextureSet *textures = frame_state.textures;
+    RecvxRoomActors *actors = frame_state.actors;
+    RecvxPlayer *player = frame_state.player;
+    const RecvxPlayerRoom *player_room = frame_state.player_room;
+    const char *room_name = frame_state.room_name;
+    ScePspFVector3 eye = frame_state.eye;
+    ScePspFVector3 center = frame_state.center;
+    ScePspFVector3 up = frame_state.up;
+    float near_plane = frame_state.near_plane;
+    float far_plane = frame_state.far_plane;
+    uint64_t submit_started = recvxPlatformTimeUs();
+
+    if (!initialized || scene == NULL)
+        return;
+
     sceGuStart(GU_DIRECT, command_list);
     sceGuClearColor(0xff18120e);
     sceGuClearDepth(0);
@@ -1304,7 +1363,6 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
                                 (int)batch->vertex_count, NULL, mesh->textured_vertices + batch->first_vertex);
             }
         }
-    room_actor_set = actors;
         sceGuDisable(GU_BLEND);
         sceGuDisable(GU_ALPHA_TEST);
         sceGuDisable(GU_TEXTURE_2D);
@@ -1370,7 +1428,7 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
         uint64_t submit_done = recvxPlatformTimeUs();
         sceGuSync(GU_SYNC_FINISH, GU_SYNC_WHAT_DONE);
         ge_wait_us = recvxPlatformTimeUs() - submit_done;
-        cpu_submit_us = submit_done - now;
+        cpu_submit_us = frame_state.update_cost_us + submit_done - submit_started;
     }
 
     /* Write the HUD into the finished draw buffer before swapping it. */
@@ -1420,8 +1478,26 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
     pspDebugScreenSetXY(1, 32);
     pspDebugScreenPrintf(player_mode ? "CROSS door  SQUARE return  TRIANGLE reset  START exit" :
                          "CROSS camera  CIRCLE cut  SQUARE rooms  START exit");
-    sceDisplayWaitVblankStartCB();
+    if (wait_for_vblank)
+        sceDisplayWaitVblankStartCB();
     draw_buffer = sceGuSwapBuffers();
+}
+
+void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh,
+                        const RecvxTextureSet *textures,
+                        RecvxRoomActors *actors, RecvxPlayer *player,
+                        const RecvxPlayerRoom *player_room,
+                        const char *room_name,
+                        const RecvxInputState *input)
+{
+    recvxRendererUpdate(scene, mesh, textures, actors, player, player_room,
+                        room_name, input);
+    recvxRendererDraw(1);
+}
+
+void recvxRendererSetOverlay(const char *text)
+{
+    frame_overlay = text;
 }
 
 void recvxRendererStop(void)
@@ -1432,6 +1508,8 @@ void recvxRendererStop(void)
     sceGuDisplay(GU_FALSE);
     sceGuTerm();
     initialized = 0;
+    memset(&frame_state, 0, sizeof(frame_state));
+    frame_overlay = NULL;
     player_mode = 0;
     player_model_mesh = NULL;
     player_actor_mesh = NULL;

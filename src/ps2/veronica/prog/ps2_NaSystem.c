@@ -2,6 +2,7 @@
 #include "../../../ps2/veronica/prog/ps2_dummy.h"
 #include "../../../ps2/veronica/prog/ps2_loadtim2.h"
 #include "../../../ps2/veronica/prog/main.h"
+#include "psp/original_clock.h"
 
 PS2_NJ_SAVE Ps2_nj_save_current;
 
@@ -100,11 +101,7 @@ void Ps2SwapDBuff()
 int vsync_func(int) 
 {
     Ps2_vcount++; 
-    
-    if ((((sys->tk_flg & 0x80)) && ((sys->gm_flg & 0x80000000))) && (sys->time < 216000000)) 
-    {
-        sys->time++;
-    }
+    recvxOriginalVsyncTimeAdvance(1);
     
     ExitHandler(); 
 } 

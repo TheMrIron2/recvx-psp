@@ -32,6 +32,7 @@
 #include "../../../ps2/veronica/prog/sdfunc.h"
 #include "../../../ps2/veronica/prog/sync.h"
 #include "../../../ps2/veronica/prog/system.h"
+#include "psp/live_task_dispatch.h"
 
 typedef void(*bhSysTaskJumpTab_proc)();
 
@@ -192,17 +193,10 @@ void njUserInit(void)
 // 100% matching!
 Sint32 njUserMain(void) 
 { 
-    int i; 
-
     Ps2_sys_cnt++; 
-  
-    for (i = 0; i < 23; i++) 
-    { 
-        if (((sys->tk_flg & (1 << i))) && (!(sys->ts_flg & (1 << i)))) 
-        { 
-            bhSysTaskJumpTab[i](); 
-        } 
-    } 
+
+    recvxRunLiveTaskSlots(&sys->tk_flg, &sys->ts_flg,
+                          bhSysTaskJumpTab, 23);
     
     PS2_jikken(); 
     

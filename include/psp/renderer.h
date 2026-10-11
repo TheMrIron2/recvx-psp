@@ -20,6 +20,15 @@ void recvxRendererFrame(const RecvxScene *scene, RecvxRoomMesh *mesh, const Recv
                         RecvxPlayer *player, const RecvxPlayerRoom *player_room,
                         const char *room_name,
                         const RecvxInputState *input);
+void recvxRendererUpdate(const RecvxScene *scene, RecvxRoomMesh *mesh,
+                         const RecvxTextureSet *textures,
+                         RecvxRoomActors *room_actors,
+                         RecvxPlayer *player,
+                         const RecvxPlayerRoom *player_room,
+                         const char *room_name,
+                         const RecvxInputState *input);
+void recvxRendererDraw(int wait_for_vblank);
+void recvxRendererSetOverlay(const char *text);
 void recvxRendererStop(void);
 
 #endif
