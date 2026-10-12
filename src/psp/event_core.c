@@ -12,6 +12,8 @@
 #define RECVX_EVENT_INSTRUCTION_LIMIT 4096u
 #define RECVX_EVENT_NO_TASK UINT16_MAX
 
+typedef unsigned int (*RecvxEventHandler)(void);
+
 // Original event handlers share this state with the full engine table
 #if defined(__PSP__) && !defined(RECVX_EVENT_CORE_HOST_TEST)
 _Static_assert(sizeof(void *) == 4, "PSP pointer size changed");
@@ -48,21 +50,36 @@ static unsigned int current_task = RECVX_EVENT_NO_TASK;
 static uint32_t instruction_count;
 static uint32_t instruction_count_this_call;
 static uint32_t flag_write_count;
+static RecvxEventCoreDispatch last_dispatch;
+static int last_dispatch_valid;
 static RecvxEventCoreFault event_fault;
 static uint32_t scenario_start;
 static uint32_t scenario_end;
 static int scenario_active;
 
 static int has_task_bytes(const unsigned char *pc, size_t count);
+static int pop_conditional_branch(void);
 static unsigned int dispatch_instruction(void);
 
 #ifdef RECVX_EVENT_CORE_TEST
 #define RECVX_EVENT_CORE(opcode, handler) [opcode] = handler,
+#define RECVX_EVENT_ENGINE(opcode, handler)
 #define RECVX_EVENT_FULL(opcode, handler)
 unsigned int (*bhScenarioJmpT[256])() = {
 #include "event_dispatch_table.inc"
 };
 #undef RECVX_EVENT_FULL
+#undef RECVX_EVENT_ENGINE
+#undef RECVX_EVENT_CORE
+#elif defined(RECVX_EVENT_ENGINE_TEST)
+#define RECVX_EVENT_CORE(opcode, handler) [opcode] = handler,
+#define RECVX_EVENT_ENGINE(opcode, handler) [opcode] = handler,
+#define RECVX_EVENT_FULL(opcode, handler)
+unsigned int (*bhScenarioJmpT[256])() = {
+#include "event_dispatch_table.inc"
+};
+#undef RECVX_EVENT_FULL
+#undef RECVX_EVENT_ENGINE
 #undef RECVX_EVENT_CORE
 #else
 extern unsigned int (*bhScenarioJmpT[256])();
@@ -92,6 +109,7 @@ static void set_fault(enum RecvxEventCoreFaultCode code, uint8_t opcode,
     event_fault.event_id = current_task < RECVX_EVENT_TASK_COUNT ?
                            task_event_id[current_task] : UINT32_MAX;
     event_fault.opcode = opcode;
+    event_fault.handler_at_fault = (uintptr_t)bhScenarioJmpT[opcode];
     event_fault.section_pc = UINT32_MAX;
     if (event_section == NULL || pc == NULL)
         return;
@@ -115,6 +133,13 @@ static int task_index(const BH_SCEWORK *task, unsigned int *index)
         return -1;
     *index = (unsigned int)(offset / sizeof(BH_SCEWORK));
     return 0;
+}
+
+static int valid_task_record(void)
+{
+    unsigned int index;
+
+    return task_index(bhCetask, &index) == 0;
 }
 
 static uint32_t section_offset(const unsigned char *pc)
@@ -165,6 +190,8 @@ void recvxEventCoreReset(void)
     instruction_count = 0;
     instruction_count_this_call = 0;
     flag_write_count = 0;
+    memset(&last_dispatch, 0, sizeof(last_dispatch));
+    last_dispatch_valid = 0;
     scenario_start = 0;
     scenario_end = 0;
     scenario_active = 0;
@@ -254,12 +281,8 @@ int recvxEventCoreRunScenario(uint32_t offset)
             ;
         if (event_fault.code != RECVX_EVENT_FAULT_NONE || bhIfelFlg <= 0)
             break;
-        if (G_Sp == NULL || !has_task_bytes((unsigned char *)G_Sp,
-                                            sizeof(*G_Sp))) {
-            set_fault(RECVX_EVENT_FAULT_BAD_TASK, 0, bhScePtr);
+        if (pop_conditional_branch() != 0)
             break;
-        }
-        bhScePtr = (unsigned char *)--G_Sp;
         --bhIfelFlg;
     }
     current_task = RECVX_EVENT_NO_TASK;
@@ -270,6 +293,14 @@ int recvxEventCoreRunScenario(uint32_t offset)
 const RecvxEventCoreFault *recvxEventCoreGetFault(void)
 {
     return &event_fault;
+}
+
+int recvxEventCoreGetLastDispatch(RecvxEventCoreDispatch *dispatch)
+{
+    if (dispatch == NULL || !last_dispatch_valid)
+        return -1;
+    *dispatch = last_dispatch;
+    return 0;
 }
 
 const char *recvxEventCoreFaultName(enum RecvxEventCoreFaultCode code)
@@ -432,6 +463,29 @@ static int has_task_bytes(const unsigned char *pc, size_t count)
            count <= task_end[current_task] - offset;
 }
 
+static int pop_conditional_branch(void)
+{
+    uintptr_t stack, destination;
+
+    if (G_Sp == NULL) {
+        set_fault(RECVX_EVENT_FAULT_BAD_TASK, 1, bhScePtr);
+        return -1;
+    }
+    stack = (uintptr_t)G_Sp;
+    if (stack < sizeof(*G_Sp)) {
+        set_fault(RECVX_EVENT_FAULT_BAD_TASK, 1, bhScePtr);
+        return -1;
+    }
+    destination = stack - sizeof(*G_Sp);
+    if (!has_task_bytes((const unsigned char *)destination, 1)) {
+        set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, 1, bhScePtr);
+        return -1;
+    }
+    bhScePtr = (unsigned char *)destination;
+    G_Sp = (unsigned int *)destination;
+    return 0;
+}
+
 static size_t flag_bank_words(unsigned int type)
 {
     switch (type) {
@@ -455,7 +509,71 @@ static int validate_core_instruction(unsigned int opcode)
     if (opcode == 0) {
         extent = 1;
     } else if (opcode == 1) {
-        extent = 3;
+        uint16_t command;
+        uintptr_t target;
+        extent = 2;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        command = read_u16(bhScePtr);
+        target = (uintptr_t)bhScePtr + sizeof(uint16_t) + (command >> 8);
+        if (!has_task_bytes((const unsigned char *)target, 1)) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+    } else if (opcode == 2) {
+        uintptr_t target;
+        if (!has_task_bytes(bhScePtr, 2)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (bhIfelFlg <= 0 || G_Sp == NULL) {
+            set_fault(RECVX_EVENT_FAULT_BAD_TASK, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        target = (uintptr_t)bhScePtr + bhScePtr[1];
+        if ((scenario_active &&
+             (target < (uintptr_t)event_section + scenario_start ||
+              target > (uintptr_t)event_section + scenario_end)) ||
+            (!scenario_active &&
+             (target < (uintptr_t)event_section + task_start[current_task] ||
+              target > (uintptr_t)event_section + task_end[current_task]))) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 3) {
+        extent = 2;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (bhIfelFlg <= 0 || G_Sp == NULL) {
+            set_fault(RECVX_EVENT_FAULT_BAD_TASK, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 4) {
+        unsigned int type, word;
+        uint16_t flag_spec;
+        extent = 6;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        type = bhScePtr[1];
+        flag_spec = read_u16(bhScePtr + 2);
+        word = (flag_spec & 0x3ffu) >> 5;
+        if (flag_bank_words(type) == 0 ||
+            word >= flag_bank_words(type) ||
+            (type == 10 && bhScePtr[2] != 22 && bhScePtr[2] != 23) ||
+            (type <= 12 && sys == NULL) ||
+            (type >= 13 && plp == NULL)) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
     } else if (opcode == 5) {
         unsigned int type, word, operation;
         extent = 6;
@@ -466,8 +584,227 @@ static int validate_core_instruction(unsigned int opcode)
         type = bhScePtr[1];
         word = (read_u16(bhScePtr + 2) & 0x3e0u) >> 5;
         operation = read_u16(bhScePtr + 4) >> 8;
-        if (word >= flag_bank_words(type) || operation > 5) {
+        if (word >= flag_bank_words(type) || operation > 5 ||
+            (type <= 12 && sys == NULL) ||
+            (type >= 13 && plp == NULL)) {
             set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 8) {
+        extent = 4;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (sys == NULL ||
+            !(bhScePtr[1] == 0 || bhScePtr[1] == 1 ||
+              bhScePtr[1] == 2 || bhScePtr[1] == 8 ||
+              bhScePtr[1] == 15 || bhScePtr[1] == 16 ||
+              bhScePtr[1] == 18 || bhScePtr[1] == 19 ||
+              bhScePtr[1] == 20 || bhScePtr[1] == 21 ||
+              bhScePtr[1] == 22 || bhScePtr[1] == 25) ||
+            ((bhScePtr[1] == 16 || bhScePtr[1] == 18) && plp == NULL) ||
+            ((bhScePtr[1] == 18 || bhScePtr[1] == 22) &&
+             (sys->ply_id < 0 || sys->ply_id >= 4))) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 10 || opcode == 12) {
+        unsigned int index;
+        int count = opcode == 10 ? (rom != NULL ? rom->wal_n : 0) :
+                                   (rom != NULL ? rom->flr_n : 0);
+        const ATR_WORK *attributes = opcode == 10 ?
+            (rom != NULL ? rom->walp : NULL) :
+            (rom != NULL ? rom->flrp : NULL);
+        extent = 4;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        index = bhScePtr[1];
+        if (count < 0 || index >= (unsigned int)count || attributes == NULL) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 14) {
+        unsigned int item_flag, etc_index;
+        extent = 6;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        item_flag = read_u16(bhScePtr + 2);
+        etc_index = bhScePtr[4];
+        if (rom == NULL || rom->etc_n < 0 || etc_index >= (unsigned int)rom->etc_n ||
+            rom->etcp == NULL || sys == NULL || sys->itwp == NULL ||
+            (item_flag & 0x3ffu) >= 512u ||
+            rom->etcp[etc_index].prm0 >= 39936u / sizeof(O_WRK)) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 20) {
+        unsigned int event_id;
+        extent = 4;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        event_id = bhScePtr[3];
+        if (event_table_count <= RECVX_EVENT_TABLE_PREFIX_WORDS ||
+            event_id >= event_table_count - RECVX_EVENT_TABLE_PREFIX_WORDS) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 17) {
+        extent = 2;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (sys == NULL || sys->ply_id < 0 || sys->ply_id >= 24) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 38) {
+        extent = 2;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (plp == NULL) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 66) {
+        extent = 4;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (sys == NULL || sys->itwp == NULL ||
+            bhScePtr[1] >= 39936u / sizeof(O_WRK)) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 26 || opcode == 55 || opcode == 182) {
+        extent = 2;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if ((opcode == 26 && !valid_task_record()) ||
+            (opcode == 55 && sys == NULL)) {
+            set_fault(RECVX_EVENT_FAULT_BAD_TASK, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 35) {
+        unsigned int item_work, flag, item;
+        extent = 6;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        item_work = bhScePtr[1];
+        flag = read_u16(bhScePtr + 2);
+        item = bhScePtr[4];
+        if (rom == NULL || rom->etcp == NULL || sys == NULL ||
+            sys->itwp == NULL || rom->etc_n < 0 ||
+            item_work >= 39936u / sizeof(O_WRK) ||
+            item >= (unsigned int)rom->etc_n || flag >= 512u) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 37) {
+        extent = 10;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (rom == NULL || rom->etcp == NULL || rom->etc_n < 0 ||
+            bhScePtr[1] >= (unsigned int)rom->etc_n) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 56) {
+        extent = 6;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (bhScePtr[1] > 2 || sys == NULL ||
+            (bhScePtr[1] == 0 && plp == NULL) ||
+            (bhScePtr[1] == 1 &&
+             (rom == NULL || rom->enep == NULL ||
+              rom->ene_n < 0 ||
+              bhScePtr[2] >= (unsigned int)rom->ene_n ||
+              rom->enep[bhScePtr[2]].wrk_no >= 128)) ||
+            (bhScePtr[1] == 2 &&
+             (sys->obwp == NULL ||
+              bhScePtr[2] >= 39936u / sizeof(O_WRK)))) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 101) {
+        extent = 4;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (bhScePtr[1] != 1 || rom == NULL || rom->enep == NULL ||
+            rom->ene_n < 0 ||
+            bhScePtr[2] >= (unsigned int)rom->ene_n ||
+            rom->enep[bhScePtr[2]].wrk_no >= 128 ||
+            !valid_task_record()) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 105) {
+        unsigned int command;
+        if (!has_task_bytes(bhScePtr, 2)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (!valid_task_record() || bhCetask->work == NULL) {
+            set_fault(RECVX_EVENT_FAULT_BAD_TASK, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        command = bhScePtr[1];
+        switch (command) {
+        case 7: extent = 8; break;
+        case 11: case 12: case 13: extent = 6; break;
+        case 24:
+            if (!has_task_bytes(bhScePtr, 4)) {
+                set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode,
+                          bhScePtr);
+                return -1;
+            }
+            if (bhScePtr[2] > 25 || bhScePtr[3] > 3) {
+                set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode,
+                          bhScePtr);
+                return -1;
+            }
+            extent = bhScePtr[3] == 1 ? 10 : 8;
+            break;
+        case 47: extent = 2; break;
+        default:
+            set_fault(RECVX_EVENT_FAULT_UNSUPPORTED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
             return -1;
         }
         return 0;
@@ -490,6 +827,32 @@ static int validate_core_instruction(unsigned int opcode)
     if (opcode == 249) {
         if (!has_task_bytes(bhScePtr, 1) || bhCetask->loop < 0 ||
             bhCetask->loop >= 4) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    }
+    if (opcode == 252) {
+        uintptr_t target;
+        extent = 2;
+        if (!has_task_bytes(bhScePtr, extent) || bhCetask->loop < -1 ||
+            bhCetask->loop >= 3) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        target = (uintptr_t)bhScePtr + bhScePtr[1];
+        if (!has_task_bytes(bhScePtr + 2, 1) ||
+            target > (uintptr_t)event_section +
+                (scenario_active ? scenario_end : task_end[current_task])) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    }
+    if (opcode == 253) {
+        int loop = bhCetask->loop;
+        if (loop < 0 || loop >= 4 ||
+            bhCetask->lcondition[(unsigned int)loop] == NULL) {
             set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
             return -1;
         }
@@ -526,17 +889,49 @@ static unsigned int dispatch_instruction(void)
         return 0;
     }
     opcode = *bhScePtr;
+    handler = bhScenarioJmpT[opcode];
     ++instruction_count_this_call;
     ++instruction_count;
-    if (validate_core_instruction(opcode) != 0)
-        return 0;
-    handler = bhScenarioJmpT[opcode];
     if (handler == NULL) {
         set_fault(RECVX_EVENT_FAULT_UNSUPPORTED, (uint8_t)opcode, bhScePtr);
         return 0;
     }
+    if (validate_core_instruction(opcode) != 0)
+        return 0;
+    last_dispatch.section_pc = section_offset(bhScePtr);
+    last_dispatch.handler = (uintptr_t)handler;
+    last_dispatch.opcode = (uint8_t)opcode;
+    last_dispatch_valid = 1;
     result = handler();
     return result;
+}
+
+void recvxEventCoreFailUnsupportedCommand(uint8_t opcode,
+                                          const unsigned char *pc)
+{
+    set_fault(RECVX_EVENT_FAULT_UNSUPPORTED, opcode, pc);
+}
+
+int recvxEventCoreDispatchCondition(unsigned int *result)
+{
+    unsigned char *condition;
+
+    if (result == NULL || current_task >= RECVX_EVENT_TASK_COUNT ||
+        bhCetask == NULL || bhCetask->loop < 0 || bhCetask->loop >= 4) {
+        set_fault(RECVX_EVENT_FAULT_BAD_TASK, 253, bhScePtr);
+        return -1;
+    }
+    condition = bhCetask->lcondition[(unsigned int)bhCetask->loop];
+    if (!has_task_bytes(condition, 1) || *condition != 56) {
+        set_fault(RECVX_EVENT_FAULT_UNSUPPORTED,
+                  condition != NULL && has_task_bytes(condition, 1) ?
+                      *condition : 253,
+                  condition);
+        return -1;
+    }
+    bhScePtr = condition;
+    *result = dispatch_instruction();
+    return event_fault.code == RECVX_EVENT_FAULT_NONE ? 0 : -1;
 }
 
 unsigned int bhSet(void)
@@ -664,11 +1059,8 @@ int bhEventScheduler2(void)
                 ;
             if (event_fault.code != RECVX_EVENT_FAULT_NONE || bhIfelFlg <= 0)
                 break;
-            if (G_Sp == NULL) {
-                set_fault(RECVX_EVENT_FAULT_BAD_TASK, 0, bhScePtr);
+            if (pop_conditional_branch() != 0)
                 break;
-            }
-            bhScePtr = (unsigned char *)--G_Sp;
             --bhIfelFlg;
         }
         scep->data = bhScePtr;

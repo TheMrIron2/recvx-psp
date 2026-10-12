@@ -403,6 +403,10 @@ void bhControlEnemy()
 #endif
                 
                 bhJumpEnemy[ep->id](ep);
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+                if (recvxEngineOriginalFault() != NULL)
+                    return;
+#endif
                 
                 bhEne_InitDamage(ep);
                 

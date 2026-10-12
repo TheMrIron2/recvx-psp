@@ -459,8 +459,16 @@ void bhSysCallGame()
     }
     
     bhCheckSubTask();
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+    if (recvxEngineOriginalFault() != NULL)
+        return;
+#endif
     
     bhMainSequence();
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+    if (recvxEngineOriginalFault() != NULL)
+        return;
+#endif
     
     sys->gm_flg |= 0x20000000;
     
@@ -2335,6 +2343,9 @@ void bhReturnTitle()
 // 100% matching! 
 void bhExitGame()
 { 
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+    recvxEngineOriginalFaultSet("original game exit is outside the locomotion fixture");
+#else
     if ((sys->ss_flg & 0x2)) 
     { 
         njWaitVSync();
@@ -2355,6 +2366,7 @@ void bhExitGame()
     njSetBackColor(0x00000000, 0x00000000, 0x00000000);  
     
     bhInitSystem(); 
+#endif
 } 
 
 // 100% matching! 

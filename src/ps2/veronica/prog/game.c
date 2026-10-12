@@ -54,9 +54,25 @@ void bhMainSequence()
 #endif
         
         bhControlEnemy();
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+        if (recvxEngineOriginalFault() != NULL)
+            return;
+#endif
         bhControlPlayer();
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+        if (recvxEngineOriginalFault() != NULL)
+            return;
+#endif
         bhControlEffect();
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+        if (recvxEngineOriginalFault() != NULL)
+            return;
+#endif
         bhControlObjItm();
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+        if (recvxEngineOriginalFault() != NULL)
+            return;
+#endif
             
         if (((sys->gm_flg & 0x40)) && ((sys->sp_flg & 0x40)) && (!(sys->st_flg & 0x1)))
         {
@@ -64,7 +80,15 @@ void bhMainSequence()
         }
         
         bhControlCamera();
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+        if (recvxEngineOriginalFault() != NULL)
+            return;
+#endif
         bhControlLight();
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+        if (recvxEngineOriginalFault() != NULL)
+            return;
+#endif
             
         if (i == (sys->loop_ct - 1)) 
         {

@@ -15,6 +15,10 @@ float cmmat[2][16];
 NJS_MATRIX NaViwViewMatrix;
 NJS_MATRIX NaViewScreenMatrix;
 NJS_SCREEN _nj_screen_;
+float fNaViwOffsetX = 2048.0f;
+float fNaViwOffsetY = 2048.0f;
+float fNaViwAspectW = 1.174000025f;
+float fNaViwAspectH = 1.0f;
 
 static Float original_aspect_width;
 static Float original_aspect_height;
@@ -33,8 +37,8 @@ void recvxEngineOriginalViewReset(void)
     memset(&NaViwViewMatrix, 0, sizeof(NaViwViewMatrix));
     memset(&NaViewScreenMatrix, 0, sizeof(NaViewScreenMatrix));
     memset(&_nj_screen_, 0, sizeof(_nj_screen_));
-    original_aspect_width = 0.0f;
-    original_aspect_height = 0.0f;
+    original_aspect_width = 1.174000025f;
+    original_aspect_height = 1.0f;
     original_projection_distance = 0.0f;
     original_clip_near = -1.0f;
     original_clip_far = -65535.0f;
@@ -45,6 +49,10 @@ void recvxEngineOriginalViewReset(void)
     original_background_color = 0xff18120e;
     _nj_screen_.w = 480.0f;
     _nj_screen_.h = 272.0f;
+    fNaViwOffsetX = 2048.0f;
+    fNaViwOffsetY = 2048.0f;
+    fNaViwAspectW = original_aspect_width;
+    fNaViwAspectH = original_aspect_height;
     memset(&original_camera_base, 0, sizeof(original_camera_base));
     NaViwViewMatrix[0] = 1.0f;
     NaViwViewMatrix[5] = -1.0f;
@@ -80,6 +88,8 @@ void njSetAspect(Float width, Float height)
     }
     original_aspect_width = width;
     original_aspect_height = height;
+    fNaViwAspectW = width;
+    fNaViwAspectH = height;
 }
 
 void njInitView(NJS_VIEW *view)
@@ -136,6 +146,31 @@ void recvxEngineOriginalViewAspect(Float *width, Float *height)
 Float recvxEngineOriginalViewProjectionDistance(void)
 {
     return original_projection_distance;
+}
+
+void njProjectScreen(NJS_MATRIX *matrix, NJS_POINT3 *point,
+                     NJS_POINT2 *screen_point)
+{
+    NJS_POINT3 view_point;
+    Float depth;
+    if (point == NULL || screen_point == NULL ||
+        !isfinite(original_projection_distance) ||
+        original_projection_distance <= 0.0f) {
+        recvxEngineOriginalFaultSet("original screen projection input is invalid");
+        return;
+    }
+    njCalcPoint(matrix, point, &view_point);
+    if (recvxEngineOriginalFault() != NULL)
+        return;
+    depth = view_point.z + original_projection_distance;
+    if (!isfinite(depth) || depth == 0.0f) {
+        recvxEngineOriginalFaultSet("original screen projection depth is invalid");
+        return;
+    }
+    screen_point->x = fNaViwOffsetX +
+        fNaViwAspectW * view_point.x * original_projection_distance / depth;
+    screen_point->y = fNaViwOffsetY +
+        fNaViwAspectH * view_point.y * original_projection_distance / depth;
 }
 
 void recvxEngineOriginalViewClipPlanes(Float *near_plane, Float *far_plane)

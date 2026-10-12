@@ -67,7 +67,13 @@ ENGINE_PLAYER_CONTROL_SOURCES := $(filter-out src/psp/engine_player_test.c,$(ENG
 	src/ps2/veronica/prog/pad_task.c src/psp/engine_pad_adapter.c \
 	src/psp/engine_original_clock_psp.c \
 	src/psp/engine_pad_faults.c src/psp/live_task_dispatch.c \
-	src/ps2/veronica/prog/ps2_NaColi.c
+	src/ps2/veronica/prog/ps2_NaColi.c \
+	src/psp/engine_original_profile_state.c \
+	src/psp/engine_original_audio_test.c \
+	src/psp/engine_original_lighting_psp.c \
+	src/psp/engine_original_event_test.c \
+	src/psp/engine_pacer.c src/psp/original_clock.c \
+	src/psp/engine_test_input.c
 ifeq ($(BUILD_PROFILE),engine-event-test)
 BUILD_DIR := build/psp-engine-event-test
 TARGET := $(BUILD_DIR)/recvx-event-test
@@ -119,7 +125,9 @@ PSP_LARGE_MEMORY := 1
 CFLAGS += -fsigned-char -ffunction-sections -fdata-sections \
 	-DRECVX_ENGINE_PLAYER_TEST -DRECVX_ENGINE_ORIGINAL_MATRIX_CPU \
 	-DRECVX_ENGINE_ORIGINAL_CAMERA_TEST -DRECVX_ENGINE_GAME_CALLBACK_TEST \
-	-DRECVX_ENGINE_PASSIVE_RENDER
+	-DRECVX_ENGINE_SHARED_EVENT_CORE -DRECVX_EVENT_ENGINE_TEST \
+	-DRECVX_ENGINE_ACTOR_EVENT_TEST \
+	-DRECVX_ENGINE_PASSIVE_RENDER -DRECVX_ENGINE_AUTOMATED_INPUT
 LDFLAGS += -Wl,--undefined=module_info
 ENGINE_CAMERA_SERVICES_SOURCE := $(BUILD_DIR)/engine_original_camera_services.c
 ENGINE_CAMERA_SERVICES_OBJECT := $(BUILD_DIR)/engine_original_camera_services.o
@@ -127,11 +135,22 @@ ENGINE_OBJECT_RUNTIME_SOURCE := $(BUILD_DIR)/engine_original_object_runtime.c
 ENGINE_OBJECT_RUNTIME_OBJECT := $(BUILD_DIR)/engine_original_object_runtime.o
 ENGINE_EFFECT_RUNTIME_SOURCE := $(BUILD_DIR)/engine_original_effect_runtime.c
 ENGINE_EFFECT_RUNTIME_OBJECT := $(BUILD_DIR)/engine_original_effect_runtime.o
+ENGINE_COLLISION_RUNTIME_SOURCE := $(BUILD_DIR)/engine_original_collision_runtime.c
+ENGINE_COLLISION_RUNTIME_OBJECT := $(BUILD_DIR)/engine_original_collision_runtime.o
+ENGINE_MESSAGE_RUNTIME_SOURCE := $(BUILD_DIR)/engine_original_message_runtime.c
+ENGINE_MESSAGE_RUNTIME_OBJECT := $(BUILD_DIR)/engine_original_message_runtime.o
+ENGINE_EVENT_COMMANDS_SOURCE := $(BUILD_DIR)/engine_original_event_commands.c
+ENGINE_EVENT_COMMANDS_OBJECT := $(BUILD_DIR)/engine_original_event_commands.o
+ENGINE_ACTOR_DAMAGE_SOURCE := $(BUILD_DIR)/engine_original_actor_damage.c
+ENGINE_ACTOR_DAMAGE_OBJECT := $(BUILD_DIR)/engine_original_actor_damage.o
 SOURCES := src/psp/engine_player_test.c \
 	$(filter-out src/psp/engine_original_cut.c,$(ENGINE_PLAYER_CONTROL_SOURCES)) \
 	src/ps2/veronica/prog/cut.c src/ps2/veronica/prog/ps2_event.c \
-	$(ENGINE_CAMERA_SERVICES_OBJECT) $(ENGINE_OBJECT_RUNTIME_OBJECT) \
-	$(ENGINE_EFFECT_RUNTIME_OBJECT) \
+	src/ps2/veronica/prog/event.c src/ps2/veronica/prog/subpl.c \
+	$(ENGINE_CAMERA_SERVICES_OBJECT) $(ENGINE_ACTOR_DAMAGE_OBJECT) \
+	$(ENGINE_OBJECT_RUNTIME_OBJECT) \
+	$(ENGINE_EFFECT_RUNTIME_OBJECT) $(ENGINE_COLLISION_RUNTIME_OBJECT) \
+	$(ENGINE_MESSAGE_RUNTIME_OBJECT) $(ENGINE_EVENT_COMMANDS_OBJECT) \
 	src/psp/engine_original_matrix_cpu.c
 else ifneq ($(BUILD_PROFILE),viewer)
 $(error Unknown BUILD_PROFILE '$(BUILD_PROFILE)')
@@ -243,6 +262,42 @@ $(ENGINE_EFFECT_RUNTIME_OBJECT): $(ENGINE_EFFECT_RUNTIME_SOURCE) Makefile
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 endif
 
+ifneq ($(strip $(ENGINE_COLLISION_RUNTIME_SOURCE)),)
+$(ENGINE_COLLISION_RUNTIME_SOURCE): tools/extract_original_collision_service.py src/ps2/veronica/prog/njplus.c
+	python3 $< src/ps2/veronica/prog/njplus.c $@
+
+$(ENGINE_COLLISION_RUNTIME_OBJECT): $(ENGINE_COLLISION_RUNTIME_SOURCE) Makefile
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+endif
+
+ifneq ($(strip $(ENGINE_MESSAGE_RUNTIME_SOURCE)),)
+$(ENGINE_MESSAGE_RUNTIME_SOURCE): tools/extract_original_message_set.py src/ps2/veronica/prog/message.c
+	python3 $< src/ps2/veronica/prog/message.c $@
+
+$(ENGINE_MESSAGE_RUNTIME_OBJECT): $(ENGINE_MESSAGE_RUNTIME_SOURCE) Makefile
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+endif
+
+ifneq ($(strip $(ENGINE_EVENT_COMMANDS_SOURCE)),)
+$(ENGINE_EVENT_COMMANDS_SOURCE): tools/extract_original_event_commands.py src/ps2/veronica/prog/event.c
+	python3 $< src/ps2/veronica/prog/event.c $@
+
+$(ENGINE_EVENT_COMMANDS_OBJECT): $(ENGINE_EVENT_COMMANDS_SOURCE) Makefile
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+endif
+
+ifneq ($(strip $(ENGINE_ACTOR_DAMAGE_SOURCE)),)
+$(ENGINE_ACTOR_DAMAGE_SOURCE): tools/extract_original_actor_damage.py src/ps2/veronica/prog/zonzon1.c
+	python3 $< src/ps2/veronica/prog/zonzon1.c $@
+
+$(ENGINE_ACTOR_DAMAGE_OBJECT): $(ENGINE_ACTOR_DAMAGE_SOURCE) Makefile
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+endif
+
 $(BUILD_DIR):
 	mkdir -p $@
 
@@ -281,6 +336,7 @@ HOST_CC ?= cc
 HOST_TEST := build/host/port-test
 HOST_SHARED := build/host/librecvx-test.so
 HOST_EVENT_TEST := build/host/event-core-test
+HOST_ENGINE_EVENT_CORE_TEST := build/host/engine-event-core-test
 HOST_ROOM_OWNER_TEST := build/host/engine-room-owner-test
 HOST_TASK_DISPATCH_TEST := build/host/live-task-dispatch-test
 HOST_ENGINE_PACER_TEST := build/host/engine-pacer-test
@@ -301,17 +357,19 @@ HOST_HEADERS := include/psp/abi.h include/psp/ninja_math.h include/psp/timing.h 
 	include/ps2/veronica/prog/event.h include/ps2/veronica/prog/main.h \
 	include/ps2/veronica/prog/types.h include/ps2/veronica/prog/event_dispatch_table.inc \
 	include/psp/engine_room_owner.h include/psp/engine_pad_adapter.h \
+	include/psp/platform.h include/psp/engine_test_input.h \
 	include/psp/engine_original_matrix.h include/psp/engine_original_fault.h \
 	include/psp/engine_original_view.h
 
 .PHONY: test
-test: $(HOST_TEST) $(HOST_SHARED) $(HOST_EVENT_TEST) $(HOST_ROOM_OWNER_TEST) $(HOST_TASK_DISPATCH_TEST) $(HOST_ENGINE_PACER_TEST) $(HOST_ORIGINAL_CLOCK_TEST) $(HOST_ENGINE_PAD_TEST) $(HOST_ENGINE_OBJECT_TEST) $(HOST_ENGINE_MATRIX_TEST) $(HOST_ENGINE_CAMERA_TEST) $(HOST_ENGINE_CUT_TEST) $(HOST_ENGINE_COLLISION_TEST) $(HOST_ENGINE_SPLINE_TEST)
+test: $(HOST_TEST) $(HOST_SHARED) $(HOST_EVENT_TEST) $(HOST_ENGINE_EVENT_CORE_TEST) $(HOST_ROOM_OWNER_TEST) $(HOST_TASK_DISPATCH_TEST) $(HOST_ENGINE_PACER_TEST) $(HOST_ORIGINAL_CLOCK_TEST) $(HOST_ENGINE_PAD_TEST) $(HOST_ENGINE_OBJECT_TEST) $(HOST_ENGINE_MATRIX_TEST) $(HOST_ENGINE_CAMERA_TEST) $(HOST_ENGINE_CUT_TEST) $(HOST_ENGINE_COLLISION_TEST) $(HOST_ENGINE_SPLINE_TEST)
 # LeakSanitizer cannot run under this environment's process tracing. The
 # address/undefined-behavior checks still run, and test allocations are freed.
 	ASAN_OPTIONS=detect_leaks=0 $(HOST_TEST)
 	python3 tests/test_expand.py $(HOST_SHARED)
 	python3 tests/test_room.py $(HOST_SHARED)
 	$(HOST_EVENT_TEST) $(if $(wildcard build/psp/data/rooms/RM_0000.meta),build/psp/data)
+	$(HOST_ENGINE_EVENT_CORE_TEST)
 	$(HOST_TASK_DISPATCH_TEST)
 	$(HOST_ENGINE_PACER_TEST)
 	$(HOST_ORIGINAL_CLOCK_TEST)
@@ -345,6 +403,13 @@ $(HOST_EVENT_TEST): tests/event_core_test.c $(EVENT_TEST_SHARED_SOURCES) $(HOST_
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_EVENT_FLAGS) tests/event_core_test.c $(EVENT_TEST_SHARED_SOURCES) -o $@
 
+$(HOST_ENGINE_EVENT_CORE_TEST): tests/engine_event_core_test.c src/psp/event_core.c $(HOST_HEADERS) Makefile
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_FLAGS) -fsigned-char -D__PSP__ \
+		-DRECVX_EVENT_CORE_HOST_TEST -DRECVX_EVENT_ENGINE_TEST \
+		-idirafter include/recvx-decomp-katana/KATANA/Include \
+		tests/engine_event_core_test.c src/psp/event_core.c -o $@
+
 $(HOST_ROOM_OWNER_TEST): tests/engine_room_owner_test.c $(ROOM_OWNER_SOURCES) src/psp/event_data.c src/psp/room.c src/psp/room_check.c src/psp/expand.c src/psp/file_stdio.c $(HOST_HEADERS) Makefile
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_FLAGS) tests/engine_room_owner_test.c $(ROOM_OWNER_SOURCES) \
@@ -363,11 +428,13 @@ $(HOST_ORIGINAL_CLOCK_TEST): tests/original_clock_test.c src/psp/original_clock.
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_EVENT_FLAGS) $< src/psp/original_clock.c src/ps2/veronica/prog/flag.c -o $@
 
-$(HOST_ENGINE_PAD_TEST): tests/engine_pad_adapter_test.c src/psp/engine_pad_adapter.c src/psp/engine_pacer.c src/psp/original_clock.c src/ps2/veronica/prog/flag.c $(HOST_HEADERS) Makefile
+$(HOST_ENGINE_PAD_TEST): tests/engine_pad_adapter_test.c src/psp/engine_pad_adapter.c src/psp/engine_test_input.c src/psp/engine_pacer.c src/psp/original_clock.c src/ps2/veronica/prog/pad.c src/ps2/veronica/prog/flag.c $(HOST_HEADERS) Makefile
 	@mkdir -p $(dir $@)
-	$(HOST_CC) $(HOST_EVENT_FLAGS) $< src/psp/engine_pad_adapter.c \
+	$(HOST_CC) $(HOST_EVENT_FLAGS) -Wno-error=sign-compare \
+		-Wno-error=discarded-qualifiers -Wno-error=char-subscripts \
+		$< src/psp/engine_pad_adapter.c src/psp/engine_test_input.c \
 		src/psp/engine_pacer.c src/psp/original_clock.c \
-		src/ps2/veronica/prog/flag.c -o $@
+		src/ps2/veronica/prog/pad.c src/ps2/veronica/prog/flag.c -o $@
 
 $(HOST_ENGINE_OBJECT_TEST): tests/engine_original_object_test.c src/psp/engine_original_object.c $(HOST_HEADERS) Makefile
 	@mkdir -p $(dir $@)

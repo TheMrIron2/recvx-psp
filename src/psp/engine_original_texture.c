@@ -213,7 +213,13 @@ int bhSetMemPvpTexture(NJS_TEXLIST *list, unsigned char *data, int offset)
 
     if (list == NULL || list->textures == NULL || offset < 0 ||
         (unsigned int)offset > ENGINE_TEXTURE_LIMIT || remaining < 32) {
-        texture_fault = "texture list or bounded PVP range is invalid";
+        snprintf(texture_fault_detail, sizeof(texture_fault_detail),
+                 "PVP bounds list=%08x tex=%08x off=%d data=%08x rem=%u ranges=%u",
+                 (unsigned int)(uintptr_t)list,
+                 (unsigned int)(uintptr_t)(list != NULL ? list->textures : NULL),
+                 offset, (unsigned int)(uintptr_t)data,
+                 (unsigned int)remaining, range_count);
+        texture_fault = texture_fault_detail;
         return -1;
     }
     for (;;) {

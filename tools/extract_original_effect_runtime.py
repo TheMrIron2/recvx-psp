@@ -4,12 +4,12 @@ import sys
 from pathlib import Path
 
 
-FUNCTIONS = ("bhSetEffect", "bhControlEffect")
-HANDLERS = ("bhEff001", "bhEff108")
+FUNCTIONS = ("bhSetEffect", "bhControlEffect", "bhGetGidx")
+HANDLERS = ("bhEff001", "bhEff108", "bhEffFil")
 
 
 def extract_function(source, name):
-    match = re.search(r"(?m)^\s*(?:int|void)\s+" + re.escape(name) + r"\s*\(", source)
+    match = re.search(r"(?m)^\s*(?:unsigned\s+int|int|void)\s+" + re.escape(name) + r"\s*\(", source)
     if match is None:
         raise ValueError(f"original function not found: {name}")
     opening = source.find("{", match.end())
@@ -70,6 +70,7 @@ def main():
         '#include "ps2/veronica/prog/ps2_NaMatrix.h"',
         '#include "ps2/veronica/prog/system.h"',
         '#include "psp/engine_original_fault.h"',
+        '#include <stdio.h>',
         "",
         "typedef void (*bhJumpEffect_proc)(O_WRK *);",
         "typedef void (*bhJumpEffect0_proc)(O_WRK *);",
@@ -77,7 +78,7 @@ def main():
         "typedef void (*bhJumpEffect3_proc)(O_WRK *);",
         "typedef void (*bhJumpEffect4_proc)(O_WRK *);",
         "",
-        "bhJumpEffect_proc bhJumpEffect[150] = { [1] = bhEff001, [108] = bhEff108 };",
+        "bhJumpEffect_proc bhJumpEffect[150] = { [1] = bhEff001, [90] = bhEffFil, [91] = bhEffFil, [92] = bhEffFil, [108] = bhEff108 };",
         "bhJumpEffect0_proc bhJumpEffect0[100] = { 0 };",
         "bhJumpEffect2_proc bhJumpEffect2[50] = { 0 };",
         "bhJumpEffect3_proc bhJumpEffect3[50] = { 0 };",
@@ -98,6 +99,7 @@ def main():
         "void bhControlEffect(void)",
         "{",
         "    unsigned int index;",
+        "    static char fault_message[96];",
         "    if ((sys->sp_flg & 0x8) == 0 && (sys->ef_flg & 0x1) == 0)",
         "        return;",
         "    for (index = 0; index < 512; ++index) {",
@@ -113,7 +115,10 @@ def main():
         "            (id >= 250 && id < 300 && bhJumpEffect2[id - 250] == NULL) ||",
         "            (id >= 300 && id < 350 && bhJumpEffect3[id - 300] == NULL) ||",
         "            (id >= 350 && id < 400 && bhJumpEffect4[id - 350] == NULL)) {",
-        '            recvxEngineOriginalFaultSet("unsupported RM_0010 effect ID");',
+        '            snprintf(fault_message, sizeof(fault_message),',
+        '                     "unsupported RM_0010 effect ID %u at %u flags %08x",',
+        '                     id, index, (unsigned int)effect->flg);',
+        "            recvxEngineOriginalFaultSet(fault_message);",
         "            return;",
         "        }",
         "    }",

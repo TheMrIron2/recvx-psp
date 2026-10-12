@@ -21,20 +21,31 @@ typedef struct RecvxEventCoreFault {
     enum RecvxEventCoreFaultCode code;
     uint32_t section_pc;
     uint32_t event_id;
+    uintptr_t handler_at_fault;
     uint16_t task;
     uint8_t opcode;
 } RecvxEventCoreFault;
+
+typedef struct RecvxEventCoreDispatch {
+    uint32_t section_pc;
+    uintptr_t handler;
+    uint8_t opcode;
+} RecvxEventCoreDispatch;
 
 void recvxEventCoreReset(void);
 int recvxEventCoreBindSection(const void *bytes, size_t size);
 int recvxEventCoreUnbindSection(void);
 int recvxEventCoreRunScenario(uint32_t section_offset);
 const RecvxEventCoreFault *recvxEventCoreGetFault(void);
+int recvxEventCoreGetLastDispatch(RecvxEventCoreDispatch *dispatch);
 const char *recvxEventCoreFaultName(enum RecvxEventCoreFaultCode code);
 uint32_t recvxEventCoreTaskPc(unsigned int task);
 uint32_t recvxEventCoreTaskStart(unsigned int task);
 uint32_t recvxEventCoreTaskBodyPc(unsigned int task);
 uint32_t recvxEventCoreInstructionCount(void);
 uint32_t recvxEventCoreFlagWriteCount(void);
+void recvxEventCoreFailUnsupportedCommand(uint8_t opcode,
+                                         const unsigned char *pc);
+int recvxEventCoreDispatchCondition(unsigned int *result);
 
 #endif

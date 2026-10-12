@@ -1435,6 +1435,10 @@ void bhControlPlayer()
         }
 #endif
         bhCtrPly_mode0[plp->mode0]();
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+        if (recvxEngineOriginalFault() != NULL)
+            return;
+#endif
         
         if ((plp->flg & 0x100000)) 
         {
@@ -1707,6 +1711,15 @@ void bhControlPlayer()
         
         bhCalcModel(plp);
         
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+        if (((plp->mode0 == 1) && (plp->mode1 == 1) &&
+             (plp->mode2 == 0x45) && (plp->mode3 == 1)) &&
+            ((WpnTab[plp->wpnr_no].flg & 0x40000000))) {
+            recvxEngineOriginalFaultSet(
+                "Claire knife attack collision is outside the Package 4 control fixture");
+            return;
+        }
+#else
         if (((plp->mode0 == 1) && (plp->mode1 == 1) && (plp->mode2 == 0x45) && (plp->mode3 == 1)) && ((WpnTab[plp->wpnr_no].flg & 0x40000000))) 
         {
             if (((plp->frm_no / 65536) > KnfAtrTab[sys->ply_id]) && ((plp->frm_no / 65536) < WpnTab[plp->wpnr_no].ef_yct)) 
@@ -1746,6 +1759,7 @@ void bhControlPlayer()
                 }
             }
         }
+#endif
         
         if ((plp->flg & 0x4)) 
         {
@@ -2039,6 +2053,7 @@ void bhCPM1_act_bas()
     case 11: p->ay += (int)(182.04445f * (4.0f * ((EXP_WORK*)plp->exp0)->rtspd));
              bhCPM2_act_bak(); break;
     case 12: bhCPM2_act_bk2(); break;
+    case 13: bhCPM2_act_sta(); break;
     default: recvxEngineOriginalFaultSet("player action is outside locomotion test");
              break;
     }

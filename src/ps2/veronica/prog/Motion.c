@@ -31,7 +31,16 @@ int bhSetMotion(BH_PWORK* ewP, int add, int mode, void* datP)
     {
         if ((mode & 0x20)) 
         {
-            rate = (1.0f / ewP->hokan_count) - (0.000015258789f * ewP->hokan_rate);
+            if (ewP->hokan_count == 0)
+            {
+                // PSP traps here; zero-count motion paths do not consume rate
+                rate = 0.0f;
+            }
+            else
+            {
+                rate = (1.0f / ewP->hokan_count) -
+                       (0.000015258789f * ewP->hokan_rate);
+            }
         } 
         else
         {

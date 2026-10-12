@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 
-FUNCTIONS = ("bhObjDmy", "bhControlObjItm")
+FUNCTIONS = ("bhObjDmy", "bhObjClpn", "bhControlObjItm")
 
 
 def extract_function(source, name):
@@ -63,17 +63,25 @@ def main():
         '#include "ps2/veronica/prog/hitchk.h"',
         '#include "ps2/veronica/prog/light.h"',
         '#include "ps2/veronica/prog/main.h"',
+        '#include "ps2/veronica/prog/njplus.h"',
         '#include "ps2/veronica/prog/ps2_NaMatrix.h"',
         '#include "ps2/veronica/prog/ps2_NinjaCnk.h"',
+        '#include "ps2/veronica/prog/player.h"',
         '#include "ps2/veronica/prog/pwksub.h"',
         '#include "ps2/veronica/prog/system.h"',
         '#include "ps2/veronica/prog/weapon.h"',
         '#include "psp/engine_original_fault.h"',
+        '#include <stdio.h>',
         "",
         "static void bhControlObjItmOriginal(void);",
         "void bhObjDmy(void);",
         "void (*bhJumpObject[101])() = { [0] = bhObjDmy };",
-        "void (*bhJumpObject2[13])() = { 0 };",
+        "void (*bhJumpObject2[13])() = {",
+        "    [1] = bhObjDmy, [2] = bhObjDmy, [3] = bhObjDmy,",
+        "    [4] = bhObjDmy, [5] = bhObjDmy, [6] = bhObjDmy,",
+        "    [7] = bhObjDmy, [8] = bhObjDmy, [9] = bhObjDmy,",
+        "    [11] = bhObjClpn",
+        "};",
         "",
     ]
     for name in FUNCTIONS:
@@ -98,6 +106,7 @@ def main():
         "{",
         "    int index;",
         "    int count;",
+        "    static char fault_message[96];",
         "",
         "    if ((sys->sp_flg & 0x4) == 0)",
         "        return;",
@@ -114,13 +123,21 @@ def main():
         "        if (object->id >= 1200) {",
         "            type = (unsigned int)(object->id - 1200);",
         "            if (type >= 13 || bhJumpObject2[type] == NULL) {",
-        '                recvxEngineOriginalFaultSet("unsupported RM_0010 object ID");',
+        '                snprintf(fault_message, sizeof(fault_message),',
+        '                         "unsupported RM_0010 object ID %u at %d type %u flags %08x",',
+        '                         (unsigned int)object->id, index, type,',
+        '                         (unsigned int)object->flg);',
+        "                recvxEngineOriginalFaultSet(fault_message);",
         "                return;",
         "            }",
         "        } else {",
         "            type = object->type;",
         "            if (type >= 101 || bhJumpObject[type] == NULL) {",
-        '                recvxEngineOriginalFaultSet("unsupported RM_0010 object type");',
+        '                snprintf(fault_message, sizeof(fault_message),',
+        '                         "unsupported RM_0010 object type %u at %d id %u flags %08x",',
+        '                         type, index, (unsigned int)object->id,',
+        '                         (unsigned int)object->flg);',
+        "                recvxEngineOriginalFaultSet(fault_message);",
         "                return;",
         "            }",
         "        }",

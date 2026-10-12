@@ -2,6 +2,10 @@
 #include "../../../ps2/veronica/prog/MdlPut.h"
 #include "../../../ps2/veronica/prog/Motion.h"
 #include "../../../ps2/veronica/prog/pwksub.h"
+#ifdef RECVX_ENGINE_ACTOR_EVENT_TEST
+#include "psp/engine_original_fault.h"
+#include <stdio.h>
+#endif
 
 typedef void (*Subpl_proc)(BH_PWORK*);
 typedef void (*InitSubpl_proc)(BH_PWORK*);
@@ -75,10 +79,25 @@ Mv01Subpl_proc subpl_mv01_tbl[15] =
 // 100% matching!
 void bhSubpl(BH_PWORK* epw)
 {
+#ifdef RECVX_ENGINE_ACTOR_EVENT_TEST
+    if ((unsigned int)epw->mode0 >= sizeof(Subpl_tbl) / sizeof(Subpl_tbl[0]) ||
+        Subpl_tbl[(unsigned int)epw->mode0] == NULL) {
+        static char fault[96];
+        snprintf(fault, sizeof(fault),
+                 "unsupported RM_0010 actor 67 mode %u",
+                 (unsigned int)epw->mode0);
+        recvxEngineOriginalFaultSet(fault);
+        return;
+    }
+#endif
     epw->flg |= 0x8100;
     epw->flg &= ~0x2;
     
     Subpl_tbl[epw->mode0](epw);
+#ifdef RECVX_ENGINE_ACTOR_EVENT_TEST
+    if (recvxEngineOriginalFault() != NULL)
+        return;
+#endif
     
     bhCalcModel(epw);
 }
@@ -86,6 +105,14 @@ void bhSubpl(BH_PWORK* epw)
 // 100% matching! 
 void init_subpl(BH_PWORK* epw)
 {
+#ifdef RECVX_ENGINE_ACTOR_EVENT_TEST
+    if (epw->id < 40 || (unsigned int)(epw->id - 40) >=
+        sizeof(subpl_init_tbl) / sizeof(subpl_init_tbl[0]) ||
+        subpl_init_tbl[epw->id - 40] == NULL) {
+        recvxEngineOriginalFaultSet("unsupported RM_0010 actor 67 init ID");
+        return;
+    }
+#endif
     epw->mode0 = 1;
     
     subpl_init_tbl[epw->id - 40](epw);
@@ -130,12 +157,28 @@ void em60_init(BH_PWORK* epw)
 // 100% matching!
 void move_subpl(BH_PWORK* epw)
 {
+#ifdef RECVX_ENGINE_ACTOR_EVENT_TEST
+    if ((unsigned int)epw->mode2 >=
+        sizeof(subpl_mv_tbl) / sizeof(subpl_mv_tbl[0]) ||
+        subpl_mv_tbl[(unsigned int)epw->mode2] == NULL) {
+        recvxEngineOriginalFaultSet("unsupported RM_0010 actor 67 move mode");
+        return;
+    }
+#endif
     subpl_mv_tbl[epw->mode2](epw);
 }
 
 // 100% matching!
 void em_sce(BH_PWORK* epw)
 {
+#ifdef RECVX_ENGINE_ACTOR_EVENT_TEST
+    if ((unsigned int)epw->ct2 >=
+        sizeof(subpl_mv01_tbl) / sizeof(subpl_mv01_tbl[0]) ||
+        subpl_mv01_tbl[(unsigned int)epw->ct2] == NULL) {
+        recvxEngineOriginalFaultSet("unsupported RM_0010 actor 67 event mode");
+        return;
+    }
+#endif
     subpl_mv01_tbl[epw->ct2](epw);
 }
 

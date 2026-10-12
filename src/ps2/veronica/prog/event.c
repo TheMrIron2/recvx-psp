@@ -29,11 +29,18 @@
 #include "../../../ps2/veronica/prog/zonzon.h"
 #include "../../../ps2/veronica/prog/weapon.h"
 #include "../../../ps2/veronica/prog/main.h"
+#ifdef RECVX_ENGINE_SHARED_EVENT_CORE
+#include "psp/engine_event_core.h"
+#include "psp/engine_original_fault.h"
+int Common_controll(void);
+#endif
 
 #pragma optimization_level 4 // TODO: remove this pragma and compile the file passing the -O4,p flag instead 
 
+#ifndef RECVX_ENGINE_SHARED_EVENT_CORE
 float GameNear;
 float GameFar;
+#endif
 
 BP_WORK evnt_BldTbl = 
 {
@@ -51,14 +58,18 @@ BP_WORK evnt_BldTbl2 =
     1.0f, 0.2f, 0.5f, 0.8f, 0.0f,
     1, 4, 12, 15, 0
 };
+#ifndef RECVX_ENGINE_SHARED_EVENT_CORE
 unsigned int (*bhScenarioJmpT[256])() = 
 {
 #define RECVX_EVENT_CORE(opcode, handler) [opcode] = handler,
+#define RECVX_EVENT_ENGINE(opcode, handler) [opcode] = handler,
 #define RECVX_EVENT_FULL(opcode, handler) [opcode] = handler,
 #include "event_dispatch_table.inc"
 #undef RECVX_EVENT_FULL
+#undef RECVX_EVENT_ENGINE
 #undef RECVX_EVENT_CORE
 };
+#endif
 /*unsigned char G_Mess_flag;
 unsigned int Event_T_timer_bak;
 unsigned int Event_C_timer;
@@ -127,6 +138,7 @@ void bhControlEvent()
     bhEventScheduler2();
 }
 
+#ifndef RECVX_ENGINE_SHARED_EVENT_CORE
 // 100% matching!
 unsigned int bhEnd()
 {
@@ -134,6 +146,7 @@ unsigned int bhEnd()
 
 	return 0;
 }
+#endif
 
 // 100% matching!
 unsigned int bhIfelCk()
@@ -8749,6 +8762,21 @@ unsigned int bhWhile()
 // 100% matching! 
 unsigned int bhEwhile() 
 {
+#ifdef RECVX_ENGINE_SHARED_EVENT_CORE
+    unsigned int condition_result;
+
+    bhCetask->data = bhScePtr;
+    if (recvxEventCoreDispatchCondition(&condition_result) != 0)
+        return 0;
+    if (condition_result != 0) {
+        bhScePtr = bhCetask->lstack[bhCetask->loop];
+    } else {
+        bhScePtr = bhCetask->data + 1;
+        bhCetask->loop--;
+        return 0;
+    }
+    return 1;
+#else
     bhCetask->data = bhScePtr;
     
     bhScePtr = bhCetask->lcondition[bhCetask->loop];
@@ -8769,6 +8797,7 @@ unsigned int bhEwhile()
     }
 
     return 1;
+#endif
 }
 
 // 100% matching! 
@@ -9548,6 +9577,7 @@ unsigned int bhCommonCtr()
 }
 
 // 100% matching!
+#ifndef RECVX_ENGINE_SHARED_EVENT_CORE
 int Common_controll()
 {
     switch (*bhScePtr)
@@ -12296,6 +12326,7 @@ int Common_controll()
         break;
     }
 }
+#endif
 
 // 100% matching! 
 unsigned int bhLoadWork()
@@ -12546,6 +12577,10 @@ unsigned int bhLoadWork2()
 // 100% matching!
 void bhScenarioCheck(unsigned char* next_ptr)
 {
+#ifdef RECVX_ENGINE_SHARED_EVENT_CORE
+    if (recvxEventCoreRunScenario((uint32_t)(uintptr_t)next_ptr) != 0)
+        recvxEngineOriginalFaultSet("original SCD scenario execution failed");
+#else
     unsigned char* gsp; // not from DWARF
     
     bhScePtr = (unsigned char*)rom->evtp;
@@ -12569,6 +12604,7 @@ void bhScenarioCheck(unsigned char* next_ptr)
         
         bhScePtr = gsp;
     }
+#endif
 }
 
 // 100% matching!
@@ -12680,6 +12716,7 @@ unsigned int bhFlagSet(unsigned char type, unsigned int cnt, unsigned char flag)
     }
 }
 
+#ifndef RECVX_ENGINE_SHARED_EVENT_CORE
 // 100% matching!
 void bhChangeViewClip(char stg_no, char rom_no, char rcase, int evc_no)
 {
@@ -12892,7 +12929,9 @@ void bhChangeViewClip(char stg_no, char rom_no, char rcase, int evc_no)
 		}
     }
 }
+#endif
 
+#ifndef RECVX_ENGINE_SHARED_EVENT_CORE
 // 100% matching!
 void bhChangeViewClipRM()
 {
@@ -13034,7 +13073,9 @@ void bhChangeViewClipRM()
         Ps2_ice_flag = 1;
     }
 }
+#endif
 
+#ifndef RECVX_ENGINE_SHARED_EVENT_CORE
 // 100% matching!
 void bhChangeClipVolume(char stg_no, char rom_no, char rcase, int evc_no)
 {
@@ -13121,7 +13162,9 @@ void bhChangeClipVolume(char stg_no, char rom_no, char rcase, int evc_no)
 
     _Make_ClipVolume(x, y);
 }
+#endif
 
+#ifndef RECVX_ENGINE_SHARED_EVENT_CORE
 // 100% matching!
 void bhChangeClipVolumeRM()
 {
@@ -13239,3 +13282,4 @@ void bhChangeClipVolumeRM()
 	
     _Make_ClipVolume(x, y);
 }
+#endif

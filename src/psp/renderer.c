@@ -1617,7 +1617,11 @@ void recvxRendererDraw(int wait_for_vblank)
     pspDebugScreenSetXY(1, 29);
     pspDebugScreenPrintf("SELECT: solid / wire / bounds / spatial / textured");
     pspDebugScreenSetXY(1, 31);
+#ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
+    pspDebugScreenPrintf(engine_snapshot_mode ? "Original engine callback; trace active" :
+#else
     pspDebugScreenPrintf(engine_snapshot_mode ? "Original engine player; no gameplay tick" :
+#endif
                          player_mode ? "Stick move/turn  D-pad tank controls  R run  Fixed room camera" :
                          "D-pad orbit  Stick pan  L/R zoom  TRIANGLE reset");
     pspDebugScreenSetXY(1, 32);
