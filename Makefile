@@ -7,7 +7,7 @@ ifeq ($(strip $(PSPSDK)),)
 $(error PSPSDK not found. Put the PSP toolchain's bin directory on PATH)
 endif
 
-BUILD_PROFILE ?= viewer
+BUILD_PROFILE ?= game
 BUILD_DIR := build/psp
 TARGET := $(BUILD_DIR)/recvx
 BUILD_PRX := 1
@@ -74,7 +74,35 @@ ENGINE_PLAYER_CONTROL_SOURCES := $(filter-out src/psp/engine_player_test.c,$(ENG
 	src/psp/engine_original_event_test.c \
 	src/psp/engine_pacer.c src/psp/original_clock.c \
 	src/psp/engine_test_input.c
-ifeq ($(BUILD_PROFILE),engine-event-test)
+ifeq ($(BUILD_PROFILE),game)
+PSP_LARGE_MEMORY := 1
+CFLAGS += -fsigned-char -ffunction-sections -fdata-sections -DRECVX_GAME_BOOT
+LDFLAGS += -Wl,--undefined=module_info
+BOOT_UNPORTED_SOURCE := $(BUILD_DIR)/game_boot_unported.S
+BOOT_UNPORTED_OBJECT := $(BUILD_DIR)/game_boot_unported.o
+BOOT_TABLES_SOURCE := $(BUILD_DIR)/game_boot_tables.c
+BOOT_TABLES_OBJECT := $(BUILD_DIR)/game_boot_tables.o
+BOOT_INITIALIZERS_SOURCE := $(BUILD_DIR)/game_boot_initializers.c
+BOOT_INITIALIZERS_OBJECT := $(BUILD_DIR)/game_boot_initializers.o
+SOURCES := src/psp/game_main.c src/psp/game_boot.c \
+	src/psp/game_boot_files.c src/psp/game_boot_services.c \
+	src/psp/game_boot_draw.c src/psp/game_boot_texture.c src/psp/game_boot_gu.c \
+	src/psp/engine_original_memory.c src/psp/engine_original_fault.c \
+	src/psp/live_task_dispatch.c src/psp/original_clock.c $(PSP_PLATFORM_SOURCES) \
+	src/ps2/veronica/prog/main.c src/ps2/veronica/prog/system_init.c \
+	src/ps2/veronica/prog/system.c src/ps2/veronica/prog/adv.c \
+	src/ps2/veronica/prog/padman.c src/ps2/veronica/prog/pad.c \
+	src/ps2/veronica/prog/pad_task.c src/ps2/veronica/prog/flag.c \
+	$(BOOT_UNPORTED_OBJECT) $(BOOT_TABLES_OBJECT) src/psp/services.c \
+	src/psp/engine_original_clock_psp.c src/psp/engine_original_math.c \
+	src/psp/engine_original_object.c src/psp/game_boot_effect.c \
+	src/psp/game_boot_player.c src/psp/player_asset.c src/ps2/veronica/prog/ps2_NaMem.c \
+	src/psp/game_boot_room.c src/psp/expand.c src/psp/room.c src/psp/event_data.c \
+	src/psp/engine_original_effect.c src/psp/game_boot_mask.c \
+	src/psp/engine_original_effect_init.c src/ps2/veronica/prog/binfunc.c \
+	src/ps2/veronica/prog/camera.c src/psp/engine_original_matrix_cpu.c \
+	$(BOOT_INITIALIZERS_OBJECT)
+else ifeq ($(BUILD_PROFILE),engine-event-test)
 BUILD_DIR := build/psp-engine-event-test
 TARGET := $(BUILD_DIR)/recvx-event-test
 CFLAGS += -fsigned-char -DRECVX_EVENT_CORE_TEST
@@ -152,16 +180,19 @@ SOURCES := src/psp/engine_player_test.c \
 	$(ENGINE_EFFECT_RUNTIME_OBJECT) $(ENGINE_COLLISION_RUNTIME_OBJECT) \
 	$(ENGINE_MESSAGE_RUNTIME_OBJECT) $(ENGINE_EVENT_COMMANDS_OBJECT) \
 	src/psp/engine_original_matrix_cpu.c
-else ifneq ($(BUILD_PROFILE),viewer)
+else ifeq ($(BUILD_PROFILE),viewer)
+BUILD_DIR := build/psp-viewer
+TARGET := $(BUILD_DIR)/recvx-viewer
+else
 $(error Unknown BUILD_PROFILE '$(BUILD_PROFILE)')
 endif
 
 OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SOURCES))
 DEPS := $(OBJS:.o=.d)
 
-ifneq ($(filter engine-player-test engine-player-matrix-test engine-player-control-test,$(BUILD_PROFILE)),)
+ifneq ($(filter game engine-player-test engine-player-matrix-test engine-player-control-test,$(BUILD_PROFILE)),)
 ENGINE_PLAYER_OBJECTS := $(OBJS)
-OBJS := $(BUILD_DIR)/engine-player-core.o
+OBJS := $(BUILD_DIR)/$(if $(filter game,$(BUILD_PROFILE)),game-core,engine-player-core).o
 DEPS := $(ENGINE_PLAYER_OBJECTS:.o=.d)
 $(OBJS): $(ENGINE_PLAYER_OBJECTS)
 	$(LD) -r -Wl,--gc-sections -u main -u module_info -o $@ $^
@@ -189,8 +220,17 @@ PSP_EBOOT_SND0 := src/psp/EBOOT/SND0.at3
 EXTRA_TARGETS := $(PSP_EBOOT)
 EXTRA_CLEAN := $(DEPS) $(TARGET).map
 
-.PHONY: psp bootstrap engine-event-test engine-event-test-assets engine-64 engine-64-assets engine-dispatch-test engine-dispatch-test-assets engine-player-test engine-player-test-assets engine-player-matrix-test engine-player-matrix-test-assets engine-player-control-test engine-player-control-test-assets
+.PHONY: psp bootstrap game viewer game-assets engine-event-test engine-event-test-assets engine-64 engine-64-assets engine-dispatch-test engine-dispatch-test-assets engine-player-test engine-player-test-assets engine-player-matrix-test engine-player-matrix-test-assets engine-player-control-test engine-player-control-test-assets
 psp bootstrap: all
+
+game:
+	$(MAKE) BUILD_PROFILE=game all
+
+viewer:
+	$(MAKE) BUILD_PROFILE=viewer all
+
+game-assets:
+	python3 tools/prepare_psp_boot_assets.py --iso "$(ISO)" --output $(BUILD_DIR)/data
 
 engine-event-test:
 	$(MAKE) BUILD_PROFILE=engine-event-test all
@@ -234,6 +274,27 @@ engine-player-control-test-assets:
 $(BUILD_DIR)/%.o: %.c Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+ifneq ($(strip $(BOOT_UNPORTED_SOURCE)),)
+$(BOOT_UNPORTED_SOURCE): tools/generate_boot_faults.py config/psp_boot_unported.txt
+	python3 $< config/psp_boot_unported.txt $@
+
+$(BOOT_UNPORTED_OBJECT): $(BOOT_UNPORTED_SOURCE) Makefile
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BOOT_TABLES_SOURCE): tools/extract_original_boot_tables.py src/ps2/veronica/prog/player.c src/ps2/veronica/prog/message.c
+	python3 $< $@
+
+$(BOOT_TABLES_OBJECT): $(BOOT_TABLES_SOURCE) Makefile
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+BOOT_INITIALIZER_INPUTS := $(addprefix src/ps2/veronica/prog/,dread.c player.c eneset.c sub1.c message.c njplus.c weapon.c room.c pwksub.c MdlPut.c light.c hitchk.c screen.c face.c face_bh.c)
+$(BOOT_INITIALIZERS_SOURCE): tools/extract_original_boot_initializers.py $(BOOT_INITIALIZER_INPUTS)
+	python3 $< $@
+
+$(BOOT_INITIALIZERS_OBJECT): $(BOOT_INITIALIZERS_SOURCE) Makefile
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+endif
 
 ifneq ($(strip $(ENGINE_CAMERA_SERVICES_SOURCE)),)
 $(ENGINE_CAMERA_SERVICES_SOURCE): tools/extract_original_camera_services.py src/ps2/veronica/prog/event.c
@@ -351,6 +412,75 @@ HOST_ENGINE_SPLINE_TEST := build/host/engine-original-spline-test
 HOST_FLAGS := -std=c11 -O1 -g -Wall -Wextra -Werror -Iinclude -Iinclude/ps2/veronica/prog
 HOST_EVENT_FLAGS := $(HOST_FLAGS) -fsigned-char -D__PSP__ -DRECVX_EVENT_CORE_HOST_TEST -DRECVX_EVENT_CORE_TEST -idirafter include/recvx-decomp-katana/KATANA/Include
 HOST_ORIGINAL_ENGINE_FLAGS := $(HOST_FLAGS) -fsigned-char -D__PSP__ -idirafter include/recvx-decomp-katana/KATANA/Include
+HOST_BOOT_TEST := build/host/game-boot-test
+HOST_BOOT_SOURCES := src/psp/game_boot.c src/psp/game_boot_files.c \
+	src/psp/game_boot_services.c src/psp/game_boot_draw.c src/psp/game_boot_texture.c \
+	src/psp/engine_original_memory.c src/psp/engine_original_fault.c \
+	src/psp/live_task_dispatch.c src/psp/original_clock.c src/psp/services.c \
+	src/psp/engine_original_clock_psp.c src/psp/engine_original_math.c \
+	src/psp/engine_original_object.c src/psp/game_boot_effect.c \
+	src/psp/game_boot_player.c src/psp/player_asset.c src/ps2/veronica/prog/ps2_NaMem.c \
+	src/psp/game_boot_room.c src/psp/expand.c src/psp/room.c src/psp/event_data.c \
+	src/psp/engine_original_effect.c src/psp/game_boot_mask.c \
+	src/psp/engine_original_effect_init.c src/ps2/veronica/prog/binfunc.c \
+	src/ps2/veronica/prog/camera.c src/psp/engine_original_matrix_cpu.c \
+	src/ps2/veronica/prog/main.c src/ps2/veronica/prog/system_init.c \
+	src/ps2/veronica/prog/system.c src/ps2/veronica/prog/adv.c \
+	src/ps2/veronica/prog/padman.c src/ps2/veronica/prog/pad.c \
+	src/ps2/veronica/prog/pad_task.c src/ps2/veronica/prog/flag.c
+
+.PHONY: game-boot-test
+game-boot-test: $(HOST_BOOT_TEST)
+	ASAN_OPTIONS=detect_leaks=0 $(HOST_BOOT_TEST) build/psp/data
+	@mkdir -p build/host/boot-missing/data
+	ASAN_OPTIONS=detect_leaks=0 $(HOST_BOOT_TEST) build/host/boot-missing/data --missing-assets
+
+build/host/game_boot_unported.S: tools/generate_boot_faults.py config/psp_boot_unported.txt
+	python3 $< config/psp_boot_unported.txt $@ --host
+
+build/host/game_boot_tables.c: tools/extract_original_boot_tables.py src/ps2/veronica/prog/player.c src/ps2/veronica/prog/message.c
+	python3 $< $@
+
+build/host/game_boot_initializers.c: tools/extract_original_boot_initializers.py $(addprefix src/ps2/veronica/prog/,dread.c player.c eneset.c sub1.c message.c njplus.c weapon.c room.c pwksub.c MdlPut.c light.c hitchk.c screen.c face.c face_bh.c)
+	python3 $< $@
+
+$(HOST_BOOT_TEST): tests/game_boot_test.c $(HOST_BOOT_SOURCES) build/host/game_boot_unported.S build/host/game_boot_tables.c build/host/game_boot_initializers.c $(HOST_HEADERS) include/psp/game_boot.h Makefile
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -Dasm=__asm__ -DRECVX_GAME_BOOT_HOST_TEST -DRECVX_GAME_BOOT -Wno-error -fno-pie -no-pie \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		-ffunction-sections -fdata-sections $< $(HOST_BOOT_SOURCES) \
+		build/host/game_boot_unported.S build/host/game_boot_tables.c build/host/game_boot_initializers.c \
+		-Wl,--gc-sections -lm -o $@
+
+$(HOST_BOOT_TEST): $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h)
+
+HOST_BOOT_ABI_TEST := build/host/game-boot-abi-test
+HOST_I386_LIBDIR ?= /usr/lib32
+HOST_I386_SYS_INCDIR ?= /usr/include/$(shell $(HOST_CC) -dumpmachine)
+HOST_I386_LOADER ?= /lib/ld-linux.so.2
+.PHONY: game-boot-abi-test
+game-boot-abi-test: $(HOST_BOOT_ABI_TEST)
+	$(HOST_BOOT_ABI_TEST) build/psp/data
+
+build/host/game_boot_unported_i386.S: tools/generate_boot_faults.py config/psp_boot_unported.txt
+	python3 $< config/psp_boot_unported.txt $@ --host32
+
+# These tests use only the installed i386 shared runtime. No optional static
+# glibc APIs are needed; leave the missing multilib feature-stub header empty.
+build/host/i386-include/gnu/stubs-32.h:
+	@mkdir -p $(dir $@)
+	@touch $@
+
+$(HOST_BOOT_ABI_TEST): tests/game_boot_test.c tests/game_boot_i386_start.S $(HOST_BOOT_SOURCES) \
+		build/host/game_boot_unported_i386.S build/host/game_boot_tables.c \
+		build/host/game_boot_initializers.c build/host/i386-include/gnu/stubs-32.h \
+		$(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -m32 -Dasm=__asm__ -DRECVX_GAME_BOOT_HOST_TEST -DRECVX_GAME_BOOT \
+		-Ibuild/host/i386-include -I$(HOST_I386_SYS_INCDIR) -Wno-error -fno-pie -no-pie \
+		-ffunction-sections -fdata-sections -nostartfiles -nodefaultlibs \
+		tests/game_boot_test.c tests/game_boot_i386_start.S $(HOST_BOOT_SOURCES) \
+		build/host/game_boot_unported_i386.S build/host/game_boot_tables.c build/host/game_boot_initializers.c \
+		-Wl,--gc-sections -Wl,--dynamic-linker=$(HOST_I386_LOADER) \
+		$(HOST_I386_LIBDIR)/libc.so.6 $(HOST_I386_LIBDIR)/libm.so.6 $(HOST_I386_LIBDIR)/libgcc_s.so.1 -o $@
 HOST_HEADERS := include/psp/abi.h include/psp/ninja_math.h include/psp/timing.h include/psp/input.h include/psp/game_tasks.h include/psp/services.h include/psp/event_data.h include/psp/engine_event_core.h include/psp/engine_event_test.h include/psp/engine_event_runtime.h include/psp/sha256.h include/psp/file.h include/psp/expand.h include/psp/selftest.h include/psp/room.h include/psp/scene.h include/psp/mesh.h include/psp/texture.h include/psp/player.h include/psp/player_asset.h include/psp/actors.h include/psp/legacy_types.h include/psp/live_task_dispatch.h include/psp/engine_pacer.h include/psp/original_clock.h \
 	include/ps2/veronica/prog/expand.h include/ps2/veronica/prog/flag.h \
 	include/ps2/veronica/prog/ps2_NaMem.h include/ps2/veronica/prog/override_katana.h \
@@ -493,6 +623,9 @@ ASSET_SELECTION := --rooms "$(ROOMS)"
 endif
 .PHONY: assets player-assets route-audit test-assets preview
 assets: $(HOST_SHARED)
+ifeq ($(BUILD_PROFILE),game)
+	python3 tools/prepare_psp_boot_assets.py --iso "$(ISO)" --output $(BUILD_DIR)/data
+endif
 	python3 tools/prepare_psp_assets.py --iso "$(ISO)" $(ASSET_SELECTION) \
 		--library $(HOST_SHARED) --output $(BUILD_DIR)/data
 

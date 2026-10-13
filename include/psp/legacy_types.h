@@ -5,6 +5,11 @@
 #include <sg_pdvib.h>
 #include <stdint.h>
 
+/* CRI handles and PS2 directory records are opaque at PSP service boundaries. */
+typedef struct RecvxAdxFs ADX_FS;
+typedef struct RecvxAdxTalk ADX_TALK;
+typedef struct RecvxMcDirectoryEntry sceMcTblGetDir;
+
 typedef uint8_t u_char;
 typedef uint16_t u_short;
 typedef unsigned int u_int;
@@ -14,6 +19,7 @@ typedef struct RecvxUint128 {
 } u_long128;
 
 typedef float sceVu0FVECTOR[4];
+typedef int32_t sceVu0IVECTOR[4];
 typedef float sceVu0FMATRIX[4][4];
 typedef uint64_t sceGsTex0;
 typedef uint64_t sceGsTex1;

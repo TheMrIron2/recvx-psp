@@ -5,6 +5,9 @@
 #include "ps2/veronica/prog/njplus.h"
 #include "ps2/veronica/prog/ps2_texture.h"
 #include "psp/engine_original_texture.h"
+#ifdef RECVX_GAME_BOOT
+#include "psp/game_boot.h"
+#endif
 
 static const EFFECT_INFO effect_info[21] = {
     {1, 9}, {1, 0}, {0, 2}, {0, 4}, {0, 4}, {0, 4}, {0, 2},
@@ -20,6 +23,10 @@ void bhInitEffect(void)
     int model_count = 0;
     int size;
     unsigned char *data;
+
+#ifdef RECVX_GAME_BOOT
+    recvxGameBootEffectPrepare();
+#endif
 
     npSetMemoryL((unsigned int *)eff, sizeof(eff) / 4, 0);
     sys->bl_ct = sys->yk_ct = sys->ef_ct = 0;

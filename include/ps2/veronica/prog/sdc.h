@@ -2,6 +2,9 @@
 #define _SDC_H_
 
 #include "types.h"
+#if defined(__PSP__)
+#include <sg_sd2.h>
+#endif
 
 typedef struct SDS_INFO
 {

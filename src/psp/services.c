@@ -1,6 +1,6 @@
 #include "psp/services.h"
 
-#if defined(__PSP__)
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
 #include <pspdebug.h>
 #endif
 
@@ -23,7 +23,7 @@ void recvxUnsupportedServiceRecord(enum RecvxUnsupportedServiceId service,
     if (record->calls != UINT32_MAX)
         ++record->calls;
     record->last_caller = caller;
-#if defined(__PSP__)
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
     pspDebugScreenPrintf("Unsupported %s from %s\n",
                          recvxUnsupportedServiceName(service),
                          caller != 0 ? caller : "unknown caller");

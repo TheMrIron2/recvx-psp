@@ -3,6 +3,9 @@
 #include <stdint.h>
 
 #include "psp/expand.h"
+#ifdef RECVX_GAME_BOOT
+#include "psp/game_boot.h"
+#endif
 
 EXPAND_CTRL_BUF ExpandCtrlBuf;
 
@@ -127,8 +130,12 @@ RecvxExpandResult recvxExpandBounded(const void *source, size_t source_size,
 // original API has no buffer sizes; new file-loading code should call recvxExpandBounded instead
 int Expand(char *source, unsigned char *destination)
 {
+#ifdef RECVX_GAME_BOOT
+    return recvxGameBootExpand(source, destination);
+#else
     size_t written;
     RecvxExpandResult result = recvxExpandBounded(source, SIZE_MAX, destination,
                                                 INT_MAX, NULL, &written);
     return result == RECVX_EXPAND_OK ? (int)written : -1;
+#endif
 }
