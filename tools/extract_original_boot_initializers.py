@@ -5,7 +5,7 @@ import sys
 
 
 def extract(source, name='bhKeepObjWork'):
-    match = re.search(r'(?m)^(?:unsigned char\*|BH_PWORK\*|NJS_CNK_OBJECT\*|void|int|float)\s+' + re.escape(name) + r'\s*\(', source)
+    match = re.search(r'(?m)^(?:unsigned char\*|BH_PWORK\*|NJS_CNK_OBJECT\*|unsigned int|void|int|float)\s+' + re.escape(name) + r'\s*\(', source)
     if not match:
         raise ValueError(f'original {name} was not found')
     opening = source.index('{', match.end())
@@ -27,7 +27,7 @@ if __name__ == '__main__':
     out = Path(sys.argv[1])
     out.parent.mkdir(parents=True, exist_ok=True)
     output = [
-        '#include <stdint.h>', '#include <string.h>', '#include <math.h>',
+        '#include <stdint.h>', '#include <string.h>', '#include <math.h>', '#include <stdlib.h>',
         '#include "psp/game_boot.h"', '#include "ps2/veronica/prog/main.h"',
         '#include "ps2/veronica/prog/dread.h"',
         '#include "ps2/veronica/prog/binfunc.h"',
@@ -39,6 +39,7 @@ if __name__ == '__main__':
         '#include "ps2/veronica/prog/camera.h"',
         '#include "ps2/veronica/prog/effect.h"',
         '#include "ps2/veronica/prog/objitm.h"',
+        '#include "ps2/veronica/prog/effsub1.h"',
         '#include "ps2/veronica/prog/face.h"',
         '#include "ps2/veronica/prog/face_bh.h"',
         '#include "ps2/veronica/prog/light.h"',
@@ -47,6 +48,12 @@ if __name__ == '__main__':
         '#include "ps2/veronica/prog/hitchk.h"',
         '#include "ps2/veronica/prog/ps2_NaMath.h"',
         '#include "ps2/veronica/prog/flag.h"',
+        '#include "ps2/veronica/prog/event.h"',
+        '#include "ps2/veronica/prog/subpl.h"',
+        '#include "ps2/veronica/prog/Motion.h"',
+        '#include "ps2/veronica/prog/zonzon1.h"',
+        '#include "psp/engine_event_core.h"',
+        '#include "ps2/veronica/prog/sdfunc.h"',
         '#include "ps2/veronica/prog/eneset.h"',
         '#include "ps2/veronica/prog/sub1.h"',
         '#include "ps2/veronica/prog/pwksub.h"',
@@ -69,6 +76,29 @@ if __name__ == '__main__':
         '        recvxGameBootUnsupported("effect matrix work exceeds original arena");',
         '    return bhKeepObjWorkOriginal(model, start);', '}', '',
     ]
+    enemy_source = Path('src/ps2/veronica/prog/eneset.c').read_text()
+    enemy_table = re.findall(r'JumpEnemy_proc bhJumpEnemy\[100\]\s*=\s*(\{.*?\});', enemy_source, re.S)[-1]
+    if len(re.findall(r'\bbh\w+', enemy_table)) != 100:
+        raise ValueError('original enemy dispatch table changed')
+    for handler in sorted(set(re.findall(r'\bbh\w+', enemy_table))):
+        output.append(f'void {handler}(BH_PWORK *);')
+    output.append('void (*bhJumpEnemy[100])(BH_PWORK *) = ' + enemy_table + ';')
+    effect_source = Path('src/ps2/veronica/prog/effect.c').read_text()
+    output.append('O_WORK *ef_Zanzo[6];')
+    for name, size in [('bhJumpEffect', 150), ('bhJumpEffect0', 100),
+                       ('bhJumpEffect2', 50), ('bhJumpEffect3', 50), ('bhJumpEffect4', 50)]:
+        table = re.search(r'\b' + name + r'\[' + str(size) + r'\]\s*=\s*(\{.*?\});', effect_source, re.S).group(1)
+        table = re.sub(r'\(bhJumpEffect\w*_proc\)', '', table)
+        handlers = re.findall(r'\bbh\w+', table)
+        if len(handlers) != size:
+            raise ValueError('original effect dispatch table changed')
+        for handler in sorted(set(handlers)):
+            output.append(f'void {handler}(O_WRK *);')
+        output.append(f'void (*{name}[{size}])(O_WRK *) = ' + table + ';')
+    subpl_source = Path('src/ps2/veronica/prog/subpl.c').read_text()
+    for name, size in [('Subpl_tbl', 7), ('subpl_init_tbl', 120)]:
+        body = re.search(r'\b' + name + r'\[' + str(size) + r'\]\s*=\s*(\{.*?\});', subpl_source, re.S).group(1)
+        output.append(f'void (*{name}[{size}])(BH_PWORK *) = ' + body + ';')
     for filename, names in [
         ('njplus.c', ['npSkinConvPreparation', 'npSkinConvSub', 'npSkinConvMain', 'npSkinConvert', 'npCnkFlatOff']),
         ('weapon.c', ['bhSetWeapon']),
@@ -77,17 +107,24 @@ if __name__ == '__main__':
                     'bhFinishRoom', 'bhSetEneMtn', 'bhSetRoomMtn', 'bhSetEffectTable', 'bhSetEffectLink']),
         ('MdlPut.c', ['bhCalcModel', 'bhCalcTree']),
         ('light.c', ['bhInitLight']),
-        ('hitchk.c', ['bhResetAtariAttr']),
+        ('effect.c', ['bhControlEffect']),
+        ('effsub1.c', ['bhEffDmy', 'bhEff001', 'bhEff009', 'bhEff2D', 'bhEff021', 'bhEffFil', 'bhEff115', 'bhEff125', 'bhEff015', 'bhEff124', 'bhEff126']),
+        ('hitchk.c', ['bhResetAtariAttr', 'bhGetGroundPosition', 'bhCheckInnerTriangle3']),
         ('screen.c', ['bhSetScreenFade']),
-        ('face.c', ['bhInitMask', 'bhSetLip']),
+        ('face.c', ['bhInitMask', 'bhSetLip', 'bhControlMask']),
         ('face_bh.c', ['_fmSetObjP', '_fmCnkSearchObject', '_fmGetVChunkType', '_fmCnkSetFaceObject',
                        '_fmCnkSetEyeballObject', '_fmCnkSetTangObject', '_fmCnkSetToothObject',
-                       '_fmCnkSetJaw', 'fmCnkInitContext', 'fmCnkSetMode']),
+                       '_fmCnkSetJaw', 'fmCnkInitContext', 'fmCnkSetMode', 'fmCnkSetCurrentFrame',
+                       'fmCnkSetParam', 'fmCnkSetInterParam', 'fmCnkGetLastFrame', 'fmSetLipSyncParam',
+                       'fmCnkSetParamLip', 'fmCnkSetInterParamLip']),
         ('dread.c', ['bhReadPlayerData', 'bhReadWeaponData']),
         ('player.c', ['bhInitPlayer']),
-        ('eneset.c', ['bhInitEnemy', 'bhSetEnemy', 'bhCheckEneWorkNum']),
-        ('pwksub.c', ['bhSetFloorNum']),
+        ('eneset.c', ['bhInitEnemy', 'bhSetEnemy', 'bhCheckEneWorkNum', 'bhControlEnemy']),
+        ('subpl.c', ['bhSubpl', 'init_subpl', 'em60_init']),
+        ('zonzon1.c', ['bhEne_InitDamage']),
+        ('pwksub.c', ['bhSetFloorNum', 'bhCheckFloorNum', 'bhCalcLinkModel']),
         ('sub1.c', ['AllItemInit']),
+        ('event.c', ['bhInitEvent', 'bhScenarioCheck', 'bhIfelCk', 'bhElseCk', 'bhEndif', 'bhCk', 'bhEvtOn', 'bhInitModelSet', 'bhObjLinkSet', 'bhSetDispObj', 'bhInitSetKage', 'bhObjLinkSetEneItem', 'bhDefModelSet', 'bhEffDispSet', 'bhLoadWork', 'bhCommonCtr', 'bhWalAtariSet', 'bhEtcAtariSet', 'bhLightSet', 'bhPlItemCheck', 'bhItmSetCk', 'bhEffAmbSet', 'bhItmAspdSet', 'bhEtcAtariSet2']),
         ('message.c', ['bhDispFont', 'bhDispFontEx', 'bhDispMessage',
                        'bhDispMessageEx', 'bhGetFontSize', 'bhMesLen']),
     ]:
@@ -95,7 +132,42 @@ if __name__ == '__main__':
         source = path.read_text()
         for name in names:
             line, function = extract(source, name)
-            if name == 'bhFinishRoom':
+            if filename == 'effsub1.c':
+                # Bound writes into the original effect render queues.
+                function = re.sub(r'(sys->ef_(\w+)\[sys->ef_(\w+)\+\+\] = op;)',
+                    lambda match: 'recvxGameBootEffectQueueCheck(&sys->ef_' + match[3] +
+                        ', sizeof(sys->ef_' + match[2] + ') / sizeof(sys->ef_' + match[2] + '[0]));\n        ' + match[1], function)
+                output += [f'#line {line} "{path.as_posix()}"', function, '']
+            elif name == 'bhControlEffect':
+                function = function.replace('void bhControlEffect()', 'static void bhControlEffectOriginal()', 1)
+                function = function.replace('op->pxb = op->px;', 'recvxGameBootEffectValidate(op);\n                    op->pxb = op->px;')
+                output += [f'#line {line} "{path.as_posix()}"', function,
+                    '#line 1 "generated boot effect control boundary"',
+                    'void bhControlEffect(void)', '{', '    bhControlEffectOriginal();',
+                    '    if (recvxEngineOriginalFault()) recvxGameBootUnsupported(recvxEngineOriginalFault());',
+                    '    recvxGameBootEffectUpdated();', '}', '']
+            elif name == 'bhInitEvent':
+                function = function.replace('void bhInitEvent()', 'static void bhInitEventOriginal()', 1)
+                function = function.replace('bhEventScheduler2();', 'if (bhEventScheduler2() != 0) recvxGameBootEventCheck();')
+                output += [f'#line {line} "{path.as_posix()}"', function,
+                    '#line 1 "generated boot event initialization boundary"',
+                    'void bhInitEvent(void)', '{', '    recvxGameBootEventPrepare();',
+                    '    bhInitEventOriginal();', '    recvxGameBootEventCheck();',
+                    '    recvxGameBootLog("events initialized: instructions=%u flag-writes=%u timer=%u",',
+                    '        (unsigned int)recvxEventCoreInstructionCount(),',
+                    '        (unsigned int)recvxEventCoreFlagWriteCount(), Event_T_timer);', '}', '']
+            elif name == 'bhScenarioCheck':
+                function = function.replace('recvxEngineOriginalFaultSet("original SCD scenario execution failed");',
+                    'recvxGameBootEventCheck();')
+                output += [f'#line {line} "{path.as_posix()}"', function, '']
+            elif name == 'bhControlEnemy':
+                function = function.replace('bhJumpEnemy[ep->id](ep);', 'if (ep->id >= 100 || !bhJumpEnemy[ep->id]) recvxGameBootUnsupported("invalid enemy callback");\n                bhJumpEnemy[ep->id](ep);')
+                output += [f'#line {line} "{path.as_posix()}"', function, '']
+            elif name == 'bhSubpl':
+                function = function.replace('Subpl_tbl[epw->mode0](epw);',
+                    'if (epw->mode0 >= 7 || !Subpl_tbl[epw->mode0]) recvxGameBootUnsupported("invalid subplayer callback");\n    Subpl_tbl[epw->mode0](epw);')
+                output += [f'#line {line} "{path.as_posix()}"', function, '']
+            elif name == 'bhFinishRoom':
                 function = function.replace('void bhFinishRoom()', 'static void bhFinishRoomOriginal()', 1)
                 output += [f'#line {line} "{path.as_posix()}"', function,
                     '#line 1 "generated boot room finalization boundary"',
@@ -193,4 +265,14 @@ if __name__ == '__main__':
                     f'    return {name}Original(px, py, pri, mes_typ, mes_idx, {color}, count);', '}', '']
             else:
                 output += [f'#line {line} "{path.as_posix()}"', function, '']
+    from extract_original_event_commands import extract_function, extract_cases
+    event_path = Path('src/ps2/veronica/prog/event.c')
+    event_source = event_path.read_text()
+    common = extract_function(event_source, 'Common_controll')
+    first_line = event_source.count('\n', 0, event_source.index(common)) + 1
+    output += ['int Common_controll(void)', '{', '    switch (*bhScePtr) {']
+    for _, (case_line, case_body) in sorted(extract_cases(common).items()):
+        output += [f'#line {first_line + case_line} "{event_path.as_posix()}"', case_body]
+    output += ['    default:', '        recvxEventCoreFailUnsupportedCommand(105, bhScePtr);',
+               '        return -1;', '    }', '    return 0;', '}']
     out.write_text('\n'.join(output))

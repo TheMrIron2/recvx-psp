@@ -48,6 +48,13 @@ void recvxGameBootPlayerPrepare(void);
 int recvxGameBootValidateWeaponSource(const void *data, size_t size);
 void recvxGameBootWeaponPrepare(void);
 void recvxGameBootEffectPrepare(void);
+void recvxGameBootEffectValidate(O_WRK *effect);
+void recvxGameBootEffectQueueCheck(int *count, size_t capacity);
+void recvxGameBootEffectControlReset(void);
+void recvxGameBootEffectUpdated(void);
+void recvxGameBootEventPrepare(void);
+void recvxGameBootEventCheck(void);
+void recvxGameBootFaceVectorCheck(void);
 void recvxGameBootMessageCheck(int type, int index);
 
 typedef struct RecvxBootDraw {

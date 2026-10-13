@@ -1,4 +1,5 @@
 #include <string.h>
+#include <math.h>
 #include "psp/game_boot.h"
 #include "ps2/veronica/prog/face.h"
 #include "ps2/veronica/prog/main.h"
@@ -9,12 +10,19 @@ static unsigned int half(const unsigned char *p)
 { return p[0] | ((unsigned int)p[1] << 8); }
 static int span(size_t size, size_t offset, size_t count)
 { return offset <= size && count <= size - offset; }
+static int finite_word(const unsigned char *p)
+{
+    uint32_t bits = word(p);
+    float value;
+    memcpy(&value, &bits, sizeof(value));
+    return isfinite(value);
+}
 
 int recvxGameBootValidateMaskSource(const unsigned char *data, size_t size,
                                   const uint32_t *vertices, unsigned int models)
 {
     size_t cursor;
-    unsigned int face, lists, connections, jaw, tang, frames, i;
+    unsigned int face, lists, connections, jaw, tang, frames, i, muscle_count = 0;
     if (!data || !vertices || size < 64 || memcmp(data, "MASK", 4) || half(data + 4) != 1 ||
         !models || models > 128 || data[52] >= models) return -1;
     face = vertices[data[52]];
@@ -30,12 +38,29 @@ int recvxGameBootValidateMaskSource(const unsigned char *data, size_t size,
     for (i = 0; i < lists; ++i) {
         const unsigned char *list = data + 64 + i * 4u;
         unsigned int j;
-        if (half(list) >= face || list[3] > 127 || !span(size, cursor, list[3] * 4u)) return -1;
+        if (half(list) >= face || list[2] > 32 || list[3] > 127 || !span(size, cursor, list[3] * 4u)) return -1;
+        muscle_count += list[2];
         for (j = 0; j < list[3]; ++j)
             if (word(data + cursor + j * 4u) >= face) return -1;
         cursor += list[3] * 4u;
     }
-    if (!span(size, cursor, connections * 20u + jaw * 8u + tang * 8u + frames * 164u)) return -1;
+    if (muscle_count != connections || !span(size, cursor, connections * 20u + jaw * 8u + tang * 8u + frames * 164u)) return -1;
+    for (i = 0; i < connections; ++i) {
+        unsigned int j;
+        const unsigned char *connection = data + cursor + i * 20u;
+        if (word(connection) >= 32) return -1;
+        for (j = 4; j < 20; j += 4)
+            if (!finite_word(connection + j)) return -1;
+    }
+    cursor += connections * 20u;
+    for (i = 0; i < jaw; ++i)
+        if (word(data + cursor + i * 8u) >= face ||
+            !finite_word(data + cursor + i * 8u + 4)) return -1;
+    cursor += jaw * 8u;
+    if (tang && data[53] == 255) return -1;
+    for (i = 0; i < tang; ++i)
+        if (word(data + cursor + i * 8u) >= vertices[data[53]] ||
+            !finite_word(data + cursor + i * 8u + 4)) return -1;
     return 0;
 }
 

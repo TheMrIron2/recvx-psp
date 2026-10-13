@@ -62,6 +62,7 @@ int recvxGameBootInit(const char *directory, void *arena, size_t size)
     sys->memp = freemem; sys->endp = njpmemp;
     recvxEngineOriginalFaultReset(); recvxEngineOriginalMemoryReset();
     recvxEngineOriginalMatrixReset();
+    recvxGameBootEffectControlReset();
     recvxGameBootFilesInit(directory);
     InitReadKeyEx(1);
     InitAdvSystem();

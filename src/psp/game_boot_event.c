@@ -1,0 +1,61 @@
+#include <stdio.h>
+#include "psp/game_boot.h"
+#include "psp/event_data.h"
+#include "psp/engine_event_core.h"
+#include "psp/engine_original_fault.h"
+#include "ps2/veronica/prog/event.h"
+#include "ps2/veronica/prog/main.h"
+
+unsigned int (*bhScenarioJmpT[256])(void) = {
+#define RECVX_EVENT_CORE(opcode, handler) [opcode] = handler,
+#define RECVX_EVENT_ENGINE(opcode, handler)
+#define RECVX_EVENT_FULL(opcode, handler)
+#include "event_dispatch_table.inc"
+#undef RECVX_EVENT_CORE
+#undef RECVX_EVENT_ENGINE
+#undef RECVX_EVENT_FULL
+    [1] = bhIfelCk, [2] = bhElseCk, [3] = bhEndif, [4] = bhCk, [20] = bhEvtOn, [36] = bhInitModelSet, [50] = bhObjLinkSet,
+    [32] = bhSetDispObj, [47] = bhInitSetKage, [83] = bhObjLinkSetEneItem, [59] = bhDefModelSet, [67] = bhEffDispSet,
+    [101] = bhLoadWork, [105] = bhCommonCtr, [10] = bhWalAtariSet,
+    [11] = bhEtcAtariSet, [53] = bhLightSet, [17] = bhPlItemCheck, [35] = bhItmSetCk, [68] = bhEffAmbSet,
+    [66] = bhItmAspdSet, [37] = bhEtcAtariSet2
+};
+
+static const char *const event_names[256] = {
+#define RECVX_EVENT_CORE(opcode, handler) [opcode] = #handler,
+#define RECVX_EVENT_ENGINE(opcode, handler) [opcode] = #handler,
+#define RECVX_EVENT_FULL(opcode, handler) [opcode] = #handler,
+#include "event_dispatch_table.inc"
+#undef RECVX_EVENT_CORE
+#undef RECVX_EVENT_ENGINE
+#undef RECVX_EVENT_FULL
+};
+
+void recvxGameBootEventCheck(void)
+{
+    const RecvxEventCoreFault *fault = recvxEventCoreGetFault();
+    if (fault->code != RECVX_EVENT_FAULT_NONE) {
+        char reason[192];
+        snprintf(reason, sizeof(reason), "event %s: opcode=%u %s task=%u script=%u pc=%u",
+            recvxEventCoreFaultName(fault->code), fault->opcode,
+            event_names[fault->opcode] ? event_names[fault->opcode] : "unassigned",
+            fault->task, (unsigned int)fault->event_id, (unsigned int)fault->section_pc);
+        recvxGameBootUnsupported(reason);
+    }
+    if (recvxEngineOriginalFault()) recvxGameBootUnsupported(recvxEngineOriginalFault());
+}
+
+void recvxGameBootEventPrepare(void)
+{
+    RecvxEventDataView events;
+    recvxGameBootFaceVectorCheck();
+    if (sys->rdtsz < 36 || recvxGameBootSourceRemaining(sys->rdtp) != (size_t)sys->rdtsz ||
+        recvxEventDataInspect(sys->rdtp, (size_t)sys->rdtsz, &events) ||
+        (const unsigned char *)rom->evtp != sys->rdtp + events.section_offset ||
+        sys->ply_id < 0 || sys->ply_id >= 4)
+        recvxGameBootUnsupported("invalid original event initialization state");
+    recvxEventCoreReset();
+    if (recvxEventCoreBindSection(rom->evtp, events.section_size)) recvxGameBootEventCheck();
+    recvxGameBootLog("event section bound: scripts=%u bytes=%u", (unsigned int)events.script_count,
+        (unsigned int)events.section_size);
+}

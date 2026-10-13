@@ -36,7 +36,7 @@ LEGACY_PORTABLE_OBJECTS := $(addprefix build/psp/legacy-objects/,$(notdir $(LEGA
 INCDIR := include include/ps2/veronica/prog
 CFLAGS := -std=gnu11 -O2 -g -G0 -Wall -Wextra -MMD -MP -idirafter include/recvx-decomp-katana/KATANA/Include
 LDFLAGS = -Wl,-Map,$(TARGET).map
-LIBS := -lpspgum -lpspgu -lpsppower -lm
+LIBS := -lpspgum -lpspgu -lpspvfpu -lpsppower -lm
 
 EVENT_TEST_SHARED_SOURCES := src/psp/event_core.c src/psp/engine_event_runtime.c src/psp/engine_event_tests.c src/psp/event_data.c src/psp/sha256.c src/psp/expand.c src/psp/room.c src/psp/room_check.c src/psp/file_stdio.c
 ROOM_OWNER_SOURCES := src/psp/engine_room_owner.c
@@ -76,7 +76,7 @@ ENGINE_PLAYER_CONTROL_SOURCES := $(filter-out src/psp/engine_player_test.c,$(ENG
 	src/psp/engine_test_input.c
 ifeq ($(BUILD_PROFILE),game)
 PSP_LARGE_MEMORY := 1
-CFLAGS += -fsigned-char -ffunction-sections -fdata-sections -DRECVX_GAME_BOOT
+CFLAGS += -fsigned-char -ffunction-sections -fdata-sections -DRECVX_GAME_BOOT -DRECVX_ENGINE_SHARED_EVENT_CORE
 LDFLAGS += -Wl,--undefined=module_info
 BOOT_UNPORTED_SOURCE := $(BUILD_DIR)/game_boot_unported.S
 BOOT_UNPORTED_OBJECT := $(BUILD_DIR)/game_boot_unported.o
@@ -98,7 +98,7 @@ SOURCES := src/psp/game_main.c src/psp/game_boot.c \
 	src/psp/engine_original_object.c src/psp/game_boot_effect.c \
 	src/psp/game_boot_player.c src/psp/player_asset.c src/ps2/veronica/prog/ps2_NaMem.c \
 	src/psp/game_boot_room.c src/psp/expand.c src/psp/room.c src/psp/event_data.c \
-	src/psp/engine_original_effect.c src/psp/game_boot_mask.c \
+	src/psp/engine_original_effect.c src/psp/game_boot_mask.c src/psp/game_boot_mask_anim.c src/psp/game_boot_event.c src/psp/game_boot_effect_control.c src/psp/event_core.c src/ps2/veronica/prog/Motion.c \
 	src/psp/engine_original_effect_init.c src/ps2/veronica/prog/binfunc.c \
 	src/ps2/veronica/prog/camera.c src/psp/engine_original_matrix_cpu.c \
 	$(BOOT_INITIALIZERS_OBJECT)
@@ -288,8 +288,8 @@ $(BOOT_TABLES_SOURCE): tools/extract_original_boot_tables.py src/ps2/veronica/pr
 $(BOOT_TABLES_OBJECT): $(BOOT_TABLES_SOURCE) Makefile
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-BOOT_INITIALIZER_INPUTS := $(addprefix src/ps2/veronica/prog/,dread.c player.c eneset.c sub1.c message.c njplus.c weapon.c room.c pwksub.c MdlPut.c light.c hitchk.c screen.c face.c face_bh.c)
-$(BOOT_INITIALIZERS_SOURCE): tools/extract_original_boot_initializers.py $(BOOT_INITIALIZER_INPUTS)
+BOOT_INITIALIZER_INPUTS := $(addprefix src/ps2/veronica/prog/,dread.c player.c eneset.c sub1.c message.c njplus.c weapon.c room.c pwksub.c MdlPut.c light.c hitchk.c screen.c face.c face_bh.c event.c subpl.c zonzon1.c effect.c effsub1.c)
+$(BOOT_INITIALIZERS_SOURCE): tools/extract_original_boot_initializers.py tools/extract_original_event_commands.py $(BOOT_INITIALIZER_INPUTS)
 	python3 $< $@
 
 $(BOOT_INITIALIZERS_OBJECT): $(BOOT_INITIALIZERS_SOURCE) Makefile
@@ -421,7 +421,7 @@ HOST_BOOT_SOURCES := src/psp/game_boot.c src/psp/game_boot_files.c \
 	src/psp/engine_original_object.c src/psp/game_boot_effect.c \
 	src/psp/game_boot_player.c src/psp/player_asset.c src/ps2/veronica/prog/ps2_NaMem.c \
 	src/psp/game_boot_room.c src/psp/expand.c src/psp/room.c src/psp/event_data.c \
-	src/psp/engine_original_effect.c src/psp/game_boot_mask.c \
+	src/psp/engine_original_effect.c src/psp/game_boot_mask.c src/psp/game_boot_mask_anim.c src/psp/game_boot_event.c src/psp/game_boot_effect_control.c src/psp/event_core.c src/ps2/veronica/prog/Motion.c \
 	src/psp/engine_original_effect_init.c src/ps2/veronica/prog/binfunc.c \
 	src/ps2/veronica/prog/camera.c src/psp/engine_original_matrix_cpu.c \
 	src/ps2/veronica/prog/main.c src/ps2/veronica/prog/system_init.c \
@@ -435,17 +435,21 @@ game-boot-test: $(HOST_BOOT_TEST)
 	@mkdir -p build/host/boot-missing/data
 	ASAN_OPTIONS=detect_leaks=0 $(HOST_BOOT_TEST) build/host/boot-missing/data --missing-assets
 
+.PHONY: game-boot-vfpu-check
+game-boot-vfpu-check: $(BUILD_DIR)/src/psp/game_boot_mask_anim.o
+	python3 tools/check_game_boot_vfpu.py $<
+
 build/host/game_boot_unported.S: tools/generate_boot_faults.py config/psp_boot_unported.txt
 	python3 $< config/psp_boot_unported.txt $@ --host
 
 build/host/game_boot_tables.c: tools/extract_original_boot_tables.py src/ps2/veronica/prog/player.c src/ps2/veronica/prog/message.c
 	python3 $< $@
 
-build/host/game_boot_initializers.c: tools/extract_original_boot_initializers.py $(addprefix src/ps2/veronica/prog/,dread.c player.c eneset.c sub1.c message.c njplus.c weapon.c room.c pwksub.c MdlPut.c light.c hitchk.c screen.c face.c face_bh.c)
+build/host/game_boot_initializers.c: tools/extract_original_boot_initializers.py tools/extract_original_event_commands.py $(addprefix src/ps2/veronica/prog/,dread.c player.c eneset.c sub1.c message.c njplus.c weapon.c room.c pwksub.c MdlPut.c light.c hitchk.c screen.c face.c face_bh.c event.c subpl.c zonzon1.c effect.c effsub1.c)
 	python3 $< $@
 
 $(HOST_BOOT_TEST): tests/game_boot_test.c $(HOST_BOOT_SOURCES) build/host/game_boot_unported.S build/host/game_boot_tables.c build/host/game_boot_initializers.c $(HOST_HEADERS) include/psp/game_boot.h Makefile
-	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -Dasm=__asm__ -DRECVX_GAME_BOOT_HOST_TEST -DRECVX_GAME_BOOT -Wno-error -fno-pie -no-pie \
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -Dasm=__asm__ -DRECVX_GAME_BOOT_HOST_TEST -DRECVX_GAME_BOOT -DRECVX_ENGINE_SHARED_EVENT_CORE -DRECVX_EVENT_CORE_HOST_TEST -Wno-error -fno-pie -no-pie \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
 		-ffunction-sections -fdata-sections $< $(HOST_BOOT_SOURCES) \
 		build/host/game_boot_unported.S build/host/game_boot_tables.c build/host/game_boot_initializers.c \
@@ -474,7 +478,7 @@ $(HOST_BOOT_ABI_TEST): tests/game_boot_test.c tests/game_boot_i386_start.S $(HOS
 		build/host/game_boot_unported_i386.S build/host/game_boot_tables.c \
 		build/host/game_boot_initializers.c build/host/i386-include/gnu/stubs-32.h \
 		$(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
-	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -m32 -Dasm=__asm__ -DRECVX_GAME_BOOT_HOST_TEST -DRECVX_GAME_BOOT \
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -m32 -Dasm=__asm__ -DRECVX_GAME_BOOT_HOST_TEST -DRECVX_GAME_BOOT -DRECVX_ENGINE_SHARED_EVENT_CORE -DRECVX_EVENT_CORE_HOST_TEST \
 		-Ibuild/host/i386-include -I$(HOST_I386_SYS_INCDIR) -Wno-error -fno-pie -no-pie \
 		-ffunction-sections -fdata-sections -nostartfiles -nodefaultlibs \
 		tests/game_boot_test.c tests/game_boot_i386_start.S $(HOST_BOOT_SOURCES) \

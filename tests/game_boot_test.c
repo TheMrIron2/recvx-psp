@@ -28,6 +28,12 @@
 #include "ps2/veronica/prog/room.h"
 #include "ps2/veronica/prog/gdlib.h"
 #include "ps2/veronica/prog/face.h"
+#include "ps2/veronica/prog/face_bh.h"
+#include "ps2/veronica/prog/ps2_NaMatrix.h"
+#include "ps2/veronica/prog/event.h"
+#include "ps2/veronica/prog/sub1.h"
+#include "ps2/veronica/prog/effect.h"
+#include "psp/engine_event_core.h"
 
 extern ADV_WORK AdvWork;
 extern RecvxLiveTaskProc bhSysTaskJumpTab[23];
@@ -618,7 +624,7 @@ static void test_mask_records(unsigned char *room)
     for (actor = 0; actor < 2; ++actor) {
         unsigned char *cursor = room + *(unsigned int *)(room + directory + (actor + 1) * 4u);
         unsigned char *model = NULL, *mask = NULL, *copy;
-        unsigned int mask_size = 0, count = 0, i, lists;
+        unsigned int mask_size = 0, count = 0, i, lists, connection_offset;
         uint32_t vertices[128];
         for (;;) {
             unsigned int length = *(unsigned int *)cursor; cursor += 4;
@@ -644,9 +650,140 @@ static void test_mask_records(unsigned char *room)
         assert(recvxGameBootValidateMaskSource(copy, mask_size, vertices, count) == -1);
         memcpy(copy, mask, mask_size); put32(copy + 64 + lists * 4u, vertices[mask[52]]);
         assert(recvxGameBootValidateMaskSource(copy, mask_size, vertices, count) == -1);
+        connection_offset = 64 + lists * 4u;
+        for (i = 0; i < lists; ++i) connection_offset += mask[64 + i * 4u + 3] * 4u;
+        memcpy(copy, mask, mask_size); put32(copy + connection_offset, 32);
+        assert(recvxGameBootValidateMaskSource(copy, mask_size, vertices, count) == -1);
+        memcpy(copy, mask, mask_size); copy[66] = 33;
+        assert(recvxGameBootValidateMaskSource(copy, mask_size, vertices, count) == -1);
+        memcpy(copy, mask, mask_size); put32(copy + connection_offset + 4, 0x7fc00000);
+        assert(recvxGameBootValidateMaskSource(copy, mask_size, vertices, count) == -1);
         assert(recvxGameBootValidateMaskSource(mask, 63, vertices, count) == -1);
         free(copy);
     }
+}
+
+static void test_facial_deformation(void)
+{
+    int source_words[32] = {0}, destination_words[32] = {0};
+    int tongue_source[24] = {0}, tongue_destination[24] = {0};
+    const float points[3] = {2, 3, 4};
+    NJS_CNK_MODEL source = {.vlist = source_words}, destination = {.vlist = destination_words};
+    NJS_CNK_MODEL tsrc = {.vlist = tongue_source}, tdst = {.vlist = tongue_destination};
+    NJS_CNK_OBJECT eye = {0};
+    VLIST_WORK list = {.id = 0, .mnum = 2};
+    LIST_WORK connections[2] = {
+        {.id = 0, .scal = 2, .vec = {2, 4, 6}},
+        {.id = 1, .scal = 4, .vec = {1, 2, 3}}
+    };
+    TANG_WORK jaw = {.id = 1, .rate = 1}, tang = {.id = 0, .rate = 1};
+    MASK_WORK mask = {.src = &source, .dst = &destination, .vtype = 51,
+        .vtop = 16, .vofs = 8, .mode = 1, .vlist = &list, .list = connections,
+        .lnum = 1, .jnum = 1, .jaw = &jaw, .tnum = 1, .tang = &tang,
+        .tangsrc = &tsrc, .tangdst = &tdst};
+    float *face0 = (float *)(destination_words + 16);
+    float *face1 = (float *)(destination_words + 24);
+    float *tongue = (float *)(tongue_destination + 16);
+    unsigned int i;
+    memcpy(source_words + 16, points, sizeof(points));
+    memcpy(source_words + 24, points, sizeof(points));
+    memcpy(tongue_source + 16, points, sizeof(points));
+    source_words[19] = source_words[27] = 0x7fc01234; /* Packed bits, not a float. */
+    destination_words[20] = 0x76543210; /* Fixed normal must survive. */
+    tongue_destination[19] = 0x12345678;
+    njUnitMatrix(&mask.jmat1); njUnitMatrix(&mask.jmat2);
+    njUnitMatrix(&mask.eyemat[0]); mask.eyesrc[0] = &eye;
+    mask.param.muscle[0] = 1; mask.param.muscle[1] = -0.5f;
+    mask.param.jawang = 90; mask.param.tangx = 90; mask.param.tangz = 2;
+    mask.param.eye.x = 10; mask.param.eye.z = -10;
+    recvxGameBootFaceVectorCheck();
+    fmCnkCalcFace(&mask);
+    for (i = 0; i < 3; ++i) assert(fabsf(face0[i] - (points[i] + 0.75f * (i + 1))) < 0.00001f);
+    assert(fabsf(face1[0] - 2) < 0.00001f && fabsf(face1[1] - 4) < 0.00001f && fabsf(face1[2] + 3) < 0.00001f);
+    assert(fabsf(tongue[0] - 2) < 0.00001f && fabsf(tongue[1] + 8) < 0.00001f && fabsf(tongue[2] - 3) < 0.00001f);
+    assert(destination_words[19] == source_words[19] && destination_words[27] == source_words[27]);
+    assert(destination_words[20] == 0x76543210 && tongue_destination[19] == 0x12345678);
+    assert(eye.ang[0] == 0 && abs(eye.ang[1] + 8192) <= 1 && eye.ang[2] == 0);
+    /* No active muscles must reset to the source without dividing by zero. */
+    mask.param.muscle[0] = mask.param.muscle[1] = 0;
+    fmCnkCalcFace(&mask);
+    assert(memcmp(face0, points, sizeof(points)) == 0);
+    puts("PASS: facial muscle weights, jaw/tongue rotation, eye direction and packed vertex preservation");
+}
+
+static int effect_fixture_case;
+static void effect_control_task(void)
+{
+    O_WORK matrix_work = {0};
+    ATR_WORK ground = {.flg = 1, .type = 7, .px = -20, .pz = -20, .w = 40, .d = 40};
+    EF_WORK sprite = {.flg = 1, .id = 9, .type = 1, .py = 5, .sx = 1, .sy = 1, .sz = 1};
+    unsigned int i;
+    memset(eff, 0, sizeof(eff));
+    sys->ef_flg = 1; sys->pt_flg = 1;
+    rom->walp = &ground; rom->wal_n = 1;
+    plp->flg = 1; plp->stflg = 0x40000000;
+    plp->mlwP = plp->mdl; plp->mdl[0].obj_num = 1; plp->mdl[0].owP = &matrix_work;
+    njUnitMatrix(&matrix_work.mtx);
+    matrix_work.mtx[12] = 2; matrix_work.mtx[13] = 3; matrix_work.mtx[14] = 4;
+    if (effect_fixture_case == 1 || effect_fixture_case == 2) {
+        eff[0].flg = 0x81; eff[0].id = 9;
+        eff[0].lkwkp = effect_fixture_case == 1 ? (unsigned char *)1 : (unsigned char *)plp;
+        eff[0].lkono = 2;
+    } else if (effect_fixture_case == 3) {
+        eff[0].flg = 1; eff[0].id = 149;
+    } else if (effect_fixture_case == 4) {
+        eff[0].flg = 1; eff[0].id = 20; eff[0].type = 450;
+    } else if (effect_fixture_case == 5) {
+        for (i = 0; i < 129; ++i) assert(bhSetShadow(NULL, (unsigned char *)plp, 0, 1, 1, 1) == (int)i);
+        sys->ef_lin[0] = &eff[500];
+        bhControlEffect();
+        bhControlEffect(); /* The 129th shadow must stop before its queue write. */
+    } else {
+        assert(bhSetShadow(NULL, (unsigned char *)plp, 0, 1, 1, 1) == 0);
+        eff[1].flg = 1; eff[1].id = 33;
+        eff[2].flg = 1; eff[2].id = 400;
+        eff[3].flg = 1; eff[3].id = 149; eff[3].stflg = 0x1000000;
+        assert(bhSetEffectTb(&sprite, NULL, NULL, 0) == 4);
+        sprite.id = 115; sprite.type = 1;
+        assert(bhSetEffectTb(&sprite, NULL, NULL, 0) == 5);
+        sys->ef_flg = 0; sys->sp_flg = 0; sys->ef_trsn = 17;
+        bhControlEffect(); assert(sys->ef_trsn == 17 && eff[0].mode0 == 0);
+        sys->ef_flg = 1;
+        bhControlEffect();
+        assert(eff[0].mode0 == 1 && eff[4].mode0 == 1 && eff[4].ct0 == 1);
+        assert(eff[1].id == 15 && eff[1].mode0 == 0); /* Spawned into an already visited free slot. */
+        assert(eff[2].flg == 0 && sys->ef_trsn == 1);
+        for (i = 0; i < 24; ++i) {
+            bhControlEffect();
+            assert(sys->ef_trsn > 0 && sys->ef_trsn < 512 && sys->ef_mdfn == 1);
+            assert(sys->ef_mdf[0] == &eff[0] && sys->ef_linn == 0);
+            assert(eff[0].px == 2 && eff[0].py == 0 && eff[0].pz == 4);
+            assert(eff[4].ct0 >= 1 && eff[4].ct0 <= 8);
+        }
+        return;
+    }
+    bhControlEffect();
+    assert(0);
+}
+
+static void test_effect_control(const char *directory, void *arena, size_t arena_size)
+{
+    const char *faults[] = {NULL, "effect links an invalid actor", "effect links an invalid actor joint",
+        "bhEff149", "invalid original effect texture mapping", "original effect render queue is full"};
+    RecvxLiveTaskProc saved = bhSysTaskJumpTab[0];
+    RecvxInputState input = {.analog_x = 128, .analog_y = 128};
+    bhSysTaskJumpTab[0] = effect_control_task;
+    for (effect_fixture_case = 0; effect_fixture_case < 6; ++effect_fixture_case) {
+        assert(recvxGameBootInit(directory, arena, arena_size) == 0);
+        if (effect_fixture_case == 0) tick(&input);
+        else {
+            assert(recvxGameBootTick(&input) == -1);
+            assert(strcmp(recvxGameBootFault(), faults[effect_fixture_case]) == 0);
+            if (effect_fixture_case == 5) assert(sys->ef_mdfn == 128 && sys->ef_lin[0] == &eff[500]);
+        }
+    }
+    bhSysTaskJumpTab[0] = saved;
+    puts("PASS: original effect updates, shadow ground/joints, flame animation/spawning, queue reset and bounded faults");
 }
 
 static void room_read_task(void)
@@ -754,6 +891,8 @@ int main(int argc, char **argv)
     assert((uintptr_t)arena + arena_size < 0x80000000u);
     assert(recvxGameBootInit(argv[1], arena, 128) == -1);
     test_player_initialization(argv[1], arena, arena_size);
+    test_facial_deformation();
+    test_effect_control(argv[1], arena, arena_size);
     if (argc == 2) {
         test_player_source_bounds(argv[1]);
         test_weapon_source_bounds(argv[1]);
@@ -815,9 +954,24 @@ int main(int argc, char **argv)
         njReleaseTexture(&list);
     }
 #else
-    if (!recvxGameBootFault() || strcmp(recvxGameBootFault(), "bhInitEvent"))
+    if (!recvxGameBootFault() || strcmp(recvxGameBootFault(), "CheckTransEndSoundBank"))
         fprintf(stderr, "Unexpected native loader boundary: %s\n", recvxGameBootFault());
-    assert(recvxGameBootFault() && strcmp(recvxGameBootFault(), "bhInitEvent") == 0);
+    assert(recvxGameBootFault() && strcmp(recvxGameBootFault(), "CheckTransEndSoundBank") == 0);
+    assert(recvxEventCoreGetFault()->code == RECVX_EVENT_FAULT_NONE);
+    assert(recvxEventCoreInstructionCount() == 144 && recvxEventCoreFlagWriteCount() == 64);
+    assert(Event_T_timer == 1 && swork.pip == &sys->itm[sys->ply_id * 16]);
+    assert(bhEtask[1].status == 0);
+    assert(fabsf(rom->amb_r[2] - 0.2f) < 0.00001f);
+    assert(sys->itwp[0].aspd == 0 && sys->itwp[4].aspd == 0);
+    assert(sys->ef_ctrn == 14 && sys->ef_trsn == 0 && sys->ef_mdfn == 0 && sys->ef_trs2dn == 0);
+    for (i = 9; i <= 11; ++i) {
+        O_WRK *overlay = &eff[sys->efid[i]];
+        unsigned int index = sys->ef_tn[45] + (i - 9);
+        assert(overlay->id == 20 && overlay->mode0 == 1 && overlay->tex_id == 45);
+        assert(overlay->ani_ct == (int)i - 9 && overlay->px == 0 && overlay->py == 0);
+        assert(overlay->gidx == ((NJS_TEXMEMLIST *)(uintptr_t)sys->ef_tlist.textures[index].texaddr)->globalIndex);
+    }
+    assert(eff[sys->efid[1]].flg == 0 && eff[sys->efid[4]].flg == 0 && eff[sys->efid[8]].flg == 0);
     assert(sys->ef_ctb == 40 && sys->ef_ct == 48 && sys->ef_tlist.nbTexture == (unsigned int)sys->ef_ct);
     assert(sys->efm[0].obj_num == 2 && sys->efm[1].obj_num == 2 &&
         sys->efm[7].obj_num == 3 && sys->efm[13].obj_num == 2);
@@ -867,7 +1021,9 @@ int main(int argc, char **argv)
         assert(mask->vtype == 51 && mask->vofs == 8 && mask->vtop == 16 && mask->ntop == 20);
         assert(mask->fnum == (i ? 18 : 24) && mask->lnum == (i ? 738 : 731));
         assert(mask->mode & 1u);
-        assert(memcmp(mask->dst->vlist, mask->src->vlist, face_bytes) == 0);
+        assert(memcmp(mask->dst->vlist, mask->src->vlist, 64) == 0);
+        if (i) assert(memcmp(mask->dst->vlist, mask->src->vlist, face_bytes) != 0);
+        assert(ene[i].mode0 == 1 && ene[i].mode3 == 3);
         assert(memcmp(mask->tangdst->vlist, mask->tangsrc->vlist, tongue_bytes) == 0);
         for (j = 0; j < 16; ++j)
             assert(((unsigned int *)mask->nvpt)[j] == (unsigned int)(uintptr_t)
@@ -880,7 +1036,7 @@ int main(int argc, char **argv)
     assert(fabsf(plp->px - rom->posp[sys->pos_no].px) < 0.0001f &&
         fabsf(plp->pz - rom->posp[sys->pos_no].pz) < 0.0001f && plp->flr_no == 0 && plp->py == rom->grand[2]);
     assert(sys->fade_hkn == 11.0f && (sys->cb_flg & 2) && !(sys->ss_flg & 0x100));
-    assert((sys->gm_flg & 0x800) && sys->sp_flg == UINT32_MAX);
+    assert((sys->gm_flg & 0x800) && sys->sp_flg == (UINT32_MAX & ~0x10u));
     for (i = 0; i < (unsigned int)rom->lgt_n; ++i)
         assert(rom->lgtp[i].mode == 0 && rom->lgtp[i].light == NULL);
     for (i = 0; i < (unsigned int)rom->eff_n; ++i) {
@@ -892,7 +1048,7 @@ int main(int argc, char **argv)
     assert(sys->stg_no == 0 && sys->rom_no == 0 && sys->rcase == 0);
     assert(sys->obwp && sys->itwp && sys->doordp && sys->mes_ip && sys->mes_sp);
     assert(sys->ply_hp[0] == 160 && sys->mn_md0 == (sizeof(void *) == 4 ? 4 : 1));
-    assert(sys->mn_md1 == (sizeof(void *) == 4 ? 10 : 4));
+    assert(sys->mn_md1 == (sizeof(void *) == 4 ? 11 : 4));
     assert(GetReadFileStatus() == 0);
     assert(recvxGameBootTick(&input) == -1); /* A fault cannot advance or fake a room. */
     recvxGameBootTexturesShutdown();
@@ -900,7 +1056,7 @@ int main(int argc, char **argv)
 #if UINTPTR_MAX > UINT32_MAX
     puts("PASS: sanitized title/new-game boot and bounded effect preflight; original relocation requires 32-bit ABI test");
 #else
-    printf("PASS: original player/enemy/inventory initialization, loading text and original Claire models/skin/motions/textures; original weapon loading and opening room relocation/textures; original room finalization/spawn/masks; next boundary bhInitEvent (%d effect textures retained)\n", sys->ef_ct);
+    printf("PASS: original player/enemy/inventory initialization, loading text and original Claire models/skin/motions/textures; original weapon loading and opening room relocation/textures; original room finalization/spawn/masks; original startup scenario/scheduler and NPC facial update; original effect control; next boundary CheckTransEndSoundBank (%d effect textures retained)\n", sys->ef_ct);
 #endif
     return 0;
 }

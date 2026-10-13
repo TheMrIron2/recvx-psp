@@ -139,6 +139,12 @@ void PlayAdx(unsigned int slot, unsigned int partition, unsigned int file)
 { recvxGameBootLog("muted ADX slot=%u partition=%u file=%u", slot, partition, file); }
 void InitGameSoundSystem(void) { recvxGameBootLog("new-game sound initialization (muted)"); }
 void ExecSoundSystemMonitor(void) { }
+void SendSoundCommand(unsigned int command)
+{
+    if (command != 1 && command != 3 && command != 4)
+        recvxGameBootUnsupported("unported sound control command");
+    recvxGameBootLog("sound command=%u (muted)", command);
+}
 int PlayStartMovieEx(int movie, int mode, int flag)
 { (void)mode; (void)flag; recvxGameBootLog("movie=%d skipped: PSP movie decoding pending", movie); return 0; }
 int WaitPrePlayMovie(int mode) { (void)mode; return 3; }

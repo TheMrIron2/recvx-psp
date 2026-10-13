@@ -8,6 +8,7 @@
 SYS_WORK *sys;
 ROM_WORK *rom;
 BH_PWORK *plp;
+BH_PWORK ene[128];
 
 static SYS_WORK system_work;
 static ROM_WORK room_work;
@@ -414,6 +415,29 @@ static void test_conditional_branch_at_section_end(void)
            recvxEventCoreGetFault()->code == RECVX_EVENT_FAULT_NONE);
 }
 
+static void test_room_startup_operands(void)
+{
+    static const unsigned char ambient[] = {68, 2, 2, 2, 4, 0};
+    static const unsigned char link[] = {50, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0};
+    static const unsigned char truncated_link[] = {83, 0, 0};
+    static const unsigned char model_part[] = {59, 0, 0, 1, 0, 0};
+    const unsigned char *cases[] = {ambient, link, truncated_link, model_part};
+    const unsigned int sizes[] = {sizeof(ambient), sizeof(link), sizeof(truncated_link), sizeof(model_part)};
+    unsigned int i;
+    for (i = 0; i < 4; ++i) {
+        const RecvxEventCoreFault *fault;
+        /* These handlers must never run: bounds validation precedes dispatch. */
+        bhScenarioJmpT[cases[i][0]] = bhSv;
+        setup_scenario(cases[i], sizes[i]);
+        expect("room startup rejects invalid operands", recvxEventCoreRunScenario(12) != 0);
+        fault = recvxEventCoreGetFault();
+        expect("room startup fault identifies operand and PC", fault->opcode == cases[i][0] &&
+            fault->section_pc == 12 && fault->code == (i == 2 ?
+                RECVX_EVENT_FAULT_TRUNCATED : RECVX_EVENT_FAULT_BAD_OPERAND));
+        bhScenarioJmpT[cases[i][0]] = NULL;
+    }
+}
+
 int main(void)
 {
     sys = &system_work;
@@ -430,6 +454,7 @@ int main(void)
     test_original_item_speed_set();
     test_original_player_item_check();
     test_conditional_branch_at_section_end();
+    test_room_startup_operands();
     if (failures != 0)
         return 1;
     puts("PASS: engine event opcode bounds and unsupported-command faults");
