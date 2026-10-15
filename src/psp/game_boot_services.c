@@ -32,8 +32,8 @@ float GameNear = -2.0f, GameFar = -20000.0f;
 PAD_ACT Pad_act[20];
 PAD_INFO Ps2_pad;
 NJS_MATRIX crmat;
+NJS_MATRIX lcmat[12];
 S_WORK swork;
-float cmmat[2][16];
 static NJS_PERIPHERAL peripheral;
 static unsigned int repeat_ticks[16];
 static int sound_mode;
@@ -117,7 +117,7 @@ SYSLOAD_SCREEN *CreateSysLoadScreen(SYSLOAD_SCREEN *screen, void *work)
 int ExecuteSysLoadScreen(SYSLOAD_SCREEN *screen)
 { (void)screen; return 1; /* Original caller installs default options, no saved config. */ }
 
-/* Muted sound backend: record requests, retain the selected configuration. */
+/* Original sound output configuration. */
 void SetSoundMode(int mode) { sound_mode = mode; }
 int GetSoundMode(void) { return sound_mode; }
 Sint32 syCfgSetSoundMode(Sint32 mode) { sound_mode = mode; return 0; }
@@ -130,21 +130,6 @@ void SetUseVibrationUnit(int enabled) { (void)enabled; }
 void SetEventVibrationMode(int mode) { (void)mode; }
 void StartVibrationEx(int port, int vibration) { (void)port; (void)vibration; }
 void StopVibrationEx(void) { }
-void RequestAllStopSoundEx(int a, int b, int frames) { (void)a; (void)b; (void)frames; }
-void CallSystemSe(int slot, int sound) { (void)slot; (void)sound; }
-void CallSystemSeBasic(int sound, int volume, int pan) { (void)sound; (void)volume; (void)pan; }
-void StopAdx(unsigned int slot) { (void)slot; }
-void SetVolumeAdx2(unsigned int slot, float volume) { (void)slot; (void)volume; }
-void PlayAdx(unsigned int slot, unsigned int partition, unsigned int file)
-{ recvxGameBootLog("muted ADX slot=%u partition=%u file=%u", slot, partition, file); }
-void InitGameSoundSystem(void) { recvxGameBootLog("new-game sound initialization (muted)"); }
-void ExecSoundSystemMonitor(void) { }
-void SendSoundCommand(unsigned int command)
-{
-    if (command != 1 && command != 3 && command != 4)
-        recvxGameBootUnsupported("unported sound control command");
-    recvxGameBootLog("sound command=%u (muted)", command);
-}
 int PlayStartMovieEx(int movie, int mode, int flag)
 { (void)mode; (void)flag; recvxGameBootLog("movie=%d skipped: PSP movie decoding pending", movie); return 0; }
 int WaitPrePlayMovie(int mode) { (void)mode; return 3; }

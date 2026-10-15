@@ -1,4 +1,5 @@
 #include <malloc.h>
+#include "psp/game_boot_audio.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <pspdebug.h>
@@ -19,17 +20,28 @@ static int exit_callback(int a, int b, void *context)
 int main(int argc, char **argv)
 {
     const char *data_directory = argc > 1 ? argv[1] : "data";
-    void *arena = memalign(64, 12u * 1024u * 1024u);
+    void *arena = NULL;
     int callback;
+    int thread_result;
+    SceKernelThreadInfo main_thread = {0};
     unsigned int previous_vblank;
     pspDebugScreenInit();
     callback = sceKernelCreateCallback("RECVX Exit", exit_callback, NULL);
     sceKernelRegisterExitCallback(callback);
     recvxPlatformSetClockFrequency(333, 333, 166);
     recvxPlatformInputInit();
-    if (!arena || recvxGameBootInit(data_directory, arena, 12u * 1024u * 1024u)) {
-        pspDebugScreenPrintf("Game startup failed: engine arena unavailable.\n");
+    main_thread.size = sizeof(main_thread);
+    thread_result = sceKernelReferThreadStatus(sceKernelGetThreadId(), &main_thread);
+    if (thread_result < 0 || !(main_thread.attr & PSP_THREAD_ATTR_VFPU)) {
+        pspDebugScreenPrintf("Game startup failed: main thread has no VFPU access.\nThread attrs=%08x status=%08x\n",
+            (unsigned int)main_thread.attr, (unsigned int)thread_result);
+    } else if (!(arena = memalign(64, 12u * 1024u * 1024u)) ||
+        recvxGameBootInit(data_directory, arena, 12u * 1024u * 1024u) || recvxAudioOutputInit()) {
+        pspDebugScreenPrintf("Game startup failed: arena or native audio unavailable.\nSAS=%08x\n%s\n",
+            (unsigned int)recvxAudioNativeError(), recvxAudioNativeErrorCall());
+        recvxAudioOutputShutdown();
     } else {
+        recvxGameBootLog("main thread attributes=%08x; VFPU enabled", (unsigned int)main_thread.attr);
         recvxGameBootDisplayInit();
         previous_vblank = sceDisplayGetVcount();
         while (!exit_requested) {
@@ -48,6 +60,7 @@ int main(int argc, char **argv)
             }
             recvxPlatformCheckCallbacks();
         }
+        recvxAudioOutputShutdown();
         recvxGameBootTexturesShutdown(); recvxGameBootDisplayShutdown();
         if (recvxGameBootFault()) {
             pspDebugScreenInit(); pspDebugScreenClear();

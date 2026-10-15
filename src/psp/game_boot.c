@@ -1,4 +1,7 @@
 #include <setjmp.h>
+#include "psp/game_boot_audio.h"
+#include "psp/engine_original_view.h"
+#include "psp/engine_original_lighting.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -60,16 +63,22 @@ int recvxGameBootInit(const char *directory, void *arena, size_t size)
     sys = &sysp; plp = &ply;
     freemem = (unsigned char *)start; njpmemp = (unsigned char *)end;
     sys->memp = freemem; sys->endp = njpmemp;
+    recvxGameBootCheckpointReset();
     recvxEngineOriginalFaultReset(); recvxEngineOriginalMemoryReset();
     recvxEngineOriginalMatrixReset();
+    recvxEngineOriginalViewReset();
+    recvxEngineOriginalLightingReset();
+    recvxEngineOriginalViewConfigureScreen(640, 480);
     recvxGameBootEffectControlReset();
+    if (recvxAudioInit(directory)) return -1;
+    recvxGameBootSoundReset();
     recvxGameBootFilesInit(directory);
     InitReadKeyEx(1);
     InitAdvSystem();
     sys->sys_partid = 6; sys->itm_partid = 4; sys->dor_partid = 5;
     sys->tk_flg = 1;
     pd_port = 0;
-    recvxGameBootLog("Original njUserMain startup; arena=%u; audio muted; movies skipped; no memory card", (unsigned int)(end - start));
+    recvxGameBootLog("Original njUserMain startup; arena=%u; native SAS ADPCM; movies skipped; no memory card", (unsigned int)(end - start));
     return 0;
 }
 
@@ -81,6 +90,7 @@ int recvxGameBootTick(const RecvxInputState *input)
     if (boot_fault[0]) return -1;
     boot_running = 1;
     if (setjmp(boot_abort)) { boot_running = 0; return -1; }
+    recvxGameBootSoundTick();
     recvxGameBootReadKeys(input);
     njUserMain();
     recvxEngineOriginalMemoryObserve();

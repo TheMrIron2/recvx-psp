@@ -29,7 +29,7 @@ def read_afs_index(source: BinaryIO, base_offset: int, archive_size: int) -> Afs
     if base_offset < 0 or archive_size < 8:
         raise ValueError("invalid AFS archive range")
     magic, count = struct.unpack("<4sI", read_exact_at(source, base_offset, 8))
-    if magic != b"AFS\0":
+    if magic not in (b"AFS\0", b"AFS "):
         raise ValueError(f"invalid AFS magic: {magic!r}")
     table_end = 8 + count * 8
     if table_end > archive_size:

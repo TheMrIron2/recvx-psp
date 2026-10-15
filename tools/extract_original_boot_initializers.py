@@ -5,7 +5,7 @@ import sys
 
 
 def extract(source, name='bhKeepObjWork'):
-    match = re.search(r'(?m)^(?:unsigned char\*|BH_PWORK\*|NJS_CNK_OBJECT\*|unsigned int|void|int|float)\s+' + re.escape(name) + r'\s*\(', source)
+    match = re.search(r'(?m)^(?:unsigned char\*|BH_PWORK\*|NJS_CNK_OBJECT\*|unsigned int|void|int|short|float)\s+' + re.escape(name) + r'\s*\(', source)
     if not match:
         raise ValueError(f'original {name} was not found')
     opening = source.index('{', match.end())
@@ -96,15 +96,18 @@ if __name__ == '__main__':
             output.append(f'void {handler}(O_WRK *);')
         output.append(f'void (*{name}[{size}])(O_WRK *) = ' + table + ';')
     subpl_source = Path('src/ps2/veronica/prog/subpl.c').read_text()
-    for name, size in [('Subpl_tbl', 7), ('subpl_init_tbl', 120)]:
+    for name, size in [('Subpl_tbl', 7), ('subpl_init_tbl', 120),
+                       ('subpl_mv_tbl', 1), ('subpl_mv00_tbl', 15), ('subpl_mv01_tbl', 15)]:
         body = re.search(r'\b' + name + r'\[' + str(size) + r'\]\s*=\s*(\{.*?\});', subpl_source, re.S).group(1)
+        if len(re.findall(r'\b(?:\w+|NULL)\b', body)) != size:
+            raise ValueError('original subplayer dispatch table changed: ' + name)
         output.append(f'void (*{name}[{size}])(BH_PWORK *) = ' + body + ';')
     for filename, names in [
         ('njplus.c', ['npSkinConvPreparation', 'npSkinConvSub', 'npSkinConvMain', 'npSkinConvert', 'npCnkFlatOff']),
         ('weapon.c', ['bhSetWeapon']),
         ('room.c', ['bhInitRoom', 'bhInitReadRDT', 'bhSetRDT', 'bhSetRoom',
                     'bhSetEneMdl', 'bhSetObjMdl', 'bhSetItmMdl',
-                    'bhFinishRoom', 'bhSetEneMtn', 'bhSetRoomMtn', 'bhSetEffectTable', 'bhSetEffectLink']),
+                    'bhFinishRoom', 'bhSetEneMtn', 'bhSetRoomMtn', 'bhSetEffectTable', 'bhSetEffectLink', 'bhPushGameData']),
         ('MdlPut.c', ['bhCalcModel', 'bhCalcTree']),
         ('light.c', ['bhInitLight']),
         ('effect.c', ['bhControlEffect']),
@@ -120,9 +123,13 @@ if __name__ == '__main__':
         ('dread.c', ['bhReadPlayerData', 'bhReadWeaponData']),
         ('player.c', ['bhInitPlayer']),
         ('eneset.c', ['bhInitEnemy', 'bhSetEnemy', 'bhCheckEneWorkNum', 'bhControlEnemy']),
-        ('subpl.c', ['bhSubpl', 'init_subpl', 'em60_init']),
+        ('subpl.c', ['bhSubpl', 'init_subpl', 'em60_init', 'move_subpl', 'em_sce',
+                     'bhEne_Event', 'bhEne_Event2', 'mv00_subpl0', 'mv00_subpl0Ex',
+                     'mv00_subpl1', 'mv00_subpl2', 'mv00_subpl2_0', 'mv00_subpl3',
+                     'mv00_subpl3_0', 'mv00_subpl5', 'mv00_subpl6', 'mv00_subpl0_1',
+                     'bhSub_DirTarget', 'mv00_subpl10']),
         ('zonzon1.c', ['bhEne_InitDamage']),
-        ('pwksub.c', ['bhSetFloorNum', 'bhCheckFloorNum', 'bhCalcLinkModel']),
+        ('pwksub.c', ['bhSetFloorNum', 'bhCheckFloorNum', 'bhCalcLinkModel', 'bhAddSpeed']),
         ('sub1.c', ['AllItemInit']),
         ('event.c', ['bhInitEvent', 'bhScenarioCheck', 'bhIfelCk', 'bhElseCk', 'bhEndif', 'bhCk', 'bhEvtOn', 'bhInitModelSet', 'bhObjLinkSet', 'bhSetDispObj', 'bhInitSetKage', 'bhObjLinkSetEneItem', 'bhDefModelSet', 'bhEffDispSet', 'bhLoadWork', 'bhCommonCtr', 'bhWalAtariSet', 'bhEtcAtariSet', 'bhLightSet', 'bhPlItemCheck', 'bhItmSetCk', 'bhEffAmbSet', 'bhItmAspdSet', 'bhEtcAtariSet2']),
         ('message.c', ['bhDispFont', 'bhDispFontEx', 'bhDispMessage',
@@ -167,6 +174,23 @@ if __name__ == '__main__':
                 function = function.replace('Subpl_tbl[epw->mode0](epw);',
                     'if (epw->mode0 >= 7 || !Subpl_tbl[epw->mode0]) recvxGameBootUnsupported("invalid subplayer callback");\n    Subpl_tbl[epw->mode0](epw);')
                 output += [f'#line {line} "{path.as_posix()}"', function, '']
+            elif name in ('move_subpl', 'em_sce', 'bhEne_Event', 'bhEne_Event2'):
+                table, field, reason = {
+                    'move_subpl': ('subpl_mv_tbl', 'mode2', 'move mode'),
+                    'em_sce': ('subpl_mv01_tbl', 'ct2', 'event command'),
+                    'bhEne_Event': ('subpl_mv01_tbl', 'ct2', 'event command'),
+                    'bhEne_Event2': ('subpl_mv00_tbl', 'ct2', 'movement command'),
+                }[name]
+                call = f'{table}[epw->{field}](epw);'
+                function = function.replace(call,
+                    f'if (!epw || (unsigned int)epw->{field} >= sizeof({table}) / sizeof({table}[0]) ||\n'
+                    f'        !{table}[epw->{field}]) recvxGameBootUnsupported("invalid subplayer {reason}");\n    ' + call)
+                output += [f'#line {line} "{path.as_posix()}"', function, '']
+            elif name in ('mv00_subpl1', 'mv00_subpl3', 'mv00_subpl3_0'):
+                # Packed coordinates are integer fields, not aliased short pointers.
+                function = function.replace('(int)*(unsigned short*)&epw->ct0', '(int)(unsigned short)epw->ct0')
+                function = function.replace('*(short*)&epw->ct0', '(short)epw->ct0')
+                output += [f'#line {line} "{path.as_posix()}"', function, '']
             elif name == 'bhFinishRoom':
                 function = function.replace('void bhFinishRoom()', 'static void bhFinishRoomOriginal()', 1)
                 output += [f'#line {line} "{path.as_posix()}"', function,
@@ -178,6 +202,12 @@ if __name__ == '__main__':
                     '    recvxGameBootLog("room finished: player=(%f,%f,%f) floor=%d effects=%d arena=%u",',
                     '        plp->px, plp->py, plp->pz, plp->flr_no, rom->eff_n,',
                     '        (unsigned int)(sys->memp - freemem));', '}', '']
+            elif name == 'bhPushGameData':
+                function = function.replace('{', '{\n    recvxGameBootCheckpointPrepare();', 1)
+                function = function.replace('(int)&sys->save_end - (int)&sys->version',
+                    '(unsigned int)((unsigned char*)&sys->save_end - (unsigned char*)&sys->version)')
+                function = function[:-1] + '    recvxGameBootCheckpointSaved();\n}'
+                output += [f'#line {line} "{path.as_posix()}"', function, '']
             elif name == '_fmGetVChunkType':
                 # Vertex attributes occupy the second byte of the header.
                 # Decode the command byte, as the other chunk readers do.

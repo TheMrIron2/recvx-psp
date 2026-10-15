@@ -250,7 +250,4 @@ const RecvxBootDraw *recvxGameBootDraws(size_t *count)
     return draws;
 }
 void njFogDisable(void) { }
-void njSetBackColor(Uint32 a, Uint32 b, Uint32 c) { (void)a; (void)b; (void)c; }
-void njClipZ(Float near_z, Float far_z) { (void)near_z; (void)far_z; }
 void njSetScreen(NJS_SCREEN *screen) { (void)screen; }
-void njSetAspect(Float x, Float y) { (void)x; (void)y; }

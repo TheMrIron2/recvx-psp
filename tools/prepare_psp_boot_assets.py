@@ -19,10 +19,14 @@ def prepare(iso_path, output):
                  mkiso.dump_dir_records(iso, mkiso.LAYER0_PVD_LOCATION, 0).files}
         if 'SLUS_201.84' not in files:
             raise ValueError('boot assets require the USA SLUS_201.84 disc')
-        for name, partition, entries in [('ADV', 3, [0, 1, 2]), ('SYSTEM', 6, [1, 2, 10, 20])]:
+        for name, partition, entries in [('SYSTEM', 6, [1, 2, 10, 20]),
+                                        ('BGM1', 0, None), ('VOICE1', 1, None), ('MULTSPQ1', 2, None),
+                                        ('ADV', 3, None)]:
             source = files[name + '.AFS']
             archive = read_afs_index(iso, source.lba, source.size)
-            for entry in entries:
+            for entry in range(len(archive.entries)) if entries is None else entries:
+                if not archive.entries[entry].size:
+                    continue
                 data = read_afs_entry(iso, archive, entry)
                 path = Path('archives') / name / f'{entry}.bin'
                 target = output / path
@@ -30,18 +34,21 @@ def prepare(iso_path, output):
                 target.write_bytes(data)
                 manifest['files'].append({'path': path.as_posix(), 'partition': partition,
                     'entry': entry, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
-        source = files['SYSMES.ALD']
-        iso.seek(source.lba)
-        data = iso.read(source.size)
-        if len(data) != source.size:
-            raise ValueError('short SYSMES.ALD read')
-        path = Path('files/SYSMES.ALD')
-        (output / path).parent.mkdir(parents=True, exist_ok=True)
-        (output / path).write_bytes(data)
-        manifest['files'].append({'path': path.as_posix(), 'size': len(data),
-                                 'sha256': hashlib.sha256(data).hexdigest()})
+        for name in ['SYSMES.ALD', 'COMMON.MLT', 'MULTSPQ1.IDX']:
+            source = files[name]
+            iso.seek(source.lba)
+            data = iso.read(source.size)
+            if len(data) != source.size:
+                raise ValueError(f'short {name} read')
+            path = Path('files') / name
+            (output / path).parent.mkdir(parents=True, exist_ok=True)
+            (output / path).write_bytes(data)
+            manifest['files'].append({'path': path.as_posix(), 'size': len(data),
+                                     'sha256': hashlib.sha256(data).hexdigest()})
     (output / 'boot-assets.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(f'Packaged {len(manifest["files"])} original boot resources to {output}')
+    from tools.prepare_psp_audio import prepare as prepare_audio
+    prepare_audio(output)
 
 
 if __name__ == '__main__':

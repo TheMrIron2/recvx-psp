@@ -10,6 +10,9 @@
 #include <unistd.h>
 #undef u_long
 #include "psp/game_boot.h"
+#include "psp/game_boot_audio.h"
+#include "psp/engine_original_lighting.h"
+#include "psp/engine_original_fault.h"
 #include "psp/original_clock.h"
 #include "ps2/veronica/prog/main.h"
 #include "ps2/veronica/prog/adv.h"
@@ -32,6 +35,11 @@
 #include "ps2/veronica/prog/ps2_NaMatrix.h"
 #include "ps2/veronica/prog/event.h"
 #include "ps2/veronica/prog/sub1.h"
+#include "ps2/veronica/prog/subpl.h"
+#include "ps2/veronica/prog/Motion.h"
+#include "ps2/veronica/prog/system.h"
+#include "ps2/veronica/prog/cut.h"
+#include "psp/engine_original_view.h"
 #include "ps2/veronica/prog/effect.h"
 #include "psp/engine_event_core.h"
 
@@ -872,6 +880,255 @@ static void test_room_read_and_expand(const char *directory, void *arena, size_t
     puts("PASS: original room reset, file names, bounded decompression and malformed room records");
 }
 
+static int checkpoint_case;
+static size_t checkpoint_bytes;
+static unsigned char *checkpoint_original_base, *checkpoint_original_limit;
+static void checkpoint_task(void)
+{
+    bhInitSystem();
+    checkpoint_bytes = (unsigned char *)&sys->save_end - (unsigned char *)&sys->version;
+    checkpoint_original_base = freemem; checkpoint_original_limit = sys->endp;
+    assert(checkpoint_bytes == 2100 && keepmem >= freemem + checkpoint_bytes);
+    memset(freemem, 0xa5, checkpoint_bytes + 8);
+    memset(&sys->version, 0x5a, checkpoint_bytes);
+    sys->save_end = 0x12345678; sys->gm_mode = 2;
+    sys->ply_id = checkpoint_case < 4 ? checkpoint_case : 0;
+    sys->stg_no = 2; sys->rom_no = 17; sys->rcase = 3;
+    sys->time = 98765; sys->itm[383] = 0xABCDEF01;
+    plp->px = 4.25f; plp->py = -8.5f; plp->pz = 16.75f;
+    plp->flr_no = -1; plp->ay = 65530;
+    plp->hp = 73; plp->wpnr_no = 4; plp->stflg = 0xFFFFFFFF;
+    switch (checkpoint_case) {
+    case 4: sys->ply_id = -1; break;
+    case 5: sys->ply_id = 4; break;
+    case 6: keepmem = freemem + checkpoint_bytes - 1; break;
+    case 7: sys->memp = freemem + checkpoint_bytes - 1; break;
+    case 8: sys->endp = freemem + checkpoint_bytes - 1; break;
+    case 9: freemem += 64; break;
+    }
+    bhPushGameData();
+    assert(memcmp(freemem, &sys->version, checkpoint_bytes) == 0);
+    for (unsigned int i = 0; i < 8; ++i) assert(freemem[checkpoint_bytes + i] == 0xa5);
+    assert(sys->save_end == 0x12345678 && sys->time == 98765 && sys->itm[383] == 0xABCDEF01);
+    assert(sys->version == 10 && sys->flr_no == -1 && sys->ply_stflg[sys->ply_id] == 0x78280000);
+    assert(sys->ply_pos.x == 4.25f && sys->ply_pos.y == -8.5f && sys->ply_pos.z == 16.75f);
+    assert(sys->ply_ang == 65530 && sys->ply_wno[sys->ply_id] == 4 && sys->ply_hp[sys->ply_id] == 73);
+    /* The second checkpoint replaces the first; it retains the complete state. */
+    plp->px = -123; plp->hp = 9; sys->time = 99876;
+    bhPushGameData();
+    assert(memcmp(freemem, &sys->version, checkpoint_bytes) == 0 && sys->ply_pos.x == -123 && sys->ply_hp[sys->ply_id] == 9);
+    for (unsigned int i = 0; i < 8; ++i) assert(freemem[checkpoint_bytes + i] == 0xa5);
+}
+
+static void test_checkpoint(const char *directory, void *arena, size_t arena_size)
+{
+    RecvxLiveTaskProc original_init = bhSysTaskJumpTab[0];
+    RecvxInputState input = {.analog_x = 128, .analog_y = 128};
+    bhSysTaskJumpTab[0] = checkpoint_task;
+    for (checkpoint_case = 0; checkpoint_case < 10; ++checkpoint_case) {
+        assert(recvxGameBootInit(directory, arena, arena_size) == 0);
+        if (checkpoint_case < 4) tick(&input);
+        else {
+            assert(recvxGameBootTick(&input) == -1);
+            assert(strcmp(recvxGameBootFault(), checkpoint_case < 6 ?
+                "invalid original checkpoint player" : "invalid original checkpoint buffer reservation") == 0);
+            assert(sys->version == 0x5a5a5a5a && checkpoint_original_base[0] == 0xa5);
+            freemem = checkpoint_original_base; sys->endp = checkpoint_original_limit;
+        }
+    }
+    bhSysTaskJumpTab[0] = original_init;
+    puts("PASS: original 2100-byte checkpoints, all four player slots, repeated snapshots, excluded marker/guard bytes and invalid reservations/players");
+}
+
+extern void (*bhCtrPly_mode0[9])(void);
+/* Isolate controller routing/history from the action state machine's own fixtures. */
+static void player_action_dispatch_probe(void)
+{ recvxGameBootUnsupported("bhCPM0_action"); }
+static int player_control_case;
+static void player_control_task(void)
+{
+    EXP_WORK *extra;
+    bhInitPlayer();
+    plp->mlwP = &plp->mdl[0]; plp->mlwP->obj_num = 22;
+    plp->mlwP->objP = (NJS_CNK_OBJECT *)sys->plmdlp;
+    plp->mlwP->owP = (O_WORK *)(sys->plmdlp + 8192);
+    plp->mnwP = plp->mnwPb = (MN_WORK *)sys->plmthp;
+    plp->mode0 = 1; plp->mtn_no = 0;
+    plp->px = 1; plp->py = 2; plp->pz = 3; plp->ay = 123;
+    plp->mlwP->owP[0].mtx[12] = 7; plp->mlwP->owP[0].mtx[14] = 9;
+    extra = (EXP_WORK *)plp->exp0; extra->bpx = 4; extra->bpy = 5; extra->bpz = 6;
+    sys->sp_flg = 1;
+    switch (player_control_case) {
+    case 1: sys->sp_flg = 0; plp->mlwP = NULL; plp->exp0 = NULL; break;
+    case 2: plp->stflg |= 0x1000000; plp->mlwP = NULL; plp->exp0 = NULL; break;
+    case 3: plp->mode0 = 255; break;
+    case 4: sys->ply_id = 4; break;
+    case 5: plp->wpnr_no = 23; break;
+    case 6: plp->exp0 = NULL; break;
+    case 7: plp->exp1 = NULL; break;
+    case 8: plp->mlwP = NULL; break;
+    case 9: plp->mlwP->obj_num = 21; break;
+    case 10: plp->mlwP->objP = NULL; break;
+    case 11: plp->mlwP->owP = NULL; break;
+    case 12: plp->mtn_no = 512; break;
+    case 13: plp->mnwP = NULL; break;
+    case 14: plp->flg |= 0x100000; extra->yrct = 0; break;
+    case 15: plp->stflg |= 0x281300; extra->dm_ct = 30; break;
+    case 16: plp->hp = -1; plp->mode1 = plp->mode2 = plp->mode3 = 255; break;
+    case 17: bhCtrPly_mode0[1] = NULL; break;
+    default:
+        if (player_control_case >= 20) plp->mode0 = player_control_case - 20;
+        break;
+    }
+    bhControlPlayer();
+}
+
+static void test_player_control(const char *directory, void *arena, size_t arena_size)
+{
+    RecvxLiveTaskProc original_init = bhSysTaskJumpTab[0];
+    void (*original_action)(void) = bhCtrPly_mode0[1];
+    RecvxInputState input = {.analog_x = 128, .analog_y = 128};
+    const char *callbacks[] = {NULL, "bhCPM0_action", "bhCPM0_damage", "bhCPM0_die",
+        "bhCPM0_nage", "bhCPM0_enedam", "bhCPM0_enedie", "bhCPM0_event", "bhCPM0_nothing"};
+    bhCtrPly_mode0[1] = player_action_dispatch_probe;
+    bhSysTaskJumpTab[0] = player_control_task;
+    for (player_control_case = 0; player_control_case < 18; ++player_control_case) {
+        const char *expected;
+        assert(recvxGameBootInit(directory, arena, arena_size) == 0);
+        if (player_control_case == 1 || player_control_case == 2) {
+            tick(&input); assert(plp->px == 1 && plp->pxb == 0 && !recvxGameBootFault()); continue;
+        }
+        assert(recvxGameBootTick(&input) == -1);
+        expected = player_control_case == 3 || player_control_case == 17 ? "invalid player callback" :
+            player_control_case >= 4 && player_control_case <= 8 ? "invalid original player control state" :
+            player_control_case >= 9 && player_control_case <= 13 ? "invalid original player model or motion work" :
+            player_control_case == 14 ? "invalid player turn timer" :
+            player_control_case == 16 ? "bhCPM0_die" : "bhCPM0_action";
+        assert(strcmp(recvxGameBootFault(), expected) == 0);
+        if (player_control_case == 17) bhCtrPly_mode0[1] = player_action_dispatch_probe;
+        if (player_control_case == 0 || player_control_case == 15) {
+            EXP_WORK *extra = (EXP_WORK *)plp->exp0;
+            assert(plp->pxb == 1 && plp->pyb == 2 && plp->pzb == 3 && plp->ayb == 123);
+            assert(extra->bpxb == 4 && extra->bpyb == 5 && extra->bpzb == 6);
+            assert(extra->nlxb == 7 && extra->nlyb == 2 && extra->nlzb == 9);
+            if (player_control_case == 15) assert(plp->hp == 159 && extra->dm_ct == 0 && !(plp->stflg & 0x300));
+        }
+        if (player_control_case == 16)
+            assert(plp->mode0 == 3 && !plp->mode1 && !plp->mode2 && !plp->mode3 && plp->mnwP == plp->mnwPb);
+    }
+    for (player_control_case = 21; player_control_case <= 28; ++player_control_case) {
+        assert(recvxGameBootInit(directory, arena, arena_size) == 0);
+        assert(recvxGameBootTick(&input) == -1);
+        assert(strcmp(recvxGameBootFault(), callbacks[player_control_case - 20]) == 0);
+    }
+    bhCtrPly_mode0[1] = original_action;
+    bhSysTaskJumpTab[0] = original_init;
+    puts("PASS: original player update history, poison/death transitions, full mode dispatch, inactive/hidden state and bounded work/callback faults");
+}
+
+static BH_PWORK subplayer_fixture;
+static NJS_CNK_OBJECT subplayer_object;
+static O_WORK subplayer_object_work;
+static ML_WORK subplayer_model;
+static MN_WORK subplayer_motions[2];
+static NJS_MDATA2_MOD subplayer_tracks;
+static NJS_MKEY_F_MOD subplayer_positions[4];
+static unsigned short subplayer_attributes[4] = {12, 34, 56, 78};
+static int subplayer_case;
+extern void (*subpl_mv_tbl[1])(BH_PWORK *);
+
+static void reset_subplayer_fixture(void)
+{
+    memset(&subplayer_fixture, 0, sizeof(subplayer_fixture));
+    memset(&subplayer_object, 0, sizeof(subplayer_object));
+    memset(&subplayer_object_work, 0, sizeof(subplayer_object_work));
+    subplayer_model = (ML_WORK){.obj_num = 1, .objP = &subplayer_object, .owP = &subplayer_object_work};
+    subplayer_object_work.flg = 2; /* Keep rotation fixed; exercise real translation tracks. */
+    for (unsigned int i = 0; i < 4; ++i)
+        subplayer_positions[i] = (NJS_MKEY_F_MOD){{8, 16, 24}};
+    subplayer_tracks = (NJS_MDATA2_MOD){{subplayer_positions, NULL}};
+    for (unsigned int i = 0; i < 2; ++i)
+        subplayer_motions[i] = (MN_WORK){.flg = 0x10, .obj_num = 1, .frm_num = 4,
+            .datP = subplayer_positions, .md2P = &subplayer_tracks, .atrP = subplayer_attributes};
+    subplayer_fixture.mlwP = &subplayer_model;
+    subplayer_fixture.mnwP = subplayer_fixture.mnwPb = subplayer_motions;
+    subplayer_fixture.mode0 = 1; subplayer_fixture.mode1 = 1;
+    subplayer_fixture.mtn_md = 0x20; subplayer_fixture.mtn_add = 32768;
+    subplayer_fixture.ct0 = (int)(0xff9c0000u | 200u); /* Target (-1, 2). */
+    subplayer_fixture.ct3 = 100;
+}
+
+static void subplayer_task(void)
+{
+    switch (subplayer_case) {
+    case 0: move_subpl(&subplayer_fixture); break;
+    case 1: em_sce(&subplayer_fixture); break;
+    case 2: bhEne_Event(&subplayer_fixture); break;
+    case 3: bhEne_Event2(&subplayer_fixture); break;
+    case 4: move_subpl(NULL); break;
+    }
+}
+
+static void test_subplayer_movement(const char *directory, void *arena, size_t arena_size)
+{
+    RecvxLiveTaskProc original_init = bhSysTaskJumpTab[0];
+    RecvxInputState input = {.analog_x = 128, .analog_y = 128};
+    bhSysTaskJumpTab[0] = subplayer_task;
+    assert(recvxGameBootInit(directory, arena, arena_size) == 0);
+    subplayer_case = 0; reset_subplayer_fixture();
+    tick(&input);
+    assert(subplayer_fixture.mode3 == 1 && subplayer_fixture.mtn_no == 1);
+    assert(subplayer_fixture.hokan_count == 7 && subplayer_fixture.frm_no == 32768);
+    assert(subplayer_fixture.mtn_attr == 12 && subplayer_object.pos[0] == 1 && subplayer_object.pos[1] == 2);
+    tick(&input);
+    assert(subplayer_fixture.hokan_count == 6 && subplayer_fixture.frm_no == 65536);
+    assert(subplayer_object.pos[0] == 2 && subplayer_object.pos[2] == 6);
+    for (int i = 0; i < 7; ++i) tick(&input);
+    assert(subplayer_fixture.hokan_count == 0 && subplayer_fixture.frm_no == 32768);
+    assert(subplayer_object.pos[0] == 8 && subplayer_object.pos[1] == 16 && subplayer_object.pos[2] == 24);
+
+    /* Every authored movement/event selector reaches its original handler. */
+    for (int route = 0; route < 4; ++route) for (int command = 0; command < 15; ++command) {
+        reset_subplayer_fixture(); subplayer_case = route; subplayer_fixture.ct2 = command;
+        tick(&input);
+        assert(subplayer_fixture.mode3 == 1 && subplayer_fixture.mtn_no == 1);
+    }
+    reset_subplayer_fixture(); subplayer_case = 0; subplayer_fixture.ct2 = 1;
+    tick(&input);
+    assert(subplayer_fixture.ay == 182 && fabsf(subplayer_fixture.spd - 1) < 0.00001f);
+    assert(subplayer_fixture.px < 0 && subplayer_fixture.pz < 0);
+    assert(fabsf(hypotf(subplayer_fixture.px, subplayer_fixture.pz) - 1) < 0.001f);
+    reset_subplayer_fixture(); subplayer_fixture.ay = 65530;
+    assert(bhSub_DirTarget(&subplayer_fixture, 0, -10, 182) == 6);
+    subplayer_fixture.ay = 0;
+    assert(bhSub_DirTarget(&subplayer_fixture, 10, 0, 182) == -182);
+
+    /* A parked actor stays parked until its original script changes mode3. */
+    reset_subplayer_fixture(); subplayer_fixture.mode3 = 3; subplayer_case = 0;
+    tick(&input); assert(subplayer_fixture.mode3 == 3 && subplayer_fixture.frm_no == 0 && subplayer_object.pos[0] == 0);
+
+    for (int i = 0; i < 7; ++i) {
+        assert(recvxGameBootInit(directory, arena, arena_size) == 0);
+        reset_subplayer_fixture();
+        subplayer_case = i < 2 ? 0 : i < 4 ? 1 : i < 6 ? 3 : 4;
+        if (i < 2) subplayer_fixture.mode2 = i ? 255 : 1;
+        else subplayer_fixture.ct2 = i & 1 ? -1 : 15;
+        assert(recvxGameBootTick(&input) == -1);
+        assert(strstr(recvxGameBootFault(), i < 2 || i == 6 ? "invalid subplayer move mode" :
+            i < 4 ? "invalid subplayer event command" : "invalid subplayer movement command"));
+        assert(subplayer_fixture.mode3 == 0 && subplayer_fixture.frm_no == 0);
+    }
+    {
+        void (*original_move)(BH_PWORK *) = subpl_mv_tbl[0];
+        assert(recvxGameBootInit(directory, arena, arena_size) == 0);
+        reset_subplayer_fixture(); subplayer_case = 0; subpl_mv_tbl[0] = NULL;
+        assert(recvxGameBootTick(&input) == -1 && strstr(recvxGameBootFault(), "invalid subplayer move mode"));
+        subpl_mv_tbl[0] = original_move;
+    }
+    bhSysTaskJumpTab[0] = original_init;
+    puts("PASS: original NPC movement/event dispatch, real motion blending/looping, bounded turning/speed, parked state and invalid/null selectors");
+}
+
 int main(int argc, char **argv)
 {
     size_t arena_size = 12u * 1024u * 1024u;
@@ -893,6 +1150,9 @@ int main(int argc, char **argv)
     test_player_initialization(argv[1], arena, arena_size);
     test_facial_deformation();
     test_effect_control(argv[1], arena, arena_size);
+    test_subplayer_movement(argv[1], arena, arena_size);
+    test_player_control(argv[1], arena, arena_size);
+    test_checkpoint(argv[1], arena, arena_size);
     if (argc == 2) {
         test_player_source_bounds(argv[1]);
         test_weapon_source_bounds(argv[1]);
@@ -929,12 +1189,18 @@ int main(int argc, char **argv)
     assert(AdvWork.Cursor[0] == 1);
     capture = 1; capture_path = "/tmp/recvx-game-menu.ppm"; tick(&input);
     press(&input, RECVX_BUTTON_CROSS);
-    for (i = 0; i < 200 && !(sys->tk_flg & 0x20); ++i) {
+    for (i = 0; i < 200 && !(sys->tk_flg & 0x20) &&
+         !(sizeof(void *) == 4 && sys->mn_md0 == 4 && sys->mn_md1 == 11); ++i) {
         int result = recvxGameBootTick(&input);
         if (result) break;
     }
     /* Original live dispatcher enters Opening and Monitor in the same frame. */
-    for (i = 0; i < 20 && !recvxGameBootFault(); ++i) recvxGameBootTick(&input);
+    for (i = 0; i < 20 && !recvxGameBootFault(); ++i) {
+        /* Inspect the initial room immediately after its event/effect update,
+           before subsequent frames reset the draw queues and finish loading. */
+        if (sizeof(void *) == 4 && sys->mn_md0 == 4 && sys->mn_md1 == 11) break;
+        recvxGameBootTick(&input);
+    }
 #if UINTPTR_MAX > UINT32_MAX
     assert(recvxGameBootFault() && strcmp(recvxGameBootFault(),
         "effect model relocation requires the original 32-bit ABI") == 0);
@@ -954,9 +1220,7 @@ int main(int argc, char **argv)
         njReleaseTexture(&list);
     }
 #else
-    if (!recvxGameBootFault() || strcmp(recvxGameBootFault(), "CheckTransEndSoundBank"))
-        fprintf(stderr, "Unexpected native loader boundary: %s\n", recvxGameBootFault());
-    assert(recvxGameBootFault() && strcmp(recvxGameBootFault(), "CheckTransEndSoundBank") == 0);
+    assert(!recvxGameBootFault() && !recvxAudioFault());
     assert(recvxEventCoreGetFault()->code == RECVX_EVENT_FAULT_NONE);
     assert(recvxEventCoreInstructionCount() == 144 && recvxEventCoreFlagWriteCount() == 64);
     assert(Event_T_timer == 1 && swork.pip == &sys->itm[sys->ply_id * 16]);
@@ -1044,19 +1308,82 @@ int main(int argc, char **argv)
         assert(eff[sys->efid[i]].id == rom->effp[i].id);
     }
     test_loaded_player(argv[1]);
+    for (i = 0; i < 20 && !recvxGameBootFault(); ++i) recvxGameBootTick(&input);
+    if (!recvxGameBootFault() || strcmp(recvxGameBootFault(), "bhAllDrawModel"))
+        fprintf(stderr, "Unexpected native loader boundary: %s\n", recvxGameBootFault());
+    assert(recvxGameBootFault() && strcmp(recvxGameBootFault(), "bhAllDrawModel") == 0);
+    assert(!recvxAudioBankBusy() && !recvxAudioFault());
+    assert(sys->loop_ct == 1 && sys->loop_now == 0 && sys->fade_ct == 1);
+    assert((unsigned int)sys->enow < 128 && ene[sys->enow].mode0 == 1);
+    assert(ene[sys->enow].id == 91 || ene[sys->enow].id == 98);
+    assert(plp->mode0 == 1 && !plp->mode1 && !plp->mode2 && !plp->mode3);
+    /* Player wall/floor collision has returned and restored its collision flags. */
+    if (plp->flg != 0x919 || plp->mtn_no != 42 || plp->frm_no != 131072)
+        fprintf(stderr, "Unexpected player update state: flags=%x motion=%u frame=%d\n",
+            plp->flg, plp->mtn_no, plp->frm_no);
+    assert(plp->flg == 0x919 && plp->mtn_no == 42 && plp->frm_no == 131072);
+    assert(plp->ar == 3.5f && plp->ah == 16.5f && plp->mdflg == 0x20);
+    assert(sys->obwp[2].id == 1211 && sys->obwp[2].lkwkp == (unsigned char *)plp && sys->obwp[2].lkono == 5);
+    assert(sys->obwp[2].mdl[0].objP == plp->mdl[4].objP);
+    assert(cam.ncut >= 0 && cam.ncut < rom->cut_n && !(sys->gm_flg & 0x800));
+    assert(cam.camver < 2 && isfinite(cam.px) && isfinite(cam.py) && isfinite(cam.pz));
+    {
+        const RecvxEngineOriginalLightingState *lights = recvxEngineOriginalLightingGet();
+        assert(lights->api_calls > 0 && lights->matrix_updates == 2);
+        assert(sys->lg_pnt >= 0 && sys->lg_pnt <= 3 && lights->easy_count == 1 + sys->lg_pnt);
+        assert(lights->simple_count == lights->easy_count);
+        assert(isfinite(lights->easy_direction.x) && isfinite(lights->easy_direction.y) && isfinite(lights->easy_direction.z));
+    }
+    assert(plp->exp2 && (unsigned char *)plp->exp2 >= freemem && (unsigned char *)plp->exp2 + 1712 <= sys->memp);
+    assert(sys->version == 10 && memcmp(freemem, &sys->version,
+        (unsigned char *)&sys->save_end - (unsigned char *)&sys->version) == 0);
+    {
+        float near_plane, far_plane;
+        extern float GameNear, GameFar;
+        recvxEngineOriginalViewClipPlanes(&near_plane, &far_plane);
+        assert(near_plane == GameNear && far_plane == GameFar);
+    }
+    {
+        int found = 0;
+        for (i = 0; i < 512; ++i) if ((eff[i].flg & 1) && eff[i].id == 1 && eff[i].lkwkp == (unsigned char *)plp) {
+            assert(eff[i].lkono == 1 && eff[i].sx == 4.5f && eff[i].sy == 4.0f && eff[i].sz == 3.5f); found = 1;
+        }
+        assert(found);
+    }
 #endif
     assert(sys->stg_no == 0 && sys->rom_no == 0 && sys->rcase == 0);
     assert(sys->obwp && sys->itwp && sys->doordp && sys->mes_ip && sys->mes_sp);
-    assert(sys->ply_hp[0] == 160 && sys->mn_md0 == (sizeof(void *) == 4 ? 4 : 1));
-    assert(sys->mn_md1 == (sizeof(void *) == 4 ? 11 : 4));
+    assert(sys->ply_hp[0] == 160 && sys->mn_md0 == (sizeof(void *) == 4 ? 0 : 1));
+    assert(sys->mn_md1 == (sizeof(void *) == 4 ? 0 : 4));
     assert(GetReadFileStatus() == 0);
     assert(recvxGameBootTick(&input) == -1); /* A fault cannot advance or fake a room. */
+#if UINTPTR_MAX == UINT32_MAX
+    /* Exercise real controller updates on the loaded Claire assets in isolation.
+       The full sequence still stops at its rendering boundary above. */
+    sys->pad_on = sys->pad_old = sys->pad_ps = sys->pad_rs = 0;
+    for (i = 0; i < 6; ++i) bhControlPlayer();
+    assert(plp->mode0 == 1 && plp->mode1 == 0 && plp->mode2 == 0 && plp->mtn_no == 42);
+    {
+        int yaw = plp->ay;
+        sys->pad_on = 8;
+        for (i = 0; i < 6; ++i) { bhControlPlayer(); sys->pad_old = 8; }
+        assert(plp->mode2 == 1 && plp->ay != yaw);
+    }
+    sys->pad_on = 1; sys->pad_old = 0;
+    for (i = 0; i < 12; ++i) { bhControlPlayer(); sys->pad_old = 1; }
+    assert(plp->mode0 == 1 && plp->mode1 == 0 && plp->mode2 == 3);
+    assert(isfinite(plp->px) && isfinite(plp->py) && isfinite(plp->pz) && isfinite(plp->spd));
+    assert(!recvxEngineOriginalFault() && !recvxAudioFault());
+    assert(strcmp(recvxGameBootFault(), "bhAllDrawModel") == 0);
+    puts("PASS: real Claire assets complete idle, turning and walking controller updates with original motion, wall/floor, head and sound services");
+#endif
     recvxGameBootTexturesShutdown();
+    recvxAudioShutdown();
     munmap(arena, arena_size);
 #if UINTPTR_MAX > UINT32_MAX
     puts("PASS: sanitized title/new-game boot and bounded effect preflight; original relocation requires 32-bit ABI test");
 #else
-    printf("PASS: original player/enemy/inventory initialization, loading text and original Claire models/skin/motions/textures; original weapon loading and opening room relocation/textures; original room finalization/spawn/masks; original startup scenario/scheduler and NPC facial update; original effect control; next boundary CheckTransEndSoundBank (%d effect textures retained)\n", sys->ef_ct);
+    printf("PASS: original player/enemy/inventory initialization, loading text and original Claire models/skin/motions/textures; original weapon loading and opening room relocation/textures; original room finalization/spawn/masks; original startup scenario/scheduler and NPC facial update; original effect control and real sound bank transfers; original main gameplay sequence/fade, NPC movement and Claire control/setup/idle pose/shadow; original camera cut/checkpoint, wall/floor collision, head tracking, linked objects and room lighting; next boundary bhAllDrawModel (%d effect textures retained)\n", sys->ef_ct);
 #endif
     return 0;
 }

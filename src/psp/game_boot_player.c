@@ -2,6 +2,7 @@
 #include "psp/game_boot.h"
 #include "psp/player_asset.h"
 #include "ps2/veronica/prog/main.h"
+#include "ps2/veronica/prog/player.h"
 
 static uint32_t word(const unsigned char *p)
 { return p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
@@ -9,6 +10,32 @@ static unsigned int half(const unsigned char *p)
 { return p[0] | ((unsigned int)p[1] << 8); }
 static int span(size_t size, size_t offset, size_t count)
 { return offset <= size && count <= size - offset; }
+
+static int player_work_span(const void *pointer, size_t size)
+{
+    uintptr_t address = (uintptr_t)pointer, first = (uintptr_t)freemem, end = (uintptr_t)sys->endp;
+    return pointer && !(address & 3u) && address >= first && address <= end && size <= end - address;
+}
+
+void recvxGameBootPlayerControlPrepare(void)
+{
+    uintptr_t model;
+    if (!plp) recvxGameBootUnsupported("invalid player control actor");
+    if (!(sys->sp_flg & 1u) || (plp->stflg & 0x1000000u)) return;
+    model = (uintptr_t)plp->mlwP;
+    if (sys->ply_id < 0 || sys->ply_id >= 4 || plp->wpnr_no < 0 || plp->wpnr_no >= 23 ||
+        !player_work_span(plp->exp0, sizeof(EXP_WORK)) || !player_work_span(plp->exp1, 124) ||
+        model < (uintptr_t)plp->mdl || model - (uintptr_t)plp->mdl >= sizeof(plp->mdl) ||
+        (model - (uintptr_t)plp->mdl) % sizeof(ML_WORK))
+        recvxGameBootUnsupported("invalid original player control state");
+    if (plp->mlwP->obj_num < 22 || plp->mlwP->obj_num > 128 ||
+        !player_work_span(plp->mlwP->objP, plp->mlwP->obj_num * sizeof(NJS_CNK_OBJECT)) ||
+        !player_work_span(plp->mlwP->owP, plp->mlwP->obj_num * sizeof(O_WORK)) ||
+        plp->mtn_no >= 512 || !player_work_span(plp->mnwP, (plp->mtn_no + 1u) * sizeof(MN_WORK)))
+        recvxGameBootUnsupported("invalid original player model or motion work");
+    if ((plp->flg & 0x100000u) && ((EXP_WORK *)plp->exp0)->yrct <= 0)
+        recvxGameBootUnsupported("invalid player turn timer");
+}
 
 #if UINTPTR_MAX == UINT32_MAX
 _Static_assert(sizeof(MN_WORK) == 24, "original motion work ABI changed");
