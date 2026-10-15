@@ -1,6 +1,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "psp/game_boot.h"
+#include "psp/game_boot_render.h"
+#include "psp/game_boot_render_texture.h"
 #include "ps2/veronica/prog/ps2_NaTextureFunction.h"
 #include "ps2/veronica/prog/ps2_NaDraw.h"
 #include "ps2/veronica/prog/ps2_NaSystem.h"
@@ -122,7 +124,7 @@ Sint32 njLoadTexture(NJS_TEXLIST *list)
     return 0;
 }
 Sint32 njSetTexture(NJS_TEXLIST *list)
-{ current_list = list; return 0; }
+{ recvxGameBootRenderTextureList(list); current_list = list; return 0; }
 Sint32 njSetTextureNum(Uint32 number)
 {
     if (!current_list || number >= current_list->nbTexture)
@@ -140,21 +142,22 @@ Sint32 njReleaseTexture(NJS_TEXLIST *list)
     for (i = 0; i < list->nbTexture; ++i) {
         unsigned int slot = descriptor_slot((NJS_TEXMEMLIST *)(uintptr_t)list->textures[i].texaddr);
         /* Draws queued earlier this tick must finish before release. */
-        if (draw_count) recvxGameBootPresent();
+        if (draw_count || recvxGameBootRenderPending()) recvxGameBootPresent();
         recvxBootTextureFree(&textures[slot]);
         memset(&descriptors[slot], 0, sizeof(descriptors[slot]));
         list->textures[i].texaddr = 0;
     }
-    if (current_list == list) { current_list = NULL; Ps2_current_texmemlist = NULL; }
+    if (current_list == list) { current_list = NULL; Ps2_current_texmemlist = NULL; recvxGameBootRenderTextureList(NULL); }
     return 0;
 }
 void njReleaseTextureAll(void)
 {
     unsigned int i;
-    if (draw_count) recvxGameBootPresent();
+    if (draw_count || recvxGameBootRenderPending()) recvxGameBootPresent();
     for (i = 0; i < TEXTURE_LIMIT; ++i) recvxBootTextureFree(&textures[i]);
     memset(descriptors, 0, sizeof(descriptors)); current_list = NULL;
     Ps2_current_texmemlist = NULL;
+    recvxGameBootRenderTextureList(NULL);
 }
 void recvxGameBootTexturesShutdown(void) { njReleaseTextureAll(); }
 void bhGarbageTexture(NJS_TEXMEMLIST *list, unsigned int count) { (void)list; (void)count; }
@@ -167,7 +170,7 @@ void njSetPaletteData(Sint32 offset, Sint32 count, void *data)
     if (offset != 16 || count != 16 || !data)
         recvxGameBootUnsupported("unported palette bank upload");
 }
-void njTextureFilterMode(Int mode) { texture_filter = mode != 0; }
+void njTextureFilterMode(Int mode) { recvxGameBootRenderTextureFilter(mode); texture_filter = mode != 0; }
 void njQuadTextureStart(int trans) { (void)trans; }
 void njQuadTextureEnd(void) { }
 void njSetQuadTexture(int number, unsigned int color)

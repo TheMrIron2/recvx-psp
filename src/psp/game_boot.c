@@ -1,5 +1,6 @@
 #include <setjmp.h>
 #include "psp/game_boot_audio.h"
+#include "psp/game_boot_render.h"
 #include "psp/engine_original_view.h"
 #include "psp/engine_original_lighting.h"
 #include <stdarg.h>
@@ -64,6 +65,8 @@ int recvxGameBootInit(const char *directory, void *arena, size_t size)
     freemem = (unsigned char *)start; njpmemp = (unsigned char *)end;
     sys->memp = freemem; sys->endp = njpmemp;
     recvxGameBootCheckpointReset();
+    recvxGameBootRenderReset();
+    recvxGameBootDrawSkinReset();
     recvxEngineOriginalFaultReset(); recvxEngineOriginalMemoryReset();
     recvxEngineOriginalMatrixReset();
     recvxEngineOriginalViewReset();
@@ -90,6 +93,7 @@ int recvxGameBootTick(const RecvxInputState *input)
     if (boot_fault[0]) return -1;
     boot_running = 1;
     if (setjmp(boot_abort)) { boot_running = 0; return -1; }
+    recvxGameBootRenderBeginFrame();
     recvxGameBootSoundTick();
     recvxGameBootReadKeys(input);
     njUserMain();

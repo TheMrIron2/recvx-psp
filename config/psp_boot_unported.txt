@@ -319,7 +319,6 @@ bhStartDoorDemo
 bhCheckEvtTimer
 bhDrawSmallScreenRenderTexture
 bhDrawFullScreenRenderTexture
-bhAllDrawModel
 bhEtcMirrorDrawModel
 bhDrawScope
 bhSetEventFixedCut
@@ -361,3 +360,8 @@ bhCPM2_act_cro
 bhCPM2_act_hsu
 bhCPM2_act_hsd
 bhCPM2_act_rpsh
+npCalcSkin
+npCalcSkinFM
+npCalcMorphing
+npGetMatColor
+njDrawModel

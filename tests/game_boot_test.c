@@ -10,6 +10,7 @@
 #include <unistd.h>
 #undef u_long
 #include "psp/game_boot.h"
+#include "psp/game_boot_render.h"
 #include "psp/game_boot_audio.h"
 #include "psp/engine_original_lighting.h"
 #include "psp/engine_original_fault.h"
@@ -69,6 +70,7 @@ void recvxGameBootPresent(void)
     unsigned int x, y;
     unsigned char pixels[480 * 272 * 3] = {0};
     const RecvxBootDraw *draws = recvxGameBootDraws(&count);
+    (void)recvxGameBootRenderFrame();
     if (!loading_captured && NowLoadDisp && sys->mn_md0 == 1 && count) {
         capture = 1; capture_path = "/tmp/recvx-game-loading.ppm";
         loading_captured = 1;
@@ -105,6 +107,7 @@ void recvxGameBootPresent(void)
         assert(fwrite(pixels, 1, sizeof(pixels), f) == sizeof(pixels)); fclose(f);
         capture = 0;
     }
+    recvxGameBootRenderConsume();
 }
 
 static void tick(RecvxInputState *input)
@@ -1309,9 +1312,9 @@ int main(int argc, char **argv)
     }
     test_loaded_player(argv[1]);
     for (i = 0; i < 20 && !recvxGameBootFault(); ++i) recvxGameBootTick(&input);
-    if (!recvxGameBootFault() || strcmp(recvxGameBootFault(), "bhAllDrawModel"))
+    if (!recvxGameBootFault() || strcmp(recvxGameBootFault(), "npCalcSkin"))
         fprintf(stderr, "Unexpected native loader boundary: %s\n", recvxGameBootFault());
-    assert(recvxGameBootFault() && strcmp(recvxGameBootFault(), "bhAllDrawModel") == 0);
+    assert(recvxGameBootFault() && strcmp(recvxGameBootFault(), "npCalcSkin") == 0);
     assert(!recvxAudioBankBusy() && !recvxAudioFault());
     assert(sys->loop_ct == 1 && sys->loop_now == 0 && sys->fade_ct == 1);
     assert((unsigned int)sys->enow < 128 && ene[sys->enow].mode0 == 1);
@@ -1329,10 +1332,23 @@ int main(int argc, char **argv)
     assert(cam.camver < 2 && isfinite(cam.px) && isfinite(cam.py) && isfinite(cam.pz));
     {
         const RecvxEngineOriginalLightingState *lights = recvxEngineOriginalLightingGet();
-        assert(lights->api_calls > 0 && lights->matrix_updates == 2);
+        assert(lights->api_calls > 0 && lights->matrix_updates >= 2 && !(lights->matrix_updates & 1u));
         assert(sys->lg_pnt >= 0 && sys->lg_pnt <= 3 && lights->easy_count == 1 + sys->lg_pnt);
         assert(lights->simple_count == lights->easy_count);
         assert(isfinite(lights->easy_direction.x) && isfinite(lights->easy_direction.y) && isfinite(lights->easy_direction.z));
+    }
+    {
+        const RecvxBootRenderFrame *scene = recvxGameBootRenderFrame();
+        assert(scene->vertex_count > 0 && scene->vertex_count % 3 == 0 && scene->batch_count > 0);
+        size_t total = 0;
+        for (size_t batch = 0; batch < scene->batch_count; ++batch) {
+            assert(scene->batches[batch].first == total && scene->batches[batch].count <= 65535);
+            assert(scene->batches[batch].texture && scene->batches[batch].texture->source);
+            total += scene->batches[batch].count;
+        }
+        assert(total == scene->vertex_count);
+        fprintf(stderr, "Original opening room queued: %u triangles, %u material batches\n",
+            (unsigned int)(total / 3), (unsigned int)scene->batch_count);
     }
     assert(plp->exp2 && (unsigned char *)plp->exp2 >= freemem && (unsigned char *)plp->exp2 + 1712 <= sys->memp);
     assert(sys->version == 10 && memcmp(freemem, &sys->version,
@@ -1374,7 +1390,7 @@ int main(int argc, char **argv)
     assert(plp->mode0 == 1 && plp->mode1 == 0 && plp->mode2 == 3);
     assert(isfinite(plp->px) && isfinite(plp->py) && isfinite(plp->pz) && isfinite(plp->spd));
     assert(!recvxEngineOriginalFault() && !recvxAudioFault());
-    assert(strcmp(recvxGameBootFault(), "bhAllDrawModel") == 0);
+    assert(strcmp(recvxGameBootFault(), "npCalcSkin") == 0);
     puts("PASS: real Claire assets complete idle, turning and walking controller updates with original motion, wall/floor, head and sound services");
 #endif
     recvxGameBootTexturesShutdown();
@@ -1383,7 +1399,7 @@ int main(int argc, char **argv)
 #if UINTPTR_MAX > UINT32_MAX
     puts("PASS: sanitized title/new-game boot and bounded effect preflight; original relocation requires 32-bit ABI test");
 #else
-    printf("PASS: original player/enemy/inventory initialization, loading text and original Claire models/skin/motions/textures; original weapon loading and opening room relocation/textures; original room finalization/spawn/masks; original startup scenario/scheduler and NPC facial update; original effect control and real sound bank transfers; original main gameplay sequence/fade, NPC movement and Claire control/setup/idle pose/shadow; original camera cut/checkpoint, wall/floor collision, head tracking, linked objects and room lighting; next boundary bhAllDrawModel (%d effect textures retained)\n", sys->ef_ct);
+    printf("PASS: original player/enemy/inventory initialization, loading text and original Claire models/skin/motions/textures; original weapon loading and opening room relocation/textures; original room finalization/spawn/masks; original startup scenario/scheduler and NPC facial update; original effect control and real sound bank transfers; original main gameplay sequence/fade, NPC movement and Claire control/setup/idle pose/shadow; original camera cut/checkpoint, wall/floor collision, head tracking, linked objects, room lighting and actual opening-room geometry/material submission; next boundary npCalcSkin (%d effect textures retained)\n", sys->ef_ct);
 #endif
     return 0;
 }

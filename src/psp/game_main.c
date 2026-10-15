@@ -1,5 +1,6 @@
 #include <malloc.h>
 #include "psp/game_boot_audio.h"
+#include "psp/game_boot_render.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <pspdebug.h>
@@ -61,6 +62,7 @@ int main(int argc, char **argv)
             recvxPlatformCheckCallbacks();
         }
         recvxAudioOutputShutdown();
+        recvxGameBootRenderReset();
         recvxGameBootTexturesShutdown(); recvxGameBootDisplayShutdown();
         if (recvxGameBootFault()) {
             pspDebugScreenInit(); pspDebugScreenClear();

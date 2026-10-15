@@ -51,6 +51,7 @@ void recvxGameBootCutWorkPrepare(const CUT_WORK *cut);
 void recvxGameBootCutAreaPrepare(const CUT_WRK *area);
 void recvxGameBootCutActorPrepare(void);
 void recvxGameBootCheckpointReset(void);
+void recvxGameBootDrawSkinReset(void);
 void recvxGameBootCheckpointPrepare(void);
 void recvxGameBootCheckpointSaved(void);
 int recvxGameBootValidateWeaponSource(const void *data, size_t size);

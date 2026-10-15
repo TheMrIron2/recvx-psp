@@ -58,7 +58,7 @@ void recvxEngineOriginalViewReset(void)
     NaViwViewMatrix[5] = -1.0f;
     NaViwViewMatrix[10] = -1.0f;
     NaViwViewMatrix[15] = 1.0f;
-#ifdef RECVX_ENGINE_ORIGINAL_MATRIX_CPU
+#if defined(RECVX_ENGINE_ORIGINAL_MATRIX_CPU) || defined(RECVX_GAME_BOOT)
     recvxEngineOriginalMatrixReset();
     njClearMatrix();
 #else

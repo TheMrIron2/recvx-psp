@@ -110,11 +110,17 @@ BOOT_OVERLAY_SOURCE := $(BUILD_DIR)/game_boot_overlay_original.c
 BOOT_OVERLAY_OBJECT := $(BUILD_DIR)/game_boot_overlay_original.o
 BOOT_PLAYER_ACTION_SOURCE := $(BUILD_DIR)/game_boot_player_action_original.c
 BOOT_PLAYER_ACTION_OBJECT := $(BUILD_DIR)/game_boot_player_action_original.o
+BOOT_DRAW_CONTROL_SOURCE := $(BUILD_DIR)/game_boot_draw_control_original.c
+BOOT_DRAW_CONTROL_OBJECT := $(BUILD_DIR)/game_boot_draw_control_original.o
+BOOT_DRAW_SKIN_SOURCE := $(BUILD_DIR)/game_boot_draw_skin_original.c
+BOOT_DRAW_SKIN_OBJECT := $(BUILD_DIR)/game_boot_draw_skin_original.o
+BOOT_EFFECT_DRAW_SOURCE := $(BUILD_DIR)/game_boot_effect_draw_original.c
+BOOT_EFFECT_DRAW_OBJECT := $(BUILD_DIR)/game_boot_effect_draw_original.o
 # Newlib reads these from its CRT, linked after our intermediate GC pass.
 BOOT_RUNTIME_ROOTS := -u sce_newlib_attribute -u sce_newlib_heap_kb_size -u sce_newlib_heap_threshold_kb_size
 SOURCES := src/psp/game_main.c src/psp/game_boot.c \
 	src/psp/game_boot_files.c src/psp/game_boot_services.c src/psp/game_boot_sound.c src/psp/game_boot_audio.c src/psp/game_boot_audio_psp.c \
-	src/psp/game_boot_draw.c src/psp/game_boot_texture.c src/psp/game_boot_gu.c src/psp/game_boot_cut.c src/psp/game_boot_checkpoint.c src/psp/engine_original_view.c src/psp/engine_original_lighting_psp.c \
+	src/psp/game_boot_draw.c src/psp/game_boot_draw_control.c src/psp/game_boot_draw_skin.c src/psp/game_boot_effect_draw.c src/psp/game_boot_render.c src/psp/game_boot_chunk.c src/psp/game_boot_render_texture.c src/psp/game_boot_texture.c src/psp/game_boot_gu.c src/psp/game_boot_cut.c src/psp/game_boot_checkpoint.c src/psp/engine_original_view.c src/psp/engine_original_lighting_psp.c \
 	src/psp/engine_original_memory.c src/psp/engine_original_fault.c \
 	src/psp/live_task_dispatch.c src/psp/original_clock.c $(PSP_PLATFORM_SOURCES) \
 	src/ps2/veronica/prog/main.c src/ps2/veronica/prog/system_init.c \
@@ -129,7 +135,7 @@ SOURCES := src/psp/game_main.c src/psp/game_boot.c \
 	src/psp/engine_original_effect.c src/psp/game_boot_mask.c src/psp/game_boot_mask_anim.c src/psp/game_boot_event.c src/psp/game_boot_effect_control.c src/psp/event_core.c src/ps2/veronica/prog/Motion.c \
 	src/psp/engine_original_effect_init.c src/ps2/veronica/prog/binfunc.c \
 	src/ps2/veronica/prog/camera.c src/psp/engine_original_matrix_cpu.c \
-	$(BOOT_PLAYER_HEAD_OBJECT) $(BOOT_WORLD_CONTROL_OBJECT) $(BOOT_VISIBILITY_OBJECT) $(BOOT_LIGHT_OBJECT) $(BOOT_OVERLAY_OBJECT) $(BOOT_PLAYER_ACTION_OBJECT) $(BOOT_INITIALIZERS_OBJECT) $(BOOT_SEQUENCE_OBJECT) $(BOOT_PLAYER_CONTROL_OBJECT) $(BOOT_CUT_CONTROL_OBJECT) $(BOOT_PLAYER_PITCH_OBJECT) $(BOOT_PLAYER_COLLISION_OBJECT) $(BOOT_WALL_OBJECT) $(BOOT_WALL_GEOMETRY_OBJECT)
+	$(BOOT_PLAYER_HEAD_OBJECT) $(BOOT_WORLD_CONTROL_OBJECT) $(BOOT_VISIBILITY_OBJECT) $(BOOT_LIGHT_OBJECT) $(BOOT_OVERLAY_OBJECT) $(BOOT_PLAYER_ACTION_OBJECT) $(BOOT_DRAW_CONTROL_OBJECT) $(BOOT_DRAW_SKIN_OBJECT) $(BOOT_EFFECT_DRAW_OBJECT) $(BOOT_INITIALIZERS_OBJECT) $(BOOT_SEQUENCE_OBJECT) $(BOOT_PLAYER_CONTROL_OBJECT) $(BOOT_CUT_CONTROL_OBJECT) $(BOOT_PLAYER_PITCH_OBJECT) $(BOOT_PLAYER_COLLISION_OBJECT) $(BOOT_WALL_OBJECT) $(BOOT_WALL_GEOMETRY_OBJECT)
 else ifeq ($(BUILD_PROFILE),engine-event-test)
 BUILD_DIR := build/psp-engine-event-test
 TARGET := $(BUILD_DIR)/recvx-event-test
@@ -406,6 +412,24 @@ $(BOOT_PLAYER_ACTION_SOURCE): tools/extract_original_player_action.py tools/extr
 $(BOOT_PLAYER_ACTION_OBJECT): $(BOOT_PLAYER_ACTION_SOURCE) Makefile
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
+$(BOOT_DRAW_CONTROL_SOURCE): tools/extract_original_draw_control.py tools/extract_original_boot_initializers.py src/ps2/veronica/prog/game.c src/ps2/veronica/prog/eneset.c src/ps2/veronica/prog/objitm.c src/ps2/veronica/prog/pwksub.c src/ps2/veronica/prog/MdlPut.c
+	python3 $< $@
+
+$(BOOT_DRAW_CONTROL_OBJECT): $(BOOT_DRAW_CONTROL_SOURCE) Makefile
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BOOT_DRAW_SKIN_SOURCE): tools/extract_original_draw_skin.py tools/extract_original_boot_initializers.py src/ps2/veronica/prog/njplus.c
+	python3 $< $@
+
+$(BOOT_DRAW_SKIN_OBJECT): $(BOOT_DRAW_SKIN_SOURCE) Makefile
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BOOT_EFFECT_DRAW_SOURCE): tools/extract_original_effect_draw.py tools/extract_original_boot_initializers.py src/ps2/veronica/prog/effect.c
+	python3 $< $@
+
+$(BOOT_EFFECT_DRAW_OBJECT): $(BOOT_EFFECT_DRAW_SOURCE) Makefile
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
 BOOT_INITIALIZER_INPUTS := $(addprefix src/ps2/veronica/prog/,dread.c player.c eneset.c sub1.c message.c njplus.c weapon.c room.c pwksub.c MdlPut.c light.c hitchk.c screen.c face.c face_bh.c event.c subpl.c zonzon1.c effect.c effsub1.c)
 $(BOOT_INITIALIZERS_SOURCE): tools/extract_original_boot_initializers.py tools/extract_original_event_commands.py $(BOOT_INITIALIZER_INPUTS)
 	python3 $< $@
@@ -542,10 +566,13 @@ HOST_BOOT_SOURCES := src/psp/game_boot.c src/psp/game_boot_files.c \
 	build/host/game_boot_light_original.c \
 	build/host/game_boot_overlay_original.c \
 	build/host/game_boot_player_action_original.c \
+	build/host/game_boot_draw_control_original.c \
+	build/host/game_boot_draw_skin_original.c \
+	build/host/game_boot_effect_draw_original.c \
 	build/host/game_boot_player_control.c \
 	build/host/game_boot_player_pitch_original.c build/host/game_boot_player_collision_original.c \
 	build/host/game_boot_cut_control.c src/psp/game_boot_cut.c src/psp/game_boot_checkpoint.c src/psp/engine_original_view.c src/psp/engine_original_lighting_psp.c \
-	src/psp/game_boot_services.c src/psp/game_boot_draw.c src/psp/game_boot_texture.c \
+	src/psp/game_boot_services.c src/psp/game_boot_draw.c src/psp/game_boot_draw_control.c src/psp/game_boot_draw_skin.c src/psp/game_boot_effect_draw.c src/psp/game_boot_render.c src/psp/game_boot_chunk.c src/psp/game_boot_render_texture.c src/psp/game_boot_texture.c \
 	src/psp/engine_original_memory.c src/psp/engine_original_fault.c \
 	src/psp/live_task_dispatch.c src/psp/original_clock.c src/psp/services.c \
 	src/psp/engine_original_clock_psp.c src/psp/engine_original_math.c \
@@ -666,6 +693,15 @@ build/host/game_boot_overlay_original.c: tools/extract_original_game_overlay.py 
 	python3 $< $@
 
 build/host/game_boot_player_action_original.c: tools/extract_original_player_action.py tools/extract_original_boot_initializers.py tools/extract_original_boot_tables.py src/ps2/veronica/prog/player.c src/ps2/veronica/prog/pwksub.c
+	python3 $< $@
+
+build/host/game_boot_draw_control_original.c: tools/extract_original_draw_control.py tools/extract_original_boot_initializers.py src/ps2/veronica/prog/game.c src/ps2/veronica/prog/eneset.c src/ps2/veronica/prog/objitm.c src/ps2/veronica/prog/pwksub.c src/ps2/veronica/prog/MdlPut.c
+	python3 $< $@
+
+build/host/game_boot_draw_skin_original.c: tools/extract_original_draw_skin.py tools/extract_original_boot_initializers.py src/ps2/veronica/prog/njplus.c
+	python3 $< $@
+
+build/host/game_boot_effect_draw_original.c: tools/extract_original_effect_draw.py tools/extract_original_boot_initializers.py src/ps2/veronica/prog/effect.c
 	python3 $< $@
 
 $(HOST_BOOT_TEST): tests/game_boot_test.c $(HOST_BOOT_SOURCES) build/host/game_boot_unported.S build/host/game_boot_tables.c build/host/game_boot_initializers.c $(HOST_HEADERS) include/psp/game_boot.h Makefile
@@ -937,5 +973,56 @@ build/host/game-boot-overlay-test: tests/game_boot_overlay_test.c src/psp/game_b
 
 build/host/game-boot-player-action-test: tests/game_boot_player_action_test.c src/psp/game_boot_player_action.c build/host/game_boot_player_action_original.c src/psp/engine_original_matrix_cpu.c src/psp/engine_original_math.c src/psp/engine_original_fault.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
 	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -Wno-error \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
+		-ffunction-sections -fdata-sections $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
+
+.PHONY: game-boot-render-test game-boot-chunk-test game-boot-render-texture-test game-boot-gu-test
+game-boot-render-test: build/host/game-boot-render-test
+	ASAN_OPTIONS=detect_leaks=0 $<
+game-boot-chunk-test: build/host/game-boot-chunk-test
+	ASAN_OPTIONS=detect_leaks=0 $<
+game-boot-render-texture-test: build/host/game-boot-render-texture-test
+	ASAN_OPTIONS=detect_leaks=0 $<
+game-boot-gu-test: build/host/game-boot-gu-test
+	ASAN_OPTIONS=detect_leaks=0 $<
+
+GAME_BOOT_RENDER_TEST_SOURCES := tests/game_boot_render_test.c src/psp/game_boot_render.c src/psp/game_boot_chunk.c src/psp/game_boot_render_texture.c src/psp/engine_original_lighting_psp.c src/psp/engine_original_view.c src/psp/engine_original_matrix_cpu.c src/psp/engine_original_math.c src/psp/engine_original_fault.c
+build/host/game-boot-render-test: $(GAME_BOOT_RENDER_TEST_SOURCES) $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
+		-ffunction-sections -fdata-sections $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
+
+build/host/game-boot-chunk-test: tests/game_boot_chunk_test.c src/psp/game_boot_chunk.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
+		-ffunction-sections -fdata-sections $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
+
+build/host/game-boot-render-texture-test: tests/game_boot_render_texture_test.c src/psp/game_boot_render_texture.c src/psp/game_boot_draw.c src/psp/game_boot_texture.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_GAME_BOOT_HOST_TEST \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
+		-ffunction-sections -fdata-sections $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
+
+build/host/game-boot-gu-test: tests/game_boot_gu_test.c src/psp/game_boot_gu.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_GAME_BOOT_HOST_TEST -isystem $(PSPSDK)/include \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie $(filter %.c,$^) -lm -o $@
+
+.PHONY: game-boot-draw-control-test game-boot-draw-skin-test game-boot-effect-draw-test
+game-boot-draw-control-test: build/host/game-boot-draw-control-test
+	ASAN_OPTIONS=detect_leaks=0 $<
+game-boot-draw-skin-test: build/host/game-boot-draw-skin-test
+	ASAN_OPTIONS=detect_leaks=0 $<
+game-boot-effect-draw-test: build/host/game-boot-effect-draw-test
+	ASAN_OPTIONS=detect_leaks=0 $<
+
+build/host/game-boot-draw-control-test: tests/game_boot_draw_control_test.c build/host/game_boot_draw_control_original.c src/psp/game_boot_draw_control.c src/psp/engine_original_matrix_cpu.c src/psp/engine_original_view.c src/psp/engine_original_math.c src/psp/engine_original_fault.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_GAME_BOOT -Wno-error \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
+		-ffunction-sections -fdata-sections $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
+
+build/host/game-boot-draw-skin-test: tests/game_boot_draw_skin_test.c build/host/game_boot_draw_skin_original.c src/psp/game_boot_draw_skin.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_GAME_BOOT_HOST_TEST \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
+		$(filter %.c,$^) -lm -o $@
+
+build/host/game-boot-effect-draw-test: tests/game_boot_effect_draw_test.c build/host/game_boot_effect_draw_original.c src/psp/game_boot_effect_draw.c src/psp/engine_original_matrix_cpu.c src/psp/engine_original_math.c src/psp/engine_original_fault.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_GAME_BOOT_HOST_TEST -Wno-error \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
 		-ffunction-sections -fdata-sections $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
