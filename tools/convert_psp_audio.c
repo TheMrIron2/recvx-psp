@@ -55,8 +55,47 @@ static void encode(const int16_t *pcm, unsigned int count, unsigned int loop_sta
     }
     output[blocks * 16 + 1] = 7; /* Native SAS terminator. */
 }
+/* Interleaved signed LE16 PCM from the movie build-host demux/resampler. */
+static int encode_pcm(int argc, char **argv)
+{
+    unsigned long channels, rate;
+    char *end;
+    FILE *input, *output;
+    long size;
+    unsigned char header[64] = {0}, *raw, *encoded;
+    int16_t *plane;
+    unsigned int samples, bytes;
+    if (argc != 6) return 1;
+    channels = strtoul(argv[2], &end, 10); if (*end || channels < 1 || channels > 2) return 2;
+    rate = strtoul(argv[3], &end, 10); if (*end || rate < 8000 || rate > 48000) return 2;
+    input = fopen(argv[4], "rb"); if (!input) return 3;
+    if (fseek(input, 0, SEEK_END) || (size = ftell(input)) <= 0 ||
+        size > 48000L * 600 * 4 || size % (2 * channels) || fseek(input, 0, SEEK_SET)) { fclose(input); return 4; }
+    samples = (unsigned int)(size / (2 * channels));
+    bytes = ((samples + 27) / 28 + 1) * 16;
+    raw = malloc((size_t)size); plane = malloc((size_t)samples * sizeof(*plane));
+    encoded = calloc(1, bytes);
+    if (!raw || !plane || !encoded) { fclose(input); free(raw); free(plane); free(encoded); return 5; }
+    if (fread(raw, 1, (size_t)size, input) != (size_t)size) { fclose(input); free(raw); free(plane); free(encoded); return 6; }
+    fclose(input);
+    memcpy(header, "RVAG", 4); put32(header + 4, 1); put32(header + 8, (unsigned int)channels);
+    put32(header + 12, (unsigned int)rate); put32(header + 16, bytes); put32(header + 24, samples);
+    output = fopen(argv[5], "wb"); if (!output) { free(raw); free(plane); free(encoded); return 7; }
+    int failed = fwrite(header, 1, 64, output) != 64;
+    for (unsigned int ch = 0; ch < channels && !failed; ++ch) {
+        for (unsigned int i = 0; i < samples; ++i) {
+            size_t p = (i * channels + ch) * 2;
+            plane[i] = (int16_t)((unsigned int)raw[p] | ((unsigned int)raw[p + 1] << 8));
+        }
+        encode(plane, samples, 0, 0, encoded);
+        failed = fwrite(encoded, 1, bytes, output) != bytes;
+    }
+    if (fclose(output)) failed = 1;
+    free(raw); free(plane); free(encoded); return failed ? 8 : 0;
+}
 int main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "--pcm")) return encode_pcm(argc, argv);
     FILE *f; long size; unsigned char *data, *output;
     unsigned int offset, channels, rate, samples, loop = 0, loop_start = 0, blocks, bytes;
     int16_t *pcm; int hist[2][2] = {{0}}; int c0, c1;

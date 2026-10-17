@@ -1,5 +1,6 @@
 #include <setjmp.h>
 #include "psp/game_boot_audio.h"
+#include "psp/game_boot_movie.h"
 #include "psp/game_boot_render.h"
 #include "psp/game_boot_skin.h"
 #include "psp/game_boot_morph.h"
@@ -81,7 +82,7 @@ int recvxGameBootInit(const char *directory, void *arena, size_t size)
     recvxEngineOriginalLightingReset();
     recvxEngineOriginalViewConfigureScreen(640, 480);
     recvxGameBootEffectControlReset();
-    if (recvxAudioInit(directory)) return -1;
+    if (recvxAudioInit(directory) || recvxGameBootMovieInit(directory)) return -1;
     recvxGameBootSoundReset();
     recvxGameBootFilesInit(directory);
     InitReadKeyEx(1);
@@ -89,7 +90,7 @@ int recvxGameBootInit(const char *directory, void *arena, size_t size)
     sys->sys_partid = 6; sys->itm_partid = 4; sys->dor_partid = 5;
     sys->tk_flg = 1;
     pd_port = 0;
-    recvxGameBootLog("Original njUserMain startup; arena=%u; native SAS ADPCM; movies skipped; no memory card", (unsigned int)(end - start));
+    recvxGameBootLog("Original njUserMain startup; arena=%u; native SAS ADPCM; native AVC movies; no memory card", (unsigned int)(end - start));
     return 0;
 }
 

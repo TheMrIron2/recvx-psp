@@ -26,6 +26,9 @@ typedef struct {
     SpriteVertex sprite[6];
 } Submission;
 
+static const uint32_t *movie_pixels;
+static uint32_t movie_surface[512*512] __attribute__((aligned(64)));
+
 static RecvxBootRenderVertex vertices[64] __attribute__((aligned(16)));
 static RecvxBootRenderBatch batches[32];
 static RecvxBootRenderFrame frame;
@@ -61,6 +64,9 @@ static size_t clear_count;
 static jmp_buf fault;
 static const char *fault_name;
 static int expecting_fault;
+
+const uint32_t *recvxGameBootMovieGetFrame(void) { return movie_pixels; }
+void recvxGameBootMovieFrameConsumed(void) { assert(synchronized && !list_active && sync_at > finish_at); }
 
 void recvxGameBootUnsupported(const char *name)
 {
@@ -140,7 +146,8 @@ void sceGuBlendFunc(int op, int source, int destination, unsigned int sf, unsign
 }
 void sceGuTexFunc(int function, int component)
 {
-    assert(function == GU_TFX_MODULATE && (component == GU_TCC_RGBA || component == GU_TCC_RGB));
+    assert((function == GU_TFX_MODULATE && (component == GU_TCC_RGBA || component == GU_TCC_RGB)) ||
+        (function == GU_TFX_REPLACE && component == GU_TCC_RGB));
     texture_component=component; ++calls;
 }
 void sceGuTexWrap(int u, int v) { wraps[0] = u; wraps[1] = v; ++calls; }
@@ -148,7 +155,7 @@ void sceGuTexFilter(int min, int mag) { filters[0] = min; filters[1] = mag; ++ca
 void sceGuTexMode(int psm, int mips, int cache, int swizzle)
 {
     assert(!mips && !cache && ((psm == GU_PSM_T8 && swizzle == 1) ||
-        (psm == GU_PSM_5551 && swizzle == 0)));
+        ((psm == GU_PSM_5551 || psm == GU_PSM_8888) && swizzle == 0)));
     texture_format = psm; texture_swizzle = swizzle; ++calls;
 }
 void sceGuClutMode(unsigned int psm, unsigned int shift, unsigned int mask, unsigned int offset)
@@ -234,6 +241,7 @@ static void reset_frame(void)
 {
     memset(vertices, 0, sizeof(vertices)); memset(batches, 0, sizeof(batches)); memset(overlays, 0, sizeof(overlays));
     memset(submissions, 0, sizeof(submissions)); memset(&frame, 0, sizeof(frame));
+    movie_pixels = NULL;
     submission_count = memory_used = overlay_count = 0; consumed = cache_flushed = 0;
     clear_count = texsync_at = texflush_at = 0;
     first_sprite_at = last_model_at = consume_at = 0;
@@ -514,13 +522,34 @@ static void gradient_overlays(void)
     assert(gradient->at<fade->at && fade->at<finish_at && sync_at<consume_at);
 }
 
+static void movie_display(void)
+{
+    reset_frame(); movie_pixels = movie_surface;
+    frame.vertex_count = 3; frame.batch_count = 1;
+    batches[0] = (RecvxBootRenderBatch){.count=3};
+    overlays[0] = (RecvxBootDraw){.quad={.x2=640,.y2=480},.color=0x80000000};
+    overlay_count=1;
+    recvxGameBootPresent();
+    assert(consumed && submission_count==9);
+    for(unsigned int i=0;i<8;++i){
+        const Submission *s=&submissions[i];
+        unsigned int right=i*64+64<480?i*64+64:480;
+        assert(s->primitive==GU_SPRITES && s->textured && s->pixels==movie_surface);
+        assert(s->width==512 && s->height==512 && s->stride==512 && s->texture_format==GU_PSM_8888);
+        assert(!s->texture_swizzle && s->texture_component==GU_TCC_RGB && !s->blend && !s->depth);
+        assert(s->sprite[0].x==i*64 && s->sprite[0].u==i*64 && s->sprite[0].y==0);
+        assert(s->sprite[1].x==right && s->sprite[1].u==right && s->sprite[1].y==272 && s->sprite[1].v==272);
+    }
+    assert(!submissions[8].textured && submissions[8].blend);
+}
+
 int main(void)
 {
     display_init(); models_then_overlays(); blend_mappings(); authored_half_fog(); screen_gradient_triangles(); shadow_protocol();
     recvxGameBootDisplaySwap(); assert(swaps==1 && context_draw_address==512u*272u*4u);
     shadow_protocol(); /* Offscreen switches must preserve the swapped scene target. */
     recvxGameBootDisplaySwap(); assert(swaps==2 && context_draw_address==0);
-    shadow_protocol(); gradient_overlays(); empty_and_capacity();
+    shadow_protocol(); gradient_overlays(); movie_display(); empty_and_capacity();
     recvxGameBootDisplayShutdown(); assert(terminated);
     puts("PASS: actual GU adapter viewport/VRAM/depth state, perspective matrix, external ABGR geometry/lines, materials, indexed textures, authored constant half-fog, screen triangle gradients/depth, modifier add/subtract mask passes/composite/bounded clears, swap target restoration, overlays and consume-after-sync lifetime");
     return 0;

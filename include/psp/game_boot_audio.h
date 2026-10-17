@@ -39,6 +39,7 @@ void recvxAudioAdvanceFades(void);
 int recvxAudioNativeStart(unsigned int voice, const void *data, size_t size,
     unsigned int rate, int loop, int envelope1, int envelope2, int volume, int pan);
 void recvxAudioNativeStop(unsigned int voice);
+void recvxAudioNativeFlush(const void *data, size_t size);
 void recvxAudioNativePause(unsigned int voice, int paused);
 void recvxAudioNativeVolume(unsigned int voice, int volume, int pan);
 void recvxAudioNativePitch(unsigned int voice, unsigned int rate);

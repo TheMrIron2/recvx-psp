@@ -2,7 +2,9 @@
 
 A port of Resident Evil: Code Veronica X to the PSP based on the matching PS2 decomp.
 
-Place `recvx.iso` (USA) at the root of the repository and run `make assets`, then `make`.
+Place `recvx.iso` (USA) at the root of the repository and run `make assets`, then `make game`. Asset preparation requires host FFmpeg with libx264 and ADS support; use `FFMPEG=/path/to/ffmpeg` if it is outside PATH.
+
+FMVs are converted on the host to PSP H.264 video and native ADPCM audio. Copy the complete `build/psp/data` directory, including `data/movies`, alongside `build/psp/EBOOT.PBP`. See [movie preparation and playback](docs/psp-movie-assets.md) for details and validation limits.
 
 The original README continues below.
 

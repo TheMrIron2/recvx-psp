@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 
-CASES = {2, 5, 7, 11, 12, 13, 24, 47}
+CASES = {2, 5, 7, 11, 12, 13, 23, 24, 36, 47}
 CASE_LINE = re.compile(r"^        case\s+(0[xX][0-9a-fA-F]+|[0-9]+)\s*:")
 
 

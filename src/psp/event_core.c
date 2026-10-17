@@ -48,6 +48,10 @@ static uint32_t task_event_id[RECVX_EVENT_TASK_COUNT];
 static unsigned char task_bounds_valid[RECVX_EVENT_TASK_COUNT];
 /* Distinguish counted loops from sleep/while frames sharing the retail stack. */
 static unsigned char *for_body[RECVX_EVENT_TASK_COUNT][4];
+#ifdef RECVX_GAME_BOOT
+static unsigned char *while_condition[RECVX_EVENT_TASK_COUNT][4];
+static unsigned char *while_body[RECVX_EVENT_TASK_COUNT][4];
+#endif
 static unsigned int current_task = RECVX_EVENT_NO_TASK;
 static uint32_t instruction_count;
 static uint32_t instruction_count_this_call;
@@ -62,6 +66,16 @@ static int scenario_active;
 static int has_task_bytes(const unsigned char *pc, size_t count);
 static int pop_conditional_branch(void);
 static unsigned int dispatch_instruction(void);
+
+static void clear_while(unsigned int task, unsigned int depth)
+{
+#ifdef RECVX_GAME_BOOT
+    while_condition[task][depth] = NULL;
+    while_body[task][depth] = NULL;
+#else
+    (void)task; (void)depth;
+#endif
+}
 
 #ifdef RECVX_EVENT_CORE_TEST
 #define RECVX_EVENT_CORE(opcode, handler) [opcode] = handler,
@@ -171,6 +185,10 @@ static int active_task_count(void)
 void recvxEventCoreReset(void)
 {
     memset(for_body, 0, sizeof(for_body));
+#ifdef RECVX_GAME_BOOT
+    memset(while_condition, 0, sizeof(while_condition));
+    memset(while_body, 0, sizeof(while_body));
+#endif
     memset(bhEtask, 0, sizeof(bhEtask));
     memset(task_start, 0, sizeof(task_start));
     memset(task_end, 0, sizeof(task_end));
@@ -401,6 +419,7 @@ int Event_init(BH_SCEWORK *task, unsigned int event_id)
     task->data = (unsigned char *)rom->evtp + start;
     task->loop = -1;
     memset(for_body[index], 0, sizeof(for_body[index]));
+    for (unsigned int depth = 0; depth < 4; ++depth) clear_while(index, depth);
     task->ips[0][0] = 0;
     task->ips[0][1] = 0;
     task->ips[0][2] = 0;
@@ -700,6 +719,17 @@ static int validate_core_instruction(unsigned int opcode)
             return -1;
         }
         return 0;
+    } else if (opcode == 94 || opcode == 95 || opcode == 155) {
+        extent = opcode == 94 ? 4 : opcode == 95 ? 2 : 6;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (sys == NULL || (opcode == 94 && bhScePtr[1] >= 22)) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
     } else if (opcode == 31 || opcode == 92) {
         if (!has_task_bytes(bhScePtr, opcode == 31 ? 4 : 2)) {
             set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
@@ -967,6 +997,45 @@ static int validate_core_instruction(unsigned int opcode)
             return -1;
         }
         return 0;
+    } else if (opcode == 43 || opcode == 103) {
+        if (!has_task_bytes(bhScePtr, 2)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        unsigned int command = bhScePtr[1];
+        if (!valid_task_record() || sys == NULL ||
+            (bhCetask->work == NULL && !(opcode == 103 && (command == 0 || command == 139)))) {
+            set_fault(RECVX_EVENT_FAULT_BAD_TASK, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if ((opcode == 43 && command > 1) ||
+            (opcode == 103 && command != 0 && command != 128 && command != 139 && command != 144 && command != 149)) {
+            set_fault(RECVX_EVENT_FAULT_UNSUPPORTED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (opcode == 103 && command == 149 && !has_task_bytes(bhScePtr, 4)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if ((opcode == 103 && command == 128 && (bhCetask->work->id >= 128 || !sys->emtp[bhCetask->work->id])) ||
+            (opcode == 43 && bhCetask->work->id == 1 && bhCetask->work->exp1 == NULL)) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 60 || opcode == 62 || opcode == 154) {
+        if (!has_task_bytes(bhScePtr, 4)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        unsigned int index = bhScePtr[opcode == 154 ? 1 : 2];
+        if (sys == NULL || rom == NULL || rom->enep == NULL || rom->ene_n < 0 ||
+            index >= (unsigned int)rom->ene_n || rom->enep[index].wrk_no >= 128 ||
+            ene[rom->enep[index].wrk_no].exp0 == NULL) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
     } else if (opcode == 101) {
         extent = 4;
         if (!has_task_bytes(bhScePtr, extent)) {
@@ -1001,6 +1070,8 @@ static int validate_core_instruction(unsigned int opcode)
         case 5: extent = 6; break;
         case 7: extent = 8; break;
         case 11: case 12: case 13: extent = 6; break;
+        case 23: extent = 4; break;
+        case 36: extent = 2; break;
         case 24:
             if (!has_task_bytes(bhScePtr, 4)) {
                 set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode,
@@ -1021,6 +1092,13 @@ static int validate_core_instruction(unsigned int opcode)
         }
         if (!has_task_bytes(bhScePtr, extent)) {
             set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if ((command == 23 && bhScePtr[2] > 3) ||
+            (command == 36 && (bhCetask->work->mlwP == NULL ||
+                bhCetask->work->mlwP->objP == NULL || !bhCetask->work->mlwP->obj_num ||
+                bhCetask->work->mlwP->obj_num > 128))) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
             return -1;
         }
         return 0;
@@ -1085,6 +1163,31 @@ static int validate_core_instruction(unsigned int opcode)
         return 0;
     }
     if (opcode == 252) {
+#ifdef RECVX_GAME_BOOT
+        unsigned char *command = bhScePtr;
+        if (current_task >= RECVX_EVENT_TASK_COUNT || !valid_task_record()) {
+            set_fault(RECVX_EVENT_FAULT_BAD_TASK, (uint8_t)opcode, command);
+            return -1;
+        }
+        if (!has_task_bytes(command, 2)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, command);
+            return -1;
+        }
+        if (bhCetask->loop < -1 || bhCetask->loop >= 3 || command[1] < 8 ||
+            !has_task_bytes(command + 2, 6) ||
+            !has_task_bytes((unsigned char *)((uintptr_t)command + command[1]), 1)) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, command);
+            return -1;
+        }
+        if (command[2] != 4 && command[2] != 56 && command[2] != 155) {
+            set_fault(RECVX_EVENT_FAULT_UNSUPPORTED, command[2], command + 2);
+            return -1;
+        }
+        bhScePtr = command + 2;
+        int result = validate_core_instruction(command[2]);
+        bhScePtr = command;
+        return result;
+#else
         uintptr_t target;
         extent = 2;
         if (!has_task_bytes(bhScePtr, extent) || bhCetask->loop < -1 ||
@@ -1100,11 +1203,32 @@ static int validate_core_instruction(unsigned int opcode)
             return -1;
         }
         return 0;
+#endif
     }
-    if (opcode == 253) {
+    if (opcode == 253
+#ifdef RECVX_GAME_BOOT
+        || opcode == 243
+#endif
+    ) {
+#ifdef RECVX_GAME_BOOT
+        if (current_task >= RECVX_EVENT_TASK_COUNT || !valid_task_record()) {
+            set_fault(RECVX_EVENT_FAULT_BAD_TASK, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+#endif
         int loop = bhCetask->loop;
         if (loop < 0 || loop >= 4 ||
-            bhCetask->lcondition[(unsigned int)loop] == NULL) {
+            bhCetask->lcondition[(unsigned int)loop] == NULL
+#ifdef RECVX_GAME_BOOT
+            || !while_condition[current_task][loop] || !while_body[current_task][loop] ||
+            while_condition[current_task][loop] != bhCetask->lcondition[loop] ||
+            while_body[current_task][loop] != bhCetask->lstack[loop] ||
+            for_body[current_task][loop] != NULL ||
+            !has_task_bytes(while_condition[current_task][loop], 6) ||
+            !has_task_bytes(while_body[current_task][loop], 1) ||
+            (uintptr_t)while_body[current_task][loop] > (uintptr_t)bhScePtr
+#endif
+        ) {
             set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
             return -1;
         }
@@ -1174,7 +1298,19 @@ int recvxEventCoreDispatchCondition(unsigned int *result)
         return -1;
     }
     condition = bhCetask->lcondition[(unsigned int)bhCetask->loop];
-    if (!has_task_bytes(condition, 1) || *condition != 56) {
+#ifdef RECVX_GAME_BOOT
+    if (!has_task_bytes(bhScePtr, 1)) {
+        set_fault(RECVX_EVENT_FAULT_PC_RANGE, 253, bhScePtr);
+        return -1;
+    }
+    if (validate_core_instruction(*bhScePtr) != 0)
+        return -1;
+#endif
+    if (!has_task_bytes(condition, 1) || (*condition != 56
+#ifdef RECVX_GAME_BOOT
+        && *condition != 155 && *condition != 4
+#endif
+    )) {
         set_fault(RECVX_EVENT_FAULT_UNSUPPORTED,
                   condition != NULL && has_task_bytes(condition, 1) ?
                       *condition : 253,
@@ -1242,7 +1378,10 @@ unsigned int bhSleep(void)
 
     bhCetask->loop++;
     loop = (unsigned char)bhCetask->loop;
-    if (current_task < RECVX_EVENT_TASK_COUNT) for_body[current_task][loop] = NULL;
+    if (current_task < RECVX_EVENT_TASK_COUNT) {
+        for_body[current_task][loop] = NULL;
+        clear_while(current_task, loop);
+    }
     bhCetask->cnt[loop] = read_u16(bhScePtr + 2);
     bhScePtr++;
     if (--bhCetask->cnt[loop] == 0) {
@@ -1266,12 +1405,48 @@ unsigned int bhSleeping(void)
 unsigned int bhFor(void)
 {
     unsigned int loop = (unsigned int)++bhCetask->loop;
+    clear_while(current_task, loop);
     bhCetask->cnt3 = bhCetask->cnt2 = bhCetask->cnt[loop] = read_u16(bhScePtr + 2);
     bhScePtr += 4;
     bhCetask->lstack[loop] = bhScePtr;
     for_body[current_task][loop] = bhScePtr;
     return 1;
 }
+
+#ifdef RECVX_GAME_BOOT
+unsigned int bhWhile(void)
+{
+    unsigned char *condition = bhScePtr + 2;
+    unsigned char *body = bhScePtr + bhScePtr[1];
+    unsigned int loop = (unsigned int)++bhCetask->loop;
+    bhCetask->lcondition[loop] = condition;
+    bhScePtr = bhCetask->lstack[loop] = body;
+    while_condition[current_task][loop] = condition;
+    while_body[current_task][loop] = body;
+    for_body[current_task][loop] = NULL;
+    return 1;
+}
+
+static unsigned int end_while(unsigned int yield_on_false)
+{
+    unsigned int condition_result;
+    unsigned int loop = (unsigned char)bhCetask->loop;
+    bhCetask->data = bhScePtr;
+    if (recvxEventCoreDispatchCondition(&condition_result) != 0)
+        return 0;
+    if (condition_result != 0) {
+        bhScePtr = bhCetask->lstack[loop];
+    } else {
+        bhScePtr = bhCetask->data + 1;
+        clear_while(current_task, loop);
+        --bhCetask->loop;
+        return !yield_on_false;
+    }
+    return 1;
+}
+unsigned int bhEwhile(void) { return end_while(1); }
+unsigned int bhEwhile2(void) { return end_while(0); }
+#endif
 
 unsigned int bhNext(void)
 {

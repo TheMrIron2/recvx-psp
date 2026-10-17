@@ -35,6 +35,9 @@
 #include "../../../ps2/veronica/prog/sub1.h"
 #include "../../../ps2/veronica/prog/sync.h"
 #include "../../../ps2/veronica/prog/main.h"
+#ifdef RECVX_GAME_BOOT
+#include "psp/game_boot_event_movie.h"
+#endif
 #ifdef RECVX_ENGINE_GAME_CALLBACK_TEST
 #include "psp/engine_original_fault.h"
 #endif
@@ -991,6 +994,9 @@ void bhSysCallDoordemo()
 // 100% matching!
 void bhSysCallMovie()
 {
+#ifdef RECVX_GAME_BOOT
+    recvxGameBootSysCallMovie();
+#else
     unsigned int sz;
 
     switch (sys->mvi_md) 
@@ -1134,6 +1140,7 @@ void bhSysCallMovie()
         sys->ts_flg = sys->mvi_tsb;
         break;
     }
+#endif
 }
 
 // 100% matching! 

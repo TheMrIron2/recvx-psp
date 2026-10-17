@@ -130,8 +130,3 @@ void SetUseVibrationUnit(int enabled) { (void)enabled; }
 void SetEventVibrationMode(int mode) { (void)mode; }
 void StartVibrationEx(int port, int vibration) { (void)port; (void)vibration; }
 void StopVibrationEx(void) { }
-int PlayStartMovieEx(int movie, int mode, int flag)
-{ (void)mode; (void)flag; recvxGameBootLog("movie=%d skipped: PSP movie decoding pending", movie); return 0; }
-int WaitPrePlayMovie(int mode) { (void)mode; return 3; }
-int PlayMovieMain(int mode) { (void)mode; return 3; }
-void PlayStopMovieEx(int mode) { (void)mode; }

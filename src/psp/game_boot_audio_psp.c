@@ -34,6 +34,8 @@ static int checked_at(int result, const char *call)
 #define checked(result) checked_at((result), #result)
 void recvxAudioLock(void) { if (semaphore >= 0) sceKernelWaitSema(semaphore, 1, NULL); }
 void recvxAudioUnlock(void) { if (semaphore >= 0) sceKernelSignalSema(semaphore, 1); }
+void recvxAudioNativeFlush(const void *data, size_t size)
+{ sceKernelDcacheWritebackRange(data, (unsigned int)size); }
 void recvxAudioNativeVolume(unsigned int voice, int volume, int pan)
 {
     if (!ready) return;
@@ -148,6 +150,7 @@ void recvxAudioOutputShutdown(void)
 }
 #else
 /* Call/ownership test double: advances voice durations, does not decode. */
+void recvxAudioNativeFlush(const void *data, size_t size) { (void)data; (void)size; }
 static uint64_t remaining[32];
 static unsigned int rates[32], ended;
 static int looping[32], paused[32];

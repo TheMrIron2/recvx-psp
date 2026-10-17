@@ -1,5 +1,6 @@
 #include <malloc.h>
 #include "psp/game_boot_audio.h"
+#include "psp/game_boot_movie.h"
 #include "psp/game_boot_render.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +41,7 @@ int main(int argc, char **argv)
         recvxGameBootInit(data_directory, arena, 12u * 1024u * 1024u) || recvxAudioOutputInit()) {
         pspDebugScreenPrintf("Game startup failed: arena or native audio unavailable.\nSAS=%08x\n%s\n",
             (unsigned int)recvxAudioNativeError(), recvxAudioNativeErrorCall());
+        recvxGameBootMovieShutdown();
         recvxAudioOutputShutdown();
     } else {
         recvxGameBootLog("main thread attributes=%08x; VFPU enabled", (unsigned int)main_thread.attr);
@@ -61,6 +63,7 @@ int main(int argc, char **argv)
             }
             recvxPlatformCheckCallbacks();
         }
+        recvxGameBootMovieShutdown();
         recvxAudioOutputShutdown();
         recvxGameBootRenderReset();
         recvxGameBootTexturesShutdown(); recvxGameBootDisplayShutdown();

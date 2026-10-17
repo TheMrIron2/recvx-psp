@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "psp/game_boot_audio.h"
+#include "psp/game_boot_movie_audio.h"
 
 #define VOICES 32
 #define BANKS 5
@@ -147,6 +148,7 @@ int recvxAudioInit(const char *root)
 void recvxAudioShutdown(void)
 {
     recvxAudioLock();
+    recvxMovieAudioStopLocked();
     for (int i = 0; i < VOICES; ++i) stop(&voices[i]);
     for (int k = 0; k < 2; ++k) for (int i = 0; i < BANKS; ++i) { free(banks[k][i].data); memset(&banks[k][i], 0, sizeof(Bank)); }
     for (int i = 0; i < BANKS; ++i) { free(sequences[i]); sequences[i] = NULL; sequence_sizes[i] = 0; }
@@ -486,6 +488,10 @@ void recvxAudioRender(int16_t *out, size_t frames)
         }
     }
     if (recvxAudioNativeRender(out, frames)) fail("native SAS synthesis failed");
+    if (recvxMovieAudioRenderLocked(frames)) {
+        recvxMovieAudioStopLocked();
+        fail("native movie ADPCM stream refill failed");
+    }
     ended = recvxAudioNativeEnded();
     for (int i = 0; i < VOICES; ++i) if (voices[i].active && !voices[i].paused) {
         if (ended & (1u << i)) voices[i].active = 0;

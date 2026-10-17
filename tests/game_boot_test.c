@@ -12,6 +12,8 @@
 #include "psp/game_boot.h"
 #include "psp/game_boot_render.h"
 #include "psp/game_boot_audio.h"
+#include "psp/game_boot_movie.h"
+#include "psp/game_boot_movie_audio.h"
 #include "psp/engine_original_lighting.h"
 #include "psp/engine_original_fault.h"
 #include "psp/original_clock.h"
@@ -47,7 +49,7 @@
 extern ADV_WORK AdvWork;
 extern RecvxLiveTaskProc bhSysTaskJumpTab[23];
 extern unsigned char NowLoadDisp;
-static unsigned int presentations, textured_frames, game_frames;
+static unsigned int presentations, textured_frames, game_frames, movie_presentations;
 static unsigned int audio_samples_due;
 static int capture;
 static const char *capture_path;
@@ -107,7 +109,7 @@ void recvxGameBootPresent(void)
         loading_captured = 1;
     }
     ++presentations;
-    if (game_frames) {
+    if (game_frames || recvxMovieAudioActive()) {
         /* Advance the native SAS call model at the same 30 Hz presentation
            cadence as hardware. It tracks compressed voice completion only;
            the host fixture never decodes samples or mixes software audio. */
@@ -150,6 +152,8 @@ void recvxGameBootPresent(void)
         assert(fwrite(pixels, 1, sizeof(pixels), f) == sizeof(pixels)); fclose(f);
         capture = 0;
     }
+    if (recvxGameBootMovieGetFrame()) ++movie_presentations;
+    recvxGameBootMovieFrameConsumed();
     recvxGameBootRenderConsume();
 }
 
@@ -1230,7 +1234,7 @@ int main(int argc, char **argv)
         puts("PASS: missing SYSTEM resource stops boot and retains failed read status");
         return 0;
     }
-    for (i = 0; i < 1200; ++i) {
+    for (i = 0; i < 10000; ++i) {
         tick(&input);
         if (sys->tk_flg & 2) warning_seen = 1;
         if (sys->tk_flg & 4) logo_seen = 1;
@@ -1415,6 +1419,7 @@ int main(int argc, char **argv)
     assert(GetReadFileStatus() == 0);
     if (recvxGameBootFault()) assert(recvxGameBootTick(&input) == -1); /* A fault cannot advance or fake a room. */
 #if UINTPTR_MAX == UINT32_MAX
+    unsigned int initial_presentations = presentations;
     for (i = 0; i < extra_frames && !recvxGameBootFault(); ++i) {
         recvxGameBootTick(&input); recvxOriginalEngineClockAdvance(2, 1);
     }
@@ -1422,9 +1427,12 @@ int main(int argc, char **argv)
     assert(!recvxGameBootFault());
     fprintf(stderr, "Original complete game frames: %u; event instructions: %u; task 2 PC: %u\n",
         game_frames, recvxEventCoreInstructionCount(), recvxEventCoreTaskPc(2));
-    assert(game_frames == extra_frames + 1);
+    assert(game_frames > 1 && game_frames <= extra_frames + 1);
+    assert(presentations >= initial_presentations + extra_frames);
+    fprintf(stderr, "Movie presentations (hardware call model): %u\n", movie_presentations);
 #endif
     recvxGameBootTexturesShutdown();
+    recvxGameBootMovieShutdown();
     recvxAudioShutdown();
     munmap(arena, arena_size);
 #if UINTPTR_MAX > UINT32_MAX

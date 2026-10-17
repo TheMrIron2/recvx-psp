@@ -5,6 +5,7 @@
 #include <pspkernel.h>
 #include "psp/game_boot.h"
 #include "psp/game_boot_render.h"
+#include "psp/game_boot_movie.h"
 #include "psp/engine_original_view.h"
 
 #define SHADOW_OFFSET (5u * 512u * 272u * 2u)
@@ -182,6 +183,31 @@ static void models(const RecvxBootRenderFrame *frame)
     sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
 }
 
+static void movie_frame(const uint32_t *pixels)
+{
+    sceGuDisable(GU_DEPTH_TEST); sceGuDisable(GU_CULL_FACE);
+    sceGuDisable(GU_ALPHA_TEST); sceGuDisable(GU_FOG); sceGuDisable(GU_BLEND);
+    sceGuEnable(GU_TEXTURE_2D);
+    sceGuTexMode(GU_PSM_8888, 0, 0, 0);
+    sceGuTexImage(0, 512, 512, 512, pixels);
+    /* Decoder alpha is immaterial: movies replace the opaque display. */
+    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGB);
+    sceGuTexWrap(GU_CLAMP, GU_CLAMP);
+    sceGuTexFilter(GU_NEAREST, GU_NEAREST);
+    sceGuTexScale(1, 1); sceGuTexOffset(0, 0); sceGuTexFlush();
+    for (unsigned int x = 0; x < 480; x += 64) {
+        unsigned int right = x + 64 < 480 ? x + 64 : 480;
+        Vertex *vertices = sceGuGetMemory(2 * sizeof(*vertices));
+        vertices[0] = (Vertex){x, 0, 0xffffffffu, x, 0, 0};
+        vertices[1] = (Vertex){right, 272, 0xffffffffu, right, 272, 0};
+        sceGuDrawArray(GU_SPRITES, GU_TEXTURE_32BITF | GU_COLOR_8888 |
+            GU_VERTEX_32BITF | GU_TRANSFORM_2D, 2, NULL, vertices);
+    }
+    sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
+    sceGuEnable(GU_BLEND);
+    sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+}
+
 void recvxGameBootPresent(void)
 {
     size_t count, i;
@@ -193,7 +219,9 @@ void recvxGameBootPresent(void)
     sceGuStart(GU_DIRECT, display_list);
     sceGuClearColor(frame->vertex_count ? abgr(recvxEngineOriginalViewBackgroundColor()) : 0xff000000);
     sceGuClearDepth(0); sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
-    models(frame);
+    const uint32_t *video = recvxGameBootMovieGetFrame();
+    if (video) movie_frame(video);
+    else models(frame);
     sceGuTexWrap(GU_CLAMP, GU_CLAMP);
     sceGuTexScale(1, 1); sceGuTexOffset(0, 0);
     for (i = 0; i < count; ++i) {
@@ -227,6 +255,7 @@ void recvxGameBootPresent(void)
         }
     }
     sceGuFinish(); sceGuSync(0, 0);
+    recvxGameBootMovieFrameConsumed();
     recvxGameBootRenderConsume();
 }
 void recvxGameBootDisplaySwap(void) { scene_buffer = sceGuSwapBuffers(); }

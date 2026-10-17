@@ -46,6 +46,33 @@ static void bad(const unsigned char *bytes, size_t count, enum RecvxEventCoreFau
 }
 int main(void)
 {
+    const unsigned int flags[4]={0xfffffee7u,0xffffffffu,0xffffffe7u,0xffffffffu};
+    for(unsigned int mode=0;mode<4;++mode){
+        unsigned char command[]={105,23,(unsigned char)mode,0,255,0};
+        setup(command,sizeof(command));actor.flg=0xffffffffu;
+        tick();assert(actor.flg==flags[mode]);
+    }
+    const unsigned char reset_root[]={105,36,255,0};
+    NJS_CNK_OBJECT roots[2];ML_WORK model;
+    setup(reset_root,sizeof(reset_root));memset(roots,0,sizeof(roots));memset(&model,0,sizeof(model));
+    roots[0].pos[0]=3;roots[0].pos[1]=-8;roots[0].pos[2]=99;roots[0].ang[1]=1234;
+    roots[1].pos[0]=17;model.objP=roots;model.obj_num=2;actor.mlwP=&model;
+    tick();assert(!roots[0].pos[0]&&!roots[0].pos[1]&&!roots[0].pos[2]);
+    assert(roots[0].ang[1]==1234&&roots[1].pos[0]==17&&actor.mlwP==&model);
+    setup(reset_root,sizeof(reset_root));
+    assert(bhEventScheduler2()==-1&&recvxEventCoreGetFault()->code==RECVX_EVENT_FAULT_BAD_OPERAND);
+    setup(reset_root,sizeof(reset_root));actor.mlwP=&model;model.objP=NULL;
+    assert(bhEventScheduler2()==-1&&recvxEventCoreGetFault()->code==RECVX_EVENT_FAULT_BAD_OPERAND);
+    setup(reset_root,sizeof(reset_root));actor.mlwP=&model;model.objP=roots;model.obj_num=0;
+    assert(bhEventScheduler2()==-1&&recvxEventCoreGetFault()->code==RECVX_EVENT_FAULT_BAD_OPERAND);
+    setup(reset_root,sizeof(reset_root));actor.mlwP=&model;model.obj_num=129;
+    assert(bhEventScheduler2()==-1&&recvxEventCoreGetFault()->code==RECVX_EVENT_FAULT_BAD_OPERAND);
+    setup(reset_root,sizeof(reset_root));bhEtask[0].work=NULL;
+    assert(bhEventScheduler2()==-1&&recvxEventCoreGetFault()->code==RECVX_EVENT_FAULT_BAD_TASK);
+    const unsigned char invalid_flags[]={105,23,4,0,255,0};
+    const unsigned char short_flags[]={105,23,0};
+    bad(invalid_flags,sizeof(invalid_flags),RECVX_EVENT_FAULT_BAD_OPERAND);
+    bad(short_flags,sizeof(short_flags),RECVX_EVENT_FAULT_TRUNCATED);
     const unsigned char motion[] = {
         105,5,10,12,255,0, 105,12,0,1,1,0,
         250,0,3,0, 105,2,0,254, 251,0,255,0
