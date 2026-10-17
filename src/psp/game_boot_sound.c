@@ -13,6 +13,8 @@ static int room_case, init_script, current_bgm = -1, pending_bgm = -1, pending_v
 static int system_slot, weapon_slot, foot_slot[3], request_kind;
 static int background[3], background_pending[3];
 static short background_fade[3];
+static int max_event_slot = 4, max_object_slot = 1;
+static void original_spatial(const NJS_POINT3 *position, int room_fx, int *volume, int *pan);
 extern char ThreeDVolTbl[510], PanTbl360[68], PanTbl360Vol[68];
 static void check(void)
 {
@@ -28,6 +30,7 @@ void recvxGameBootSoundReset(void)
 {
     room_case = init_script = system_slot = weapon_slot = request_kind = 0;
     current_bgm = pending_bgm = -1; memset(foot_slot, 0, sizeof(foot_slot));
+    max_event_slot = 4; max_object_slot = 1;
     for (int i = 0; i < 3; ++i) { background[i] = -1; background_pending[i] = 0; }
 }
 void recvxGameBootSoundTick(void)
@@ -97,10 +100,15 @@ void StopBgm(int fade) { if (fade) recvxAudioVolume(0, -127, fade); else StopAdx
 void StopBgm2(void) { StopBgm(0); }
 void PlayVoiceEx2(int partition, int voice, NJS_POINT3 *position, int mode, int fade, int pause)
 {
-    (void)position;
-    recvxAudioVolume(1, fade ? -127 : 0, 0);
+    int volume = 0, pan = 0;
+    if (mode < 0 || mode > 2 || fade < 0)
+        recvxGameBootUnsupported("invalid original voice parameters");
+    if (recvxAudioStatus(1)) StopAdx(1);
+    if (mode != 1) original_spatial(position, 0, &volume, &pan);
+    recvxAudioPan(1, 0, pan);
+    recvxAudioVolume(1, mode == 1 && fade ? -127 : volume, 0);
     if (mode != 2) PlayAdxEx(1, (unsigned int)partition, (unsigned int)voice, pause);
-    if (fade) recvxAudioVolume(1, 0, fade);
+    if (mode == 1 && fade) recvxAudioVolume(1, 0, fade);
 }
 void PlayVoiceEx(int voice, NJS_POINT3 *position, int mode, int fade, int pause)
 { PlayVoiceEx2(PatId[1], voice, position, mode, fade, pause); }
@@ -130,6 +138,52 @@ static void spatial(const NJS_POINT3 *position, int field, int *volume, int *pan
     if (index >= 68) index = 67;
     *pan = PanTbl360[index];
     *volume += ThreeDVolTbl[distance] + PanTbl360Vol[index] - recvxAudioEnvironment(9) / 12;
+}
+static void original_spatial(const NJS_POINT3 *position, int room_fx, int *volume, int *pan)
+{
+    double x, y, z, distance;
+    unsigned int angle, index;
+    int bin;
+    if (!position || !isfinite(position->x) || !isfinite(position->y) || !isfinite(position->z) ||
+        !isfinite(cam.wpx) || !isfinite(cam.wpy) || !isfinite(cam.wpz))
+        recvxGameBootUnsupported("invalid original spatial sound position");
+    x = (double)cam.wpx - position->x;
+    y = (double)cam.wpy - position->y;
+    z = (double)cam.wpz - position->z;
+    distance = sqrt(x * x + y * y + z * z);
+    bin = distance >= 510 ? 509 : (int)distance;
+    angle = (unsigned int)(cam.ay + (int)(10430.381f * atan2f((float)x, (float)z))) & 65535u;
+    index = (unsigned int)(0.005493164f * angle / 5.0f);
+    if (index >= 68) index = 67;
+    *pan = PanTbl360[index];
+    *volume = ThreeDVolTbl[bin] + PanTbl360Vol[index] - (room_fx ? recvxAudioEnvironment(9) / 12 : 0);
+}
+int CustomMidiSlotDef(int objects, int events)
+{
+    if (objects < 0 || events < 0 || objects > 3 || events > 5 || objects + events > 5) {
+        max_object_slot = 1; max_event_slot = 4; return 1;
+    }
+    max_object_slot = objects; max_event_slot = events;
+    return 0;
+}
+int CallNativeEventSe(int slot, NJS_POINT3 *position, int sound, int mode)
+{
+    const int mapping[5] = {7, 6, 5, 4, 3};
+    int volume = 0, pan = 0;
+    if (slot < 0 || slot >= 5 || mode < 0 || mode > 1)
+        recvxGameBootUnsupported("invalid native event sound parameters");
+    if (slot > max_event_slot) return 1;
+    if (!mode) original_spatial(position, 1, &volume, &pan);
+    recvxAudioPlayMidi(mapping[slot], (sound & 0xffff00ff) | 0x200, volume, pan);
+    check();
+    return 0;
+}
+int StopNativeEventSe(int slot)
+{
+    const int mapping[5] = {7, 6, 5, 4, 3};
+    if (slot < 0 || slot >= 5) recvxGameBootUnsupported("invalid native event sound slot");
+    if (slot > max_event_slot) return 1;
+    recvxAudioStopMidi(mapping[slot]); check(); return 0;
 }
 void CallSystemSeBasic(int sound, int volume, int fx)
 {
@@ -175,12 +229,21 @@ void CallBackGroundSeEx(unsigned int slot, int sound, short frames)
     if (slot >= 3) recvxGameBootUnsupported("invalid background sound slot");
     background[slot] = sound; background_fade[slot] = frames;
     if (init_script) { background_pending[slot] = 1; return; }
-    recvxAudioPlayMidi((int)slot, (sound & 255) | 0x300, recvxAudioEnvironment(5 + (slot == 1)), 0); check();
+    if (frames < 0) recvxGameBootUnsupported("invalid background sound fade");
+    recvxAudioPlayMidiFade((int)slot, (sound & 255) | 0x300,
+        recvxAudioEnvironment(5 + (slot == 1)), 0, frames); check();
 }
 void CallBackGroundSe(unsigned int slot, int sound) { CallBackGroundSeEx(slot, sound, 0); }
 void CallBackGroundSe2(unsigned int slot, int sound)
 { if (slot >= 3) recvxGameBootUnsupported("invalid background sound slot"); if (background[slot] != sound) CallBackGroundSeEx(slot, sound, 0); }
-void StopBackGroundSeEx(unsigned int slot, short frames) { (void)frames; recvxAudioStopMidi((int)slot); }
+void StopBackGroundSeEx(unsigned int slot, short frames)
+{
+    if (slot >= 3 || frames < 0) recvxGameBootUnsupported("invalid background sound stop");
+    background[slot] = -1; background_pending[slot] = 0;
+    if (frames) recvxAudioMidiVolume((int)slot, -127, frames, 1);
+    else recvxAudioStopMidi((int)slot);
+    check();
+}
 void StopBackGroundSe2(unsigned int slot) { StopBackGroundSeEx(slot, 0); }
 void SendSoundCommand(unsigned int command)
 {

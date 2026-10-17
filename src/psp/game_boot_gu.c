@@ -7,6 +7,8 @@
 #include "psp/game_boot_render.h"
 #include "psp/engine_original_view.h"
 
+#define SHADOW_OFFSET (5u * 512u * 272u * 2u)
+static void *scene_buffer;
 static unsigned int display_list[262144] __attribute__((aligned(16)));
 typedef struct { float u, v; unsigned int color; float x, y, z; } Vertex;
 
@@ -15,6 +17,7 @@ static unsigned int abgr(unsigned int argb)
 
 int recvxGameBootDisplayInit(void)
 {
+    scene_buffer = NULL;
     sceGuInit();
     sceGuStart(GU_DIRECT, display_list);
     sceGuDrawBuffer(GU_PSM_8888, (void *)0, 512);
@@ -46,6 +49,20 @@ static void sprite(float x1, float y1, float x2, float y2,
         GU_VERTEX_32BITF | GU_TRANSFORM_2D, 2, NULL, v);
 }
 
+static void gradient_polygon(const RecvxBootDraw *draw)
+{
+    static const unsigned int order[6] = {0, 1, 2, 0, 2, 3};
+    Vertex *vertices = sceGuGetMemory(6 * sizeof(*vertices));
+    for (unsigned int i = 0; i < 6; ++i) {
+        unsigned int corner = order[i];
+        vertices[i] = (Vertex){0, 0, abgr(draw->vertex_color[corner]),
+            draw->points[corner].x * 0.75f, draw->points[corner].y * (272.0f / 480), 0};
+    }
+    sceGuShadeModel(GU_SMOOTH);
+    sceGuDrawArray(GU_TRIANGLES, GU_TEXTURE_32BITF | GU_COLOR_8888 |
+        GU_VERTEX_32BITF | GU_TRANSFORM_2D, 6, NULL, vertices);
+}
+
 static int blend_factor(int factor)
 {
     switch (factor) {
@@ -57,6 +74,56 @@ static int blend_factor(int factor)
     case 6: return GU_ONE_MINUS_SRC_ALPHA;
     case 10: case 11: return GU_FIX;
     default: recvxGameBootUnsupported("unported original 3D blend factor");
+    }
+}
+
+static void shadow_target(void)
+{ sceGuDrawBufferList(GU_PSM_5551, (void *)SHADOW_OFFSET, 512); }
+static void scene_target(void)
+{ sceGuDrawBufferList(GU_PSM_8888, scene_buffer, 512); }
+static void shadow(const RecvxBootRenderFrame *frame, const RecvxBootRenderBatch *batch)
+{
+    sceGuDisable(GU_FOG);
+    sceGuDisable(GU_ALPHA_TEST); sceGuDisable(GU_CULL_FACE);
+    sceGuDepthMask(GU_TRUE); sceGuDisable(GU_TEXTURE_2D);
+    sceGuShadeModel(GU_FLAT);
+    if (batch->kind == RECVX_RENDER_SHADOW_START) {
+        shadow_target();
+        sceGuClearColor(0); sceGuClear(GU_COLOR_BUFFER_BIT);
+    } else if (batch->kind == RECVX_RENDER_SHADOW_END) {
+        scene_target();
+    } else if (batch->kind == RECVX_RENDER_SHADOW_COMPOSITE) {
+        const RecvxBootRenderVertex *rectangle = frame->vertices + batch->first;
+        scene_target();
+        sceGuDisable(GU_DEPTH_TEST); sceGuEnable(GU_BLEND);
+        sceGuBlendFunc(GU_REVERSE_SUBTRACT, GU_FIX, GU_FIX, 0xffffff, 0xffffff);
+        sceGuEnable(GU_TEXTURE_2D);
+        sceGuTexSync(); sceGuTexFlush();
+        sceGuTexMode(GU_PSM_5551, 0, 0, 0);
+        sceGuTexImage(0, 512, 512, 512, (void *)(0x04000000u + SHADOW_OFFSET));
+        sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGB);
+        sceGuTexWrap(GU_CLAMP, GU_CLAMP);
+        sceGuTexScale(1, 1); sceGuTexOffset(0, 0);
+        sceGuTexFilter(GU_NEAREST, GU_NEAREST);
+        sceGuDrawArray(GU_SPRITES, GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
+            2, NULL, rectangle);
+        /* The PS2 clears only the rectangle it composited, retaining the mask
+           outside it until the next shadow group. Share the scene depth. */
+        shadow_target();
+        sceGuDisable(GU_BLEND); sceGuDisable(GU_TEXTURE_2D);
+        Vertex *clear = sceGuGetMemory(2 * sizeof(*clear));
+        clear[0] = (Vertex){0,0,0,rectangle[0].x,rectangle[0].y,0};
+        clear[1] = (Vertex){0,0,0,rectangle[1].x,rectangle[1].y,0};
+        sceGuDrawArray(GU_SPRITES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TEXTURE_32BITF | GU_TRANSFORM_2D,
+            2, NULL, clear);
+        sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
+    } else {
+        shadow_target();
+        sceGuEnable(GU_DEPTH_TEST); sceGuEnable(GU_BLEND);
+        sceGuBlendFunc(batch->kind == RECVX_RENDER_SHADOW_ADD ? GU_ADD : GU_REVERSE_SUBTRACT,
+            GU_FIX, GU_FIX, 0xffffff, 0xffffff);
+        sceGumDrawArray(GU_TRIANGLES, GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+            batch->count, NULL, frame->vertices + batch->first);
     }
 }
 
@@ -72,7 +139,19 @@ static void models(const RecvxBootRenderFrame *frame)
     sceGuEnable(GU_ALPHA_TEST); sceGuAlphaFunc(GU_GREATER, 0, 255);
     for (size_t i = 0; i < frame->batch_count; ++i) {
         const RecvxBootRenderBatch *batch = &frame->batches[i];
+        if (batch->kind >= RECVX_RENDER_SHADOW_START) {
+            shadow(frame, batch);
+            continue;
+        }
+        if (batch->kind == RECVX_RENDER_HALF_FOG) {
+            /* Finite powers of two keep the GE's (far + viewZ)/(far-near)
+               exactly 1/2 for the validated authored sprite depth range. */
+            sceGuFog(-0x1p64f, 0x1p64f, batch->fog_color);
+            sceGuEnable(GU_FOG);
+        } else sceGuDisable(GU_FOG);
         const RecvxBootTexture *texture = batch->texture;
+        sceGuEnable(GU_DEPTH_TEST); sceGuDepthMask(GU_FALSE);
+        sceGuEnable(GU_ALPHA_TEST); sceGuAlphaFunc(GU_GREATER, 0, 255);
         sceGuShadeModel(batch->attributes & 0x20u ? GU_FLAT : GU_SMOOTH);
         if (batch->attributes & 0x10u) sceGuDisable(GU_CULL_FACE);
         else sceGuEnable(GU_CULL_FACE);
@@ -90,9 +169,14 @@ static void models(const RecvxBootRenderFrame *frame)
             sceGuTexFilter(batch->sampler & 4 ? GU_LINEAR : GU_NEAREST, batch->sampler & 4 ? GU_LINEAR : GU_NEAREST);
             sceGuTexFlush();
         } else sceGuDisable(GU_TEXTURE_2D);
-        sceGumDrawArray(GU_TRIANGLES, GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+        if (batch->kind == RECVX_RENDER_SCREEN_TRIANGLES)
+            sceGuDrawArray(GU_TRIANGLES, GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
+                batch->count, NULL, frame->vertices + batch->first);
+        else sceGumDrawArray(batch->kind == RECVX_RENDER_LINES ? GU_LINES : GU_TRIANGLES,
+            GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
             batch->count, NULL, frame->vertices + batch->first);
     }
+    sceGuDisable(GU_FOG);
     sceGuDisable(GU_DEPTH_TEST); sceGuDisable(GU_CULL_FACE); sceGuDisable(GU_ALPHA_TEST);
     sceGuEnable(GU_BLEND);
     sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
@@ -118,7 +202,8 @@ void recvxGameBootPresent(void)
         const RecvxBootTexture *t = d->texture;
         if (!t) {
             sceGuDisable(GU_TEXTURE_2D);
-            sprite(q->x1, q->y1, q->x2, q->y2, 0, 0, 0, 0, d->color);
+            if (d->color_gradient) gradient_polygon(d);
+            else sprite(q->x1, q->y1, q->x2, q->y2, 0, 0, 0, 0, d->color);
         } else {
             unsigned int tile;
             float u1 = q->u1 * t->width, u2 = q->u2 * t->width;
@@ -144,5 +229,5 @@ void recvxGameBootPresent(void)
     sceGuFinish(); sceGuSync(0, 0);
     recvxGameBootRenderConsume();
 }
-void recvxGameBootDisplaySwap(void) { sceGuSwapBuffers(); }
+void recvxGameBootDisplaySwap(void) { scene_buffer = sceGuSwapBuffers(); }
 void recvxGameBootDisplayShutdown(void) { sceGuTerm(); }

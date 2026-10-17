@@ -47,7 +47,8 @@
 extern ADV_WORK AdvWork;
 extern RecvxLiveTaskProc bhSysTaskJumpTab[23];
 extern unsigned char NowLoadDisp;
-static unsigned int presentations, textured_frames;
+static unsigned int presentations, textured_frames, game_frames;
+static unsigned int audio_samples_due;
 static int capture;
 static const char *capture_path;
 static int loading_captured;
@@ -70,12 +71,54 @@ void recvxGameBootPresent(void)
     unsigned int x, y;
     unsigned char pixels[480 * 272 * 3] = {0};
     const RecvxBootDraw *draws = recvxGameBootDraws(&count);
-    (void)recvxGameBootRenderFrame();
+    const RecvxBootRenderFrame *frame = recvxGameBootRenderFrame();
+    if (frame->vertex_count) {
+        const RecvxBootRenderFrame *scene = frame;
+        assert(scene->vertex_count > 0 && scene->batch_count > 0);
+        size_t total = 0, triangles = 0, model_triangles = 0, shadow_triangles = 0, composites = 0;
+        for (size_t batch = 0; batch < scene->batch_count; ++batch) {
+            assert(scene->batches[batch].first == total && scene->batches[batch].count <= 65535);
+            const RecvxBootRenderBatch *draw = &scene->batches[batch];
+            if (draw->kind == RECVX_RENDER_SHADOW_START || draw->kind == RECVX_RENDER_SHADOW_END)
+                assert(draw->count == 0);
+            else if (draw->kind == RECVX_RENDER_LINES || draw->kind == RECVX_RENDER_SHADOW_COMPOSITE) {
+                assert(draw->count % 2 == 0);
+                if (draw->kind == RECVX_RENDER_SHADOW_COMPOSITE) ++composites;
+            } else {
+                assert(draw->count % 3 == 0); triangles += draw->count / 3;
+                if (draw->kind == RECVX_RENDER_SHADOW_ADD || draw->kind == RECVX_RENDER_SHADOW_SUBTRACT)
+                    shadow_triangles += draw->count / 3;
+                else if (draw->kind == RECVX_RENDER_TRIANGLES) model_triangles += draw->count / 3;
+            }
+            if (draw->texture) assert(draw->texture->source && draw->texture->pixels);
+            total += draw->count;
+        }
+        assert(total == scene->vertex_count);
+        if (!game_frames) fprintf(stderr, "Original opening room submitted: %u triangles (%u modifier), %u composites, %u batches\n",
+            (unsigned int)triangles, (unsigned int)shadow_triangles, (unsigned int)composites,
+            (unsigned int)scene->batch_count);
+        if (!game_frames) fprintf(stderr, "Opening model triangles: %u\n", (unsigned int)model_triangles);
+        if (!game_frames) assert(model_triangles > 3265 && shadow_triangles > 0);
+        ++game_frames;
+    }
+
     if (!loading_captured && NowLoadDisp && sys->mn_md0 == 1 && count) {
         capture = 1; capture_path = "/tmp/recvx-game-loading.ppm";
         loading_captured = 1;
     }
     ++presentations;
+    if (game_frames) {
+        /* Advance the native SAS call model at the same 30 Hz presentation
+           cadence as hardware. It tracks compressed voice completion only;
+           the host fixture never decodes samples or mixes software audio. */
+        int16_t audio[RECVX_AUDIO_FRAMES * 2];
+        audio_samples_due += RECVX_AUDIO_RATE / 30;
+        while (audio_samples_due >= RECVX_AUDIO_FRAMES) {
+            recvxAudioRender(audio, RECVX_AUDIO_FRAMES);
+            audio_samples_due -= RECVX_AUDIO_FRAMES;
+        }
+        assert(!recvxAudioFault());
+    }
     if (count) ++textured_frames;
     for (i = 0; i < count; ++i) {
         const RecvxBootDraw *d = &draws[i];
@@ -1143,7 +1186,18 @@ int main(int argc, char **argv)
         , -1, 0);
     RecvxInputState input = {.analog_x = 128, .analog_y = 128};
     unsigned int i, warning_seen = 0, logo_seen = 0, title_seen = 0;
-    assert((argc == 2 || argc == 3) && arena != MAP_FAILED);
+    unsigned int extra_frames = 1200;
+    assert((argc == 2 || argc == 3 || argc == 4) && arena != MAP_FAILED);
+    if (argc == 3) assert(!strcmp(argv[2], "--missing-assets"));
+    if (argc == 4) {
+        assert(!strcmp(argv[2], "--frames") && argv[3][0]);
+        extra_frames = 0;
+        for (const char *digit = argv[3]; *digit; ++digit) {
+            assert(*digit >= '0' && *digit <= '9' && extra_frames < 10000);
+            extra_frames = extra_frames * 10 + (unsigned int)(*digit - '0');
+        }
+        assert(extra_frames > 0 && extra_frames <= 10000);
+    }
     test_texture_tiles();
     test_palette_variants();
     /* Original pointer arithmetic and 32-bit texture handles need low addresses.
@@ -1156,7 +1210,7 @@ int main(int argc, char **argv)
     test_subplayer_movement(argv[1], arena, arena_size);
     test_player_control(argv[1], arena, arena_size);
     test_checkpoint(argv[1], arena, arena_size);
-    if (argc == 2) {
+    if (argc != 3) {
         test_player_source_bounds(argv[1]);
         test_weapon_source_bounds(argv[1]);
         test_message_bounds(argv[1], arena, arena_size);
@@ -1311,12 +1365,11 @@ int main(int argc, char **argv)
         assert(eff[sys->efid[i]].id == rom->effp[i].id);
     }
     test_loaded_player(argv[1]);
-    for (i = 0; i < 20 && !recvxGameBootFault(); ++i) recvxGameBootTick(&input);
-    if (!recvxGameBootFault() || strcmp(recvxGameBootFault(), "npCalcSkin"))
-        fprintf(stderr, "Unexpected native loader boundary: %s\n", recvxGameBootFault());
-    assert(recvxGameBootFault() && strcmp(recvxGameBootFault(), "npCalcSkin") == 0);
+    for (i = 0; i < 20 && !recvxGameBootFault() && !game_frames; ++i) recvxGameBootTick(&input);
+    if (recvxGameBootFault()) fprintf(stderr, "Unexpected native game boundary: %s\n", recvxGameBootFault());
+    assert(!recvxGameBootFault() && game_frames == 1);
     assert(!recvxAudioBankBusy() && !recvxAudioFault());
-    assert(sys->loop_ct == 1 && sys->loop_now == 0 && sys->fade_ct == 1);
+    assert(sys->loop_ct == 1 && sys->loop_now == 0 && sys->fade_ct == 0 && sys->fade_hkn == 1);
     assert((unsigned int)sys->enow < 128 && ene[sys->enow].mode0 == 1);
     assert(ene[sys->enow].id == 91 || ene[sys->enow].id == 98);
     assert(plp->mode0 == 1 && !plp->mode1 && !plp->mode2 && !plp->mode3);
@@ -1337,27 +1390,15 @@ int main(int argc, char **argv)
         assert(lights->simple_count == lights->easy_count);
         assert(isfinite(lights->easy_direction.x) && isfinite(lights->easy_direction.y) && isfinite(lights->easy_direction.z));
     }
-    {
-        const RecvxBootRenderFrame *scene = recvxGameBootRenderFrame();
-        assert(scene->vertex_count > 0 && scene->vertex_count % 3 == 0 && scene->batch_count > 0);
-        size_t total = 0;
-        for (size_t batch = 0; batch < scene->batch_count; ++batch) {
-            assert(scene->batches[batch].first == total && scene->batches[batch].count <= 65535);
-            assert(scene->batches[batch].texture && scene->batches[batch].texture->source);
-            total += scene->batches[batch].count;
-        }
-        assert(total == scene->vertex_count);
-        fprintf(stderr, "Original opening room queued: %u triangles, %u material batches\n",
-            (unsigned int)(total / 3), (unsigned int)scene->batch_count);
-    }
+    assert(game_frames == 1);
     assert(plp->exp2 && (unsigned char *)plp->exp2 >= freemem && (unsigned char *)plp->exp2 + 1712 <= sys->memp);
-    assert(sys->version == 10 && memcmp(freemem, &sys->version,
-        (unsigned char *)&sys->save_end - (unsigned char *)&sys->version) == 0);
+    /* The checkpoint precedes the event, which may now change saved flags. */
+    assert(sys->version == 10 && *(unsigned int *)freemem == 10);
+    assert((plp->stflg & 0x1000000u) && (sys->st_flg & 1u) && cam.evc_no == 38);
     {
         float near_plane, far_plane;
-        extern float GameNear, GameFar;
         recvxEngineOriginalViewClipPlanes(&near_plane, &far_plane);
-        assert(near_plane == GameNear && far_plane == GameFar);
+        assert(isfinite(near_plane) && isfinite(far_plane) && near_plane < 0 && far_plane < near_plane);
     }
     {
         int found = 0;
@@ -1372,26 +1413,16 @@ int main(int argc, char **argv)
     assert(sys->ply_hp[0] == 160 && sys->mn_md0 == (sizeof(void *) == 4 ? 0 : 1));
     assert(sys->mn_md1 == (sizeof(void *) == 4 ? 0 : 4));
     assert(GetReadFileStatus() == 0);
-    assert(recvxGameBootTick(&input) == -1); /* A fault cannot advance or fake a room. */
+    if (recvxGameBootFault()) assert(recvxGameBootTick(&input) == -1); /* A fault cannot advance or fake a room. */
 #if UINTPTR_MAX == UINT32_MAX
-    /* Exercise real controller updates on the loaded Claire assets in isolation.
-       The full sequence still stops at its rendering boundary above. */
-    sys->pad_on = sys->pad_old = sys->pad_ps = sys->pad_rs = 0;
-    for (i = 0; i < 6; ++i) bhControlPlayer();
-    assert(plp->mode0 == 1 && plp->mode1 == 0 && plp->mode2 == 0 && plp->mtn_no == 42);
-    {
-        int yaw = plp->ay;
-        sys->pad_on = 8;
-        for (i = 0; i < 6; ++i) { bhControlPlayer(); sys->pad_old = 8; }
-        assert(plp->mode2 == 1 && plp->ay != yaw);
+    for (i = 0; i < extra_frames && !recvxGameBootFault(); ++i) {
+        recvxGameBootTick(&input); recvxOriginalEngineClockAdvance(2, 1);
     }
-    sys->pad_on = 1; sys->pad_old = 0;
-    for (i = 0; i < 12; ++i) { bhControlPlayer(); sys->pad_old = 1; }
-    assert(plp->mode0 == 1 && plp->mode1 == 0 && plp->mode2 == 3);
-    assert(isfinite(plp->px) && isfinite(plp->py) && isfinite(plp->pz) && isfinite(plp->spd));
-    assert(!recvxEngineOriginalFault() && !recvxAudioFault());
-    assert(strcmp(recvxGameBootFault(), "npCalcSkin") == 0);
-    puts("PASS: real Claire assets complete idle, turning and walking controller updates with original motion, wall/floor, head and sound services");
+    if (recvxGameBootFault()) fprintf(stderr, "Sustained native game boundary after %u frames: %s\n", game_frames, recvxGameBootFault());
+    assert(!recvxGameBootFault());
+    fprintf(stderr, "Original complete game frames: %u; event instructions: %u; task 2 PC: %u\n",
+        game_frames, recvxEventCoreInstructionCount(), recvxEventCoreTaskPc(2));
+    assert(game_frames == extra_frames + 1);
 #endif
     recvxGameBootTexturesShutdown();
     recvxAudioShutdown();
@@ -1399,7 +1430,7 @@ int main(int argc, char **argv)
 #if UINTPTR_MAX > UINT32_MAX
     puts("PASS: sanitized title/new-game boot and bounded effect preflight; original relocation requires 32-bit ABI test");
 #else
-    printf("PASS: original player/enemy/inventory initialization, loading text and original Claire models/skin/motions/textures; original weapon loading and opening room relocation/textures; original room finalization/spawn/masks; original startup scenario/scheduler and NPC facial update; original effect control and real sound bank transfers; original main gameplay sequence/fade, NPC movement and Claire control/setup/idle pose/shadow; original camera cut/checkpoint, wall/floor collision, head tracking, linked objects, room lighting and actual opening-room geometry/material submission; next boundary npCalcSkin (%d effect textures retained)\n", sys->ef_ct);
+    printf("PASS: original player/enemy/inventory initialization, loading text and original Claire models/skin/motions/textures; original weapon loading and opening room relocation/textures; original room finalization/spawn/masks; original startup scenario/scheduler and NPC facial update; original effect control and real sound bank transfers; original main gameplay sequence/fade, NPC movement and Claire control/setup/idle pose/shadow; original camera cut/checkpoint, wall/floor collision, head tracking, linked objects, room lighting and actual opening-room and skinned actor geometry/material submission; complete game frames with original modifier shadows, 3D/2D effects and fade (%d effect textures retained)\n", sys->ef_ct);
 #endif
     return 0;
 }

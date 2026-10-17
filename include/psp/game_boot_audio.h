@@ -18,6 +18,7 @@ int recvxAudioAdx(unsigned int slot, unsigned int partition, unsigned int file);
 void recvxAudioStop(unsigned int slot);
 void recvxAudioPause(unsigned int slot, int paused);
 void recvxAudioVolume(unsigned int slot, int volume, int frames);
+void recvxAudioPan(unsigned int slot, unsigned int channel, int pan);
 int recvxAudioStatus(unsigned int slot);
 unsigned int recvxAudioTime(unsigned int slot);
 void recvxAudioStopAll(int frames);
@@ -26,10 +27,12 @@ int recvxAudioRequestBank(unsigned int key);
 int recvxAudioBankBusy(void);
 int recvxAudioPlaySe(int slot, int sound, int volume, int pan);
 int recvxAudioPlayMidi(int slot, int sound, int volume, int pan);
+int recvxAudioPlayMidiFade(int slot, int sound, int volume, int pan, int frames);
 void recvxAudioStopSe(int slot);
 void recvxAudioUpdateSe(int slot, int volume, int pan, int pitch);
 int recvxAudioEnvironment(unsigned int field);
 void recvxAudioStopMidi(int slot);
+void recvxAudioMidiVolume(int slot, int volume, int frames, int stop_when_done);
 void recvxAudioAdvanceFades(void);
 /* Native compressed playback. Host tests implement a call/ownership model,
    never an ADPCM decoder or software audio mixer. */

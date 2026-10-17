@@ -18,7 +18,7 @@ O_WRK eff[512];
 O_WORK *ef_Zanzo[6];
 unsigned char *freemem;
 static SYS_WORK state;
-static struct { NJS_CNK_OBJECT object[2]; NJS_CNK_MODEL model; O_WORK pose[2]; } arena;
+static struct { NJS_CNK_OBJECT object[2]; NJS_CNK_MODEL model; O_WORK pose[2]; O_WRK actor; } arena;
 static NJS_MATRIX view, drawn;
 static unsigned int checks, events[32], count, models, rectangles;
 static unsigned int controls[16], control_count, filter;
@@ -41,6 +41,15 @@ Sint32 njSetTextureNum(Uint32 number) { check(list && number < list->nbTexture);
 void njDrawPolygon(NJS_POLYGON_VTX *p, Int n, Int trans)
 { check(p == eff[1].pv && n == 4 && trans == 1); ++rectangles; events[count++] = 200; }
 void bhSetHalfLight(void) { events[count++] = 300; }
+/* This fixture isolates queue dispatch. Actual 3D leaves have their own suite. */
+void bhDrawMdfEffect(unsigned int *p, int n) { (void)p; if (n) recvxGameBootUnsupported("bhDrawMdfEffect"); }
+void bhDrawLinEffect(unsigned int *p, int n) { (void)p; if (n) recvxGameBootUnsupported("bhDrawLinEffect"); }
+void bhDrawNtxEffect3D(unsigned int *p, int n) { (void)p; if (n) recvxGameBootUnsupported("bhDrawNtxEffect3D"); }
+void bhDrawTrsEffect3D(unsigned int *p, int n) { (void)p; if (n) recvxGameBootUnsupported("bhDrawTrsEffect3D"); }
+void bhDrawOpqEffect3D(unsigned int *p, int n) { (void)p; if (n) recvxGameBootUnsupported("bhDrawOpqEffect3D"); }
+void bhDrawThunder(void) { recvxGameBootUnsupported("bhDrawThunder"); }
+void bhDrawThlEffect3D(unsigned int *p, int n) { (void)p; if (n) recvxGameBootUnsupported("bhDrawThlEffect3D"); }
+void bhDrawTrsEffect2D(unsigned int *p, int n) { (void)p; if (n) recvxGameBootUnsupported("bhDrawTrsEffect2D"); }
 static void callback(void *p) { events[count++] = 400 + ((O_WRK *)p)->id; }
 static void overflow_callback(void *p) { (void)p; sys->ef_fncn = 513; }
 
@@ -97,6 +106,14 @@ int main(void)
     reset(); sys->ef_poln = 513; REJECT(bhDrawEffect(), "queue count"); check(!models);
     reset(); sys->ef_poln = -1; REJECT(bhDrawEffect(), "queue count");
     reset(); sys->ef_pol[0] = (O_WRK *)1; REJECT(bhDrawEffect(), "queue actor");
+    reset(); sys->obwp = (O_WRK *)4; sys->ef_pol[0] = sys->obwp;
+    REJECT(bhDrawEffect(), "queue actor");
+    reset(); sys->itwp = (O_WRK *)(sys->endp - 4); sys->ef_pol[0] = sys->itwp;
+    REJECT(bhDrawEffect(), "queue actor");
+    reset(); sys->obwp = &arena.actor; sys->ef_pol[0] = &arena.actor;
+    arena.actor.flg = 0x1000000; bhDrawEffect(); check(!models);
+    reset(); sys->itwp = &arena.actor; sys->ef_pol[0] = &arena.actor;
+    arena.actor.flg = 0x1000000; bhDrawEffect(); check(!models);
     reset(); eff[0].mdlver = 1; REJECT(bhDrawEffect(), "model object");
     reset(); eff[0].tex_id = 8; REJECT(bhDrawEffect(), "texture frame");
     reset(); eff[0].sx = NAN; REJECT(bhDrawEffect(), "transform");

@@ -46,6 +46,8 @@ static uint32_t task_start[RECVX_EVENT_TASK_COUNT];
 static uint32_t task_end[RECVX_EVENT_TASK_COUNT];
 static uint32_t task_event_id[RECVX_EVENT_TASK_COUNT];
 static unsigned char task_bounds_valid[RECVX_EVENT_TASK_COUNT];
+/* Distinguish counted loops from sleep/while frames sharing the retail stack. */
+static unsigned char *for_body[RECVX_EVENT_TASK_COUNT][4];
 static unsigned int current_task = RECVX_EVENT_NO_TASK;
 static uint32_t instruction_count;
 static uint32_t instruction_count_this_call;
@@ -168,6 +170,7 @@ static int active_task_count(void)
 
 void recvxEventCoreReset(void)
 {
+    memset(for_body, 0, sizeof(for_body));
     memset(bhEtask, 0, sizeof(bhEtask));
     memset(task_start, 0, sizeof(task_start));
     memset(task_end, 0, sizeof(task_end));
@@ -397,6 +400,7 @@ int Event_init(BH_SCEWORK *task, unsigned int event_id)
     *(short *)&task->mode0 = 0;
     task->data = (unsigned char *)rom->evtp + start;
     task->loop = -1;
+    memset(for_body[index], 0, sizeof(for_body[index]));
     task->ips[0][0] = 0;
     task->ips[0][1] = 0;
     task->ips[0][2] = 0;
@@ -567,9 +571,8 @@ static int validate_core_instruction(unsigned int opcode)
         word = (flag_spec & 0x3ffu) >> 5;
         if (flag_bank_words(type) == 0 ||
             word >= flag_bank_words(type) ||
-            (type == 10 && bhScePtr[2] != 22 && bhScePtr[2] != 23) ||
-            (type <= 12 && sys == NULL) ||
-            (type >= 13 && plp == NULL)) {
+            ((type <= 12 || type == 16) && sys == NULL) ||
+            (type >= 13 && type <= 15 && plp == NULL)) {
             set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
             return -1;
         }
@@ -585,8 +588,37 @@ static int validate_core_instruction(unsigned int opcode)
         word = (read_u16(bhScePtr + 2) & 0x3e0u) >> 5;
         operation = read_u16(bhScePtr + 4) >> 8;
         if (word >= flag_bank_words(type) || operation > 5 ||
-            (type <= 12 && sys == NULL) ||
-            (type >= 13 && plp == NULL)) {
+            ((type <= 12 || type == 16) && sys == NULL) ||
+            (type >= 13 && type <= 15 && plp == NULL)) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 6) {
+        if (!has_task_bytes(bhScePtr, 4)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        unsigned int selector = bhScePtr[1];
+        if (!(selector == 0 || selector == 1 || selector == 2 || selector == 8 ||
+              selector == 15 || selector == 17 || selector == 21 || selector == 23 ||
+              selector == 24 || selector == 25) || bhScePtr[2] > 5 ||
+            ((selector != 2 && selector != 17) && sys == NULL)) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 7) {
+        if (!has_task_bytes(bhScePtr, 6)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        unsigned int selector = bhScePtr[2], index = bhScePtr[1];
+        if (!(selector == 5 || selector == 7 || selector == 9 || selector == 10) ||
+            bhScePtr[3] > 5 || (selector == 5 && plp == NULL) ||
+            ((selector == 7 || selector == 9) && sys == NULL) ||
+            (selector == 10 && (rom == NULL || rom->enep == NULL || rom->ene_n < 0 ||
+                index >= (unsigned int)rom->ene_n || rom->enep[index].wrk_no >= 128))) {
             set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
             return -1;
         }
@@ -629,6 +661,18 @@ static int validate_core_instruction(unsigned int opcode)
             return -1;
         }
         return 0;
+    } else if (opcode == 13) {
+        if (!has_task_bytes(bhScePtr, 4)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        unsigned int index = bhScePtr[1];
+        if (sys == NULL || rom == NULL || rom->enep == NULL || rom->ene_n < 0 ||
+            index >= (unsigned int)rom->ene_n || rom->enep[index].wrk_no >= 128) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
     } else if (opcode == 14) {
         unsigned int item_flag, etc_index;
         extent = 6;
@@ -642,6 +686,60 @@ static int validate_core_instruction(unsigned int opcode)
             rom->etcp == NULL || sys == NULL || sys->itwp == NULL ||
             (item_flag & 0x3ffu) >= 512u ||
             rom->etcp[etc_index].prm0 >= 39936u / sizeof(O_WRK)) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 15 || opcode == 16) {
+        if (!has_task_bytes(bhScePtr, 2)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (sys == NULL) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 31 || opcode == 92) {
+        if (!has_task_bytes(bhScePtr, opcode == 31 ? 4 : 2)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (sys == NULL) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 18 || opcode == 19 || opcode == 54) {
+        extent = opcode == 18 ? 2 : opcode == 19 ? 4 : 6;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (sys == NULL || (opcode == 18 && bhScePtr[1] > 5) ||
+            (opcode == 19 && bhScePtr[1] > 1)) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 23 || opcode == 24 || opcode == 25 || opcode == 28 || opcode == 29) {
+        extent = opcode == 23 || opcode == 25 ? 8 : opcode == 24 ? 2 : opcode == 28 ? 6 : 4;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (sys == NULL || (opcode == 25 && !valid_task_record())) {
+            set_fault(RECVX_EVENT_FAULT_BAD_TASK, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 21 || opcode == 22 || opcode == 166) {
+        extent = opcode == 22 ? 2 : 4;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (sys == NULL) {
             set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
             return -1;
         }
@@ -715,6 +813,16 @@ static int validate_core_instruction(unsigned int opcode)
             return -1;
         }
         return 0;
+    } else if (opcode == 145 || opcode == 173) {
+        if (!has_task_bytes(bhScePtr, 4)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (sys == NULL || sys->efid[bhScePtr[1]] < 0 || sys->efid[bhScePtr[1]] >= 512) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
     } else if (opcode == 67 || opcode == 53) {
         extent = 4;
         if (!has_task_bytes(bhScePtr, extent)) {
@@ -755,6 +863,16 @@ static int validate_core_instruction(unsigned int opcode)
             return -1;
         }
         return 0;
+    } else if (opcode == 39) {
+        if (!has_task_bytes(bhScePtr, 2)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (sys == NULL || plp == NULL || sys->ply_id < 0 || sys->ply_id >= 4) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
     } else if (opcode == 66) {
         extent = 4;
         if (!has_task_bytes(bhScePtr, extent)) {
@@ -763,6 +881,26 @@ static int validate_core_instruction(unsigned int opcode)
         }
         if (sys == NULL || sys->itwp == NULL ||
             bhScePtr[1] >= 39936u / sizeof(O_WRK)) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 27) {
+        if (!has_task_bytes(bhScePtr, 6)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (bhScePtr[2] >= 2) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    } else if (opcode == 129 || opcode == 188) {
+        if (!has_task_bytes(bhScePtr, 2)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if ((opcode == 129 && sys == NULL) || (opcode == 188 && bhScePtr[1] >= 16)) {
             set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
             return -1;
         }
@@ -859,6 +997,8 @@ static int validate_core_instruction(unsigned int opcode)
         }
         command = bhScePtr[1];
         switch (command) {
+        case 2: extent = 3; break;
+        case 5: extent = 6; break;
         case 7: extent = 8; break;
         case 11: case 12: case 13: extent = 6; break;
         case 24:
@@ -881,6 +1021,42 @@ static int validate_core_instruction(unsigned int opcode)
         }
         if (!has_task_bytes(bhScePtr, extent)) {
             set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    }
+    if (opcode == 250) {
+        if (current_task >= RECVX_EVENT_TASK_COUNT || !valid_task_record()) {
+            set_fault(RECVX_EVENT_FAULT_BAD_TASK, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (!has_task_bytes(bhScePtr, 4)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (bhCetask->loop < -1 || bhCetask->loop >= 3 ||
+            !read_u16(bhScePtr + 2) || read_u16(bhScePtr + 2) > INT16_MAX ||
+            !has_task_bytes(bhScePtr + 4, 1)) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
+    }
+    if (opcode == 251) {
+        int loop = bhCetask != NULL ? bhCetask->loop : -1;
+        if (current_task >= RECVX_EVENT_TASK_COUNT || !valid_task_record()) {
+            set_fault(RECVX_EVENT_FAULT_BAD_TASK, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (!has_task_bytes(bhScePtr, 2)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (loop < 0 || loop >= 4 || !for_body[current_task][loop] ||
+            for_body[current_task][loop] != bhCetask->lstack[loop] ||
+            !has_task_bytes(for_body[current_task][loop], 1) ||
+            for_body[current_task][loop] > bhScePtr || bhCetask->cnt[loop] <= 0) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
             return -1;
         }
         return 0;
@@ -1066,6 +1242,7 @@ unsigned int bhSleep(void)
 
     bhCetask->loop++;
     loop = (unsigned char)bhCetask->loop;
+    if (current_task < RECVX_EVENT_TASK_COUNT) for_body[current_task][loop] = NULL;
     bhCetask->cnt[loop] = read_u16(bhScePtr + 2);
     bhScePtr++;
     if (--bhCetask->cnt[loop] == 0) {
@@ -1084,6 +1261,30 @@ unsigned int bhSleeping(void)
         bhCetask->loop--;
     }
     return 0;
+}
+
+unsigned int bhFor(void)
+{
+    unsigned int loop = (unsigned int)++bhCetask->loop;
+    bhCetask->cnt3 = bhCetask->cnt2 = bhCetask->cnt[loop] = read_u16(bhScePtr + 2);
+    bhScePtr += 4;
+    bhCetask->lstack[loop] = bhScePtr;
+    for_body[current_task][loop] = bhScePtr;
+    return 1;
+}
+
+unsigned int bhNext(void)
+{
+    unsigned int loop = (unsigned char)bhCetask->loop;
+    if (--bhCetask->cnt[loop] != 0) {
+        bhCetask->cnt2 = bhCetask->cnt[loop];
+        bhScePtr = bhCetask->lstack[loop];
+    } else {
+        bhScePtr += 2;
+        for_body[current_task][loop] = NULL;
+        bhCetask->loop--;
+    }
+    return 1;
 }
 
 unsigned int bhEvtNext(void)

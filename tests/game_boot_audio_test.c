@@ -72,6 +72,8 @@ static void render(unsigned int count)
 }
 static void bank(unsigned int key)
 { assert(!recvxAudioRequestBank(key)); assert(recvxAudioBankBusy()); recvxAudioService(); assert(!recvxAudioFault()); assert(!recvxAudioBankBusy()); }
+static void fade(void)
+{ recvxAudioLock(); recvxAudioAdvanceFades(); recvxAudioUnlock(); }
 int main(int argc, char **argv)
 {
     unsigned int before, time;
@@ -94,6 +96,30 @@ int main(int argc, char **argv)
     bank(0); render(1);
     before = starts; assert(!recvxAudioPlayMidi(0, 0x200, 0, 0)); render(6); assert(starts > before);
     recvxAudioStopMidi(0);
+    /* New notes and existing notes share the same native sequence envelope. */
+    recvxAudioStopSounds(0);
+    assert(!recvxAudioPlayMidiFade(7, 0x200, 0, 0, 2));
+    render(6);
+    unsigned int midi_voice = 32;
+    for (unsigned int i = 4; i < 32; ++i) if (voice[i].keyed) { midi_voice = i; break; }
+    assert(midi_voice < 32 && voice[midi_voice].volume == 0);
+    fade();
+    assert(voice[midi_voice].volume > 0);
+    int half_volume = voice[midi_voice].volume;
+    fade();
+    assert(voice[midi_voice].volume >= half_volume);
+    /* A muted sequence must also mute notes scheduled after the change. */
+    recvxAudioStopMidi(7);
+    assert(!recvxAudioPlayMidi(7, 0x200, 0, 0));
+    recvxAudioMidiVolume(7, -127, 0, 0);
+    before = starts;
+    render(6);
+    assert(starts > before);
+    for (unsigned int i = 4; i < 32; ++i)
+        if (voice[i].keyed) { assert(voice[i].volume == 0); midi_voice = i; }
+    recvxAudioMidiVolume(7, -127, 2, 1);
+    fade(); assert(voice[midi_voice].keyed);
+    fade(); assert(!voice[midi_voice].keyed);
     assert(!recvxAudioAdx(0, 3, 3)); assert(voice[0].pan < 0 && voice[1].pan > 0);
     render(2); time = recvxAudioTime(0); assert(time > 0);
     recvxAudioPause(0, 1); render(2); assert(recvxAudioTime(0) == time);
@@ -102,6 +128,9 @@ int main(int argc, char **argv)
     assert(!invalid_keyoffs);
     assert(!recvxAudioAdx(0, 0, 0)); assert(voice[0].loop && voice[1].loop);
     assert(!recvxAudioAdx(1, 1, 0)); assert(voice[2].keyed && !voice[3].keyed);
+    recvxAudioPan(1, 0, 80); assert(voice[2].pan > 0);
+    recvxAudioStop(1); assert(!recvxAudioAdx(1, 1, 0));
+    assert(voice[2].pan > 0); /* Position survives a compressed stream restart. */
     recvxAudioStopSounds(0); render(1); assert(recvxAudioStatus(0) && recvxAudioStatus(1));
     recvxAudioVolume(0, -127, 2);
     for (int i = 0; i < 2; ++i) { recvxAudioLock(); recvxAudioAdvanceFades(); recvxAudioUnlock(); }

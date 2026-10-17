@@ -131,8 +131,8 @@ if __name__ == '__main__':
         ('zonzon1.c', ['bhEne_InitDamage']),
         ('pwksub.c', ['bhSetFloorNum', 'bhCheckFloorNum', 'bhCalcLinkModel', 'bhAddSpeed']),
         ('sub1.c', ['AllItemInit']),
-        ('event.c', ['bhInitEvent', 'bhScenarioCheck', 'bhIfelCk', 'bhElseCk', 'bhEndif', 'bhCk', 'bhEvtOn', 'bhInitModelSet', 'bhObjLinkSet', 'bhSetDispObj', 'bhInitSetKage', 'bhObjLinkSetEneItem', 'bhDefModelSet', 'bhEffDispSet', 'bhLoadWork', 'bhCommonCtr', 'bhWalAtariSet', 'bhEtcAtariSet', 'bhLightSet', 'bhPlItemCheck', 'bhItmSetCk', 'bhEffAmbSet', 'bhItmAspdSet', 'bhEtcAtariSet2']),
-        ('message.c', ['bhDispFont', 'bhDispFontEx', 'bhDispMessage',
+        ('event.c', ['bhInitEvent', 'bhScenarioCheck', 'bhIfelCk', 'bhElseCk', 'bhEndif', 'bhEvtOn', 'bhInitModelSet', 'bhObjLinkSet', 'bhSetDispObj', 'bhInitSetKage', 'bhObjLinkSetEneItem', 'bhDefModelSet', 'bhEffDispSet', 'bhLoadWork', 'bhCommonCtr', 'bhWalAtariSet', 'bhEtcAtariSet', 'bhLightSet', 'bhPlItemCheck', 'bhItmSetCk', 'bhEffAmbSet', 'bhItmAspdSet', 'bhEtcAtariSet2']),
+        ('message.c', ['bhSetMessage', 'bhDispFont', 'bhDispFontEx', 'bhDispMessage',
                        'bhDispMessageEx', 'bhGetFontSize', 'bhMesLen']),
     ]:
         path = Path('src/ps2/veronica/prog') / filename

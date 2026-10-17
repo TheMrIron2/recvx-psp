@@ -202,7 +202,7 @@ void njClipZ(Float near_plane, Float far_plane)
 
 void _Make_ClipVolume(float width, float height)
 {
-    if (!isfinite(width) || !isfinite(height)) {
+    if (!isfinite(width) || !isfinite(height) || width == 0 || height == 0) {
         recvxEngineOriginalFaultSet("original clip volume is invalid");
         return;
     }
@@ -217,11 +217,37 @@ void _Make_ClipVolume(float width, float height)
         original_clip_center_x = width;
         original_clip_center_y = height;
     }
-    if (original_clip_center_x != 320.0f ||
-        original_clip_center_y != 240.0f ||
-        original_clip_disp_width != 2047.0f ||
-        original_clip_disp_height != 2047.0f)
-        recvxEngineOriginalFaultSet("original non-default clip volume is unsupported");
+}
+
+void recvxEngineOriginalViewClipVolume(Float *half_width, Float *half_height,
+                                     Float *guard_width, Float *guard_height)
+{
+    if (half_width) *half_width = original_clip_center_x;
+    if (half_height) *half_height = original_clip_center_y;
+    if (guard_width) *guard_width = original_clip_disp_width;
+    if (guard_height) *guard_height = original_clip_disp_height;
+}
+
+int recvxEngineOriginalViewClipVolumePlanes(Float planes[6][4])
+{
+    /* _Make_ClipMatrix reduces to projection/x and projection/y on its first
+       two diagonals. Clip coordinates are compared with W = view Z, yielding
+       these six half spaces. Aspect belongs to screen projection, separately. */
+    Float x = original_projection_distance / original_clip_center_x;
+    Float y = original_projection_distance / original_clip_center_y;
+    if (!planes || !isfinite(x) || !isfinite(y) ||
+        !(original_projection_distance > 0) || !(original_clip_near < 0) ||
+        !(original_clip_far < original_clip_near)) {
+        recvxEngineOriginalFaultSet("original clip volume projection is invalid");
+        return 0;
+    }
+    const Float result[6][4] = {
+        {x,0,1,0}, {-x,0,1,0}, {0,y,1,0}, {0,-y,1,0},
+        {0,0,1,original_clip_near}, {0,0,-1,-original_clip_far}
+    };
+    memcpy(planes, result, sizeof(result));
+    return original_clip_center_x != 320.0f || original_clip_center_y != 240.0f ||
+           original_clip_disp_width != 2047.0f || original_clip_disp_height != 2047.0f;
 }
 
 void njSetBackColor(Uint32 color1, Uint32 color2, Uint32 color3)

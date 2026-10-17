@@ -26,6 +26,14 @@ static struct {
 static NJS_MATRIX camera;
 static jmp_buf failure;
 static const char *fault;
+static const RecvxBootTexture *pending_overlay_view;
+void recvxGameBootDrawDiscard(void)
+{
+    if (pending_overlay_view) {
+        assert(pending_overlay_view->palette[2] == 0xff123456u);
+        pending_overlay_view = NULL;
+    }
+}
 static unsigned int checks;
 static RecvxBootTexture texture;
 static unsigned char pixels[128];
@@ -73,6 +81,65 @@ static void reset(void)
 }
 static const RecvxBootRenderFrame *draw(void)
 { njCnkEasyMultiDrawModel(&data.model); return recvxGameBootRenderFrame(); }
+static void clip_model_vertices(const float positions[3][3],unsigned int attributes)
+{
+    for(unsigned int i=0;i<3;++i)
+        for(unsigned int axis=0;axis<3;++axis)putfloat(data.vertices+64+i*32+axis*4,positions[i][axis]);
+    memset(data.polygons,0,sizeof(data.polygons));
+    data.polygons[0]=8;put16(data.polygons+2,0);
+    unsigned char *strip=data.polygons+4;
+    strip[0]=65;strip[1]=attributes;put16(strip+2,11);put16(strip+4,1);put16(strip+6,3);
+    for(unsigned int i=0;i<3;++i){
+        put16(strip+8+i*6,i);put16(strip+10+i*6,i?255:0);put16(strip+12+i*6,i==2?255:0);
+    }
+    put16(strip+26,255);recvxGameBootRenderTextureList(&textures);
+}
+static void custom_clip_tests(void)
+{
+    const float crossing[3][3]={{-4,0,4},{0,1,4},{0,-1,4}};
+    reset();clip_model_vertices(crossing,2);_Make_ClipVolume(160,240);
+    njCnkSetEasyMultiLight(2);njCnkSetEasyMultiLightSwitch(2,1);
+    njCnkSetEasyMultiLightColor(2,1,1,1);njCnkSetEasyMultiLightPoint(2,0,0,0);
+    njCnkSetEasyMultiLightRange(2,5,50);
+    const RecvxBootRenderFrame *f=draw();
+    CHECK(f->vertex_count==6&&f->batch_count==1&&f->batches[0].texture==&texture);
+    unsigned int intersections=0;
+    for(size_t i=0;i<f->vertex_count;++i){
+        const RecvxBootRenderVertex *v=&f->vertices[i];
+        CHECK(v->x>=-2.00001f&&v->x<=2.00001f&&v->z==-4);
+        if(close_to(v->x,-2)){
+            ++intersections;
+            CHECK(close_to(v->u,0.5f)&&close_to(fabsf(v->y),0.5f));
+            CHECK(close_to(v->v,v->y>0?0.5f:0)&&((v->color&255u)==194u)&&(v->color>>24)==255u);
+        }
+    }
+    CHECK(intersections>=2);
+    for(size_t i=0;i<f->vertex_count;i+=3){
+        const RecvxBootRenderVertex *v=f->vertices+i;
+        float area=(v[1].x-v[0].x)*(v[2].y-v[0].y)-(v[1].y-v[0].y)*(v[2].x-v[0].x);
+        CHECK(area>0);
+    }
+    /* Each model clips against the volume present when it is submitted. */
+    _Make_ClipVolume(1024,960);draw();f=recvxGameBootRenderFrame();CHECK(f->vertex_count==9);
+    const float outside[3][3]={{-4,0,4},{-3,1,4},{-3,-1,4}};
+    reset();clip_model_vertices(outside,3);_Make_ClipVolume(160,240);draw();CHECK(!recvxGameBootRenderPending());
+    const float touching[3][3]={{-2,0,4},{-3,1,4},{-3,-1,4}};
+    reset();clip_model_vertices(touching,3);_Make_ClipVolume(160,240);draw();CHECK(!recvxGameBootRenderPending());
+    const float near_crossing[3][3]={{-1,0,0.5f},{0,1,2},{1,0,2}};
+    reset();clip_model_vertices(near_crossing,3);_Make_ClipVolume(1024,960);f=draw();CHECK(f->vertex_count==6);
+    for(size_t i=0;i<f->vertex_count;++i)CHECK(f->vertices[i].z<=-0.99999f&&f->vertices[i].z>=-2);
+    const float far_crossing[3][3]={{-1,0,8},{0,1,2},{1,0,2}};
+    reset();clip_model_vertices(far_crossing,3);_Make_ClipVolume(1024,960);njClipZ(-1,-5);f=draw();CHECK(f->vertex_count==6);
+    for(size_t i=0;i<f->vertex_count;++i)CHECK(f->vertices[i].z>=-5.00001f&&f->vertices[i].z<=-2);
+    const float enclosing[3][3]={{-100,-100,4},{100,-100,4},{0,100,4}};
+    reset();clip_model_vertices(enclosing,3);_Make_ClipVolume(160,120);f=draw();CHECK(f->vertex_count>=6&&f->vertex_count<=21);
+    for(size_t i=0;i<f->vertex_count;++i)CHECK(fabsf(f->vertices[i].x)<=2.00001f&&fabsf(f->vertices[i].y)<=1.50001f);
+    const float guard_crossing[3][3]={{-8,0,4},{0,1,4},{0,-1,4}};
+    reset();clip_model_vertices(guard_crossing,3);_Make_ClipVolume(-320,-240);f=draw();CHECK(f->vertex_count==6);
+    for(size_t i=0;i<f->vertex_count;++i)CHECK(f->vertices[i].x>=-4.00001f);
+    reset();_Make_ClipVolume(0,240);REJECT(draw(),"clip volume");
+    reset();_Make_ClipVolume(NAN,240);REJECT(draw(),"clip volume");
+}
 int main(void)
 {
     const RecvxBootRenderFrame *f;
@@ -85,6 +152,13 @@ int main(void)
     CHECK(!((uintptr_t)f->projection & 15));
     draw(); f = recvxGameBootRenderFrame(); CHECK(f->vertex_count == 6 && f->batch_count == 1);
     recvxGameBootRenderConsume(); CHECK(!recvxGameBootRenderPending());
+
+    reset(); f=draw();
+    float queued_projection[16]; memcpy(queued_projection,f->projection,sizeof(queued_projection));
+    njSetPerspective(0x2000); njClipZ(-5,-20);
+    f=recvxGameBootRenderFrame(); CHECK(!memcmp(f->projection,queued_projection,sizeof(queued_projection)));
+    recvxGameBootRenderConsume(); f=draw();
+    CHECK(f->projection[0] != queued_projection[0] && close_to(f->projection[10],-25.0f/15.0f));
 
     reset(); njTranslate(NULL, 10, 0, 0); f = draw(); CHECK(f->vertices[0].x == 9);
     reset(); njScale(NULL, 2, 3, 1); f = draw(); CHECK(f->vertices[0].x == -2 && f->vertices[0].y == 3);
@@ -133,7 +207,117 @@ int main(void)
     reset(); data.polygons[1] = 0; REJECT(draw(), "specular");
     reset(); data.polygons[1] = 0x43; REJECT(draw(), "environment-mapped");
     reset(); data.vertices[0] = 99; REJECT(draw(), "vertex command");
-    recvxGameBootRenderReset(); CHECK(!recvxGameBootRenderPending());
-    printf("PASS: original chunk transforms, hierarchy, clip tests, projection, lighting, batching and malformed state: %u checks\n",checks);
+    reset();
+    RecvxGameChunkVertex sprite[3] = {
+        {.x=-1,.y=-1,.z=4,.u=0,.v=0,.color=0x80112233},
+        {.x=0,.y=1,.z=4,.u=0.5f,.v=1,.color=0xff445566},
+        {.x=1,.y=-1,.z=4,.u=1,.v=0,.color=0xff778899}
+    };
+    njTranslate(NULL, 3, 2, 1);
+    njControl3D(0x810); njSetConstantAttr(0, 0); njSetConstantMaterial(&constant);
+    recvxGameBootRenderPolygonBlend(0, 11); recvxGameBootRenderPolygonBlend(1, 11);
+    recvxGameBootRenderSpriteTriangle(sprite, 0, 1); f=recvxGameBootRenderFrame();
+    CHECK(f->vertex_count == 3 && f->vertices[0].x == 2 && f->vertices[0].y == -1 && f->vertices[0].z == -5);
+    CHECK(f->vertices[0].color == 0x80332211 && f->vertices[1].color == 0xff665544);
+    CHECK(f->batches[0].attributes == 0x1b && f->batches[0].blend_source == 11 && f->batches[0].blend_destination == 11);
+    REJECT(recvxGameBootRenderSpriteTriangle(sprite, 1, 1), "texture selection");
+    recvxGameBootRenderTextureSelected(&texture); recvxGameBootRenderTextureFilter(1);
+    recvxGameBootRenderSpriteTriangle(sprite, 1, 0); f=recvxGameBootRenderFrame();
+    CHECK(f->batch_count == 2 && f->batches[1].texture == &texture && f->batches[1].sampler == 7);
+    CHECK(f->vertices[4].u == 0.5f && f->vertices[4].v == 1 && f->batches[1].attributes == 0x13);
+    sprite[0].u = NAN; REJECT(recvxGameBootRenderSpriteTriangle(sprite, 1, 1), "sprite vertex");
+    REJECT(recvxGameBootRenderPolygonBlend(2, 8), "blend mode");
+    reset();
+    recvxGameBootRenderLine(sprite, 1); f=recvxGameBootRenderFrame();
+    CHECK(f->vertex_count == 2 && f->batches[0].kind == RECVX_RENDER_LINES && f->batches[0].count == 2);
+    CHECK(f->vertices[0].color == 0x80332211 && f->vertices[1].z == -4);
+    REJECT(recvxGameBootRenderShadowTriangle(sprite, 0), "modifier pass");
+    REJECT(recvxGameBootRenderShadowEnd(), "modifier end");
+    recvxGameBootRenderShadowStart();
+    REJECT(recvxGameBootRenderShadowStart(), "nested");
+    recvxGameBootRenderShadowTriangle(sprite, 0);
+    recvxGameBootRenderShadowTriangle(sprite, 1);
+    const float shadow_bounds[4] = {100,100,200,200};
+    recvxGameBootRenderShadowComposite(shadow_bounds, 255);
+    recvxGameBootRenderShadowComposite(shadow_bounds, 127);
+    recvxGameBootRenderShadowEnd(); f=recvxGameBootRenderFrame();
+    CHECK(f->batch_count == 7 && f->vertex_count == 12);
+    CHECK(f->batches[1].kind == RECVX_RENDER_SHADOW_START && f->batches[1].count == 0);
+    CHECK(f->batches[2].kind == RECVX_RENDER_SHADOW_ADD && f->batches[3].kind == RECVX_RENDER_SHADOW_SUBTRACT);
+    CHECK(f->vertices[2].color == 0xff202020 && f->vertices[8].color == 0xff5e5e5e);
+    CHECK(f->vertices[10].color == 0xff2e2e2e && f->batches[5].count == 2);
+    CHECK(f->vertices[8].x == 75 && close_to(f->vertices[8].y, 56.666668f) && f->vertices[8].u == 75.375f);
+    CHECK(f->batches[6].kind == RECVX_RENDER_SHADOW_END);
+    recvxGameBootRenderShadowStart();
+    REJECT(recvxGameBootRenderShadowComposite(shadow_bounds, 256), "composite");
+    float invalid_bounds[4] = {0,0,641,20};
+    REJECT(recvxGameBootRenderShadowComposite(invalid_bounds, 255), "bounds");
+    recvxGameBootRenderShadowEnd();
+    reset(); sprite[0].u = 0;
+    recvxGameBootRenderTextureSelected(&texture);
+    recvxGameBootRenderHalfFogTriangle(sprite, 0x80112233, 1);
+    recvxGameBootRenderHalfFogTriangle(sprite, 0xff112233, 1);
+    recvxGameBootRenderHalfFogTriangle(sprite, 0xff112234, 1);
+    recvxGameBootRenderSpriteTriangle(sprite, 1, 1); f=recvxGameBootRenderFrame();
+    CHECK(f->batch_count == 3 && f->batches[0].kind == RECVX_RENDER_HALF_FOG && f->batches[0].count == 6);
+    CHECK(f->batches[0].fog_color == 0x332211 && f->batches[1].fog_color == 0x342211);
+    CHECK(f->batches[2].kind == RECVX_RENDER_TRIANGLES && f->batches[2].fog_color == 0);
+    CHECK(f->vertices[0].color == 0x80332211 && f->vertices[1].color == 0xff665544);
+    sprite[0].z = 0x1p39f;
+    REJECT(recvxGameBootRenderHalfFogTriangle(sprite, 0, 1), "fog depth");
+    sprite[0].z = 0x1p38f;
+    recvxGameBootRenderHalfFogTriangle(sprite, 0, 1);
+    CHECK(recvxGameBootRenderFrame()->batches[3].kind == RECVX_RENDER_HALF_FOG);
+    reset(); recvxGameBootRenderTextureSelected(&texture); recvxGameBootRenderTextureFilter(1);
+    RecvxGameChunkVertex screen[3]={
+        {.x=0,.y=0,.z=1,.u=0,.v=0,.color=0x80112233},
+        {.x=320,.y=480,.z=2,.u=0.5f,.v=1,.color=0xff445566},
+        {.x=640,.y=0,.z=100,.u=1,.v=0,.color=0xff778899}
+    };
+    njTranslate(NULL,100,200,300); recvxGameBootRenderScreenTriangle(screen,1); f=recvxGameBootRenderFrame();
+    CHECK(f->batch_count==1 && f->vertex_count==3 && f->batches[0].kind==RECVX_RENDER_SCREEN_TRIANGLES);
+    CHECK(f->vertices[0].x==0 && f->vertices[0].y==0 && f->vertices[1].x==240 && f->vertices[1].y==272);
+    CHECK(f->vertices[1].u==8 && f->vertices[1].v==8 && f->vertices[2].x==480);
+    CHECK(f->vertices[0].color==0x80332211 && f->batches[0].sampler==7 && f->vertices[0].z==65534);
+    CHECK(f->vertices[1].z==65534 && f->vertices[2].z==65534);
+    screen[0].z=0; REJECT(recvxGameBootRenderScreenTriangle(screen,1),"screen sprite vertex");
+    screen[0].z=1; screen[0].u=INFINITY; REJECT(recvxGameBootRenderScreenTriangle(screen,1),"screen sprite vertex");
+    reset(); sprite[0].z=4; sprite[0].u=0;
+    recvxGameBootRenderTextureSelected(&texture); texture.palette[2]=0xff112233u;
+    recvxGameBootRenderSpriteTriangle(sprite,1,1);
+    const RecvxBootTexture *first_palette=recvxGameBootRenderSnapshotTexture(&texture);
+    texture.palette[2]=0xff445566u;
+    recvxGameBootRenderSpriteTriangle(sprite,1,1);
+    const RecvxBootTexture *second_palette=recvxGameBootRenderSnapshotTexture(&texture);
+    texture.palette[2]=0xff778899u;
+    /* Vertex storage grows while earlier batches retain stable texture views. */
+    for(unsigned int i=0;i<1600;++i)recvxGameBootRenderSpriteTriangle(sprite,1,1);
+    f=recvxGameBootRenderFrame();
+    CHECK(f->batch_count==3&&f->batches[0].texture==first_palette&&
+          f->batches[1].texture==second_palette&&f->batches[2].texture==&texture);
+    CHECK(first_palette->palette[2]==0xff112233u&&second_palette->palette[2]==0xff445566u&&
+          texture.palette[2]==0xff778899u);
+    CHECK(first_palette->source==texture.source&&first_palette->pixels==texture.pixels&&
+          second_palette->source==texture.source&&second_palette->pixels==texture.pixels);
+    CHECK(!((uintptr_t)first_palette->palette&15u)&&!((uintptr_t)second_palette->palette&15u));
+    REJECT(recvxGameBootRenderSnapshotTexture(NULL),"snapshot texture");
+    recvxGameBootRenderConsume();
+    for(unsigned int frame_index=0;frame_index<260;++frame_index){
+        texture.palette[2]=frame_index;
+        recvxGameBootRenderSpriteTriangle(sprite,1,1);
+        const RecvxBootTexture *saved=recvxGameBootRenderSnapshotTexture(&texture);
+        texture.palette[2]=frame_index+1;
+        CHECK(saved->palette[2]==frame_index);
+        recvxGameBootRenderConsume();
+    }
+    for(unsigned int i=0;i<256;++i)recvxGameBootRenderSnapshotTexture(&texture);
+    REJECT(recvxGameBootRenderSnapshotTexture(&texture),"snapshot capacity");
+    recvxGameBootRenderConsume();
+    CHECK(recvxGameBootRenderSnapshotTexture(&texture)->pixels==pixels);
+    texture.palette[2] = 0xff123456u;
+    pending_overlay_view = recvxGameBootRenderSnapshotTexture(&texture);
+    recvxGameBootRenderReset(); CHECK(!recvxGameBootRenderPending() && !pending_overlay_view);
+    custom_clip_tests();recvxGameBootRenderReset();
+    printf("PASS: original chunk transforms, hierarchy, custom plane clipping/UV/color interpolation, projection, lighting, batching, immutable palette view lifetime/capacity and malformed state: %u checks\n",checks);
     return 0;
 }

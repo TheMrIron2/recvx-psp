@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "psp/game_boot.h"
 #include "psp/game_boot_render.h"
 #include "psp/game_boot_render_texture.h"
@@ -104,6 +105,11 @@ void njSetPaletteBankNum(Uint32 number, Sint32 bank)
     colors = descriptors[slot].texinfo.texsurface.BitDepth == 4 ? 16 : 256;
     if ((unsigned int)bank * 16u + colors > 4096)
         recvxGameBootUnsupported("texture palette bank exceeds palette storage");
+    if (draw_count || recvxGameBootRenderPending()) {
+        const RecvxBootTexture *snapshot = recvxGameBootRenderSnapshotTexture(&textures[slot]);
+        for (size_t i = 0; i < draw_count; ++i)
+            if (draws[i].texture == &textures[slot]) draws[i].texture = snapshot;
+    }
     memcpy(textures[slot].palette, palbuf + bank * 16, colors * sizeof(Uint32));
     descriptors[slot].bank = bank;
 }
@@ -132,7 +138,18 @@ Sint32 njSetTextureNum(Uint32 number)
     current_number = number;
     Ps2_current_texmemlist = (NJS_TEXMEMLIST *)(uintptr_t)current_list->textures[number].texaddr;
     descriptor_slot(Ps2_current_texmemlist);
+    recvxGameBootRenderTextureSelected(recvxGameBootRenderTextureSelect(current_list, number));
     return 0;
+}
+Sint32 njSetTextureNumG(Uint32 global_index)
+{
+    for (unsigned int i = 0; i < TEXTURE_LIMIT; ++i)
+        if (textures[i].source && descriptors[i].globalIndex == global_index) {
+            Ps2_current_texmemlist = &descriptors[i];
+            recvxGameBootRenderTextureSelected(&textures[i]);
+            return 0;
+        }
+    recvxGameBootUnsupported("original global texture index is not loaded");
 }
 Sint32 njReleaseTexture(NJS_TEXLIST *list)
 {
@@ -177,8 +194,24 @@ void njSetQuadTexture(int number, unsigned int color)
 { njSetTextureNum(number); quad_color = color; }
 static RecvxBootDraw *next_draw(void)
 {
+    const RecvxGameBootRenderState *state = recvxGameBootRenderStateGet();
+    if (state->polygon_blend_source != 8 || state->polygon_blend_destination != 6)
+        recvxGameBootUnsupported("unported 2D blend mode");
     if (draw_count == DRAW_LIMIT) recvxGameBootUnsupported("ADV draw queue exhausted");
     return &draws[draw_count++];
+}
+void recvxGameBootDrawGradientQuad(const NJS_POINT2 points[4], const NJS_COLOR colors[4], float depth)
+{
+    if (!points || !colors || !isfinite(depth) || depth < 1)
+        recvxGameBootUnsupported("invalid original gradient polygon");
+    for (unsigned int i = 0; i < 4; ++i)
+        if (!isfinite(points[i].x) || !isfinite(points[i].y))
+            recvxGameBootUnsupported("invalid original gradient coordinate");
+    RecvxBootDraw *draw = next_draw();
+    *draw = (RecvxBootDraw){.quad = {.x1=points[0].x, .y1=points[0].y,
+        .x2=points[2].x, .y2=points[2].y}, .depth=depth, .color=colors[0].color, .color_gradient=1};
+    memcpy(draw->points, points, sizeof(draw->points));
+    for (unsigned int i = 0; i < 4; ++i) draw->vertex_color[i] = colors[i].color;
 }
 void njDrawQuadTexture(QUAD *quad, float depth)
 {
@@ -191,8 +224,7 @@ void njDrawQuadTexture(QUAD *quad, float depth)
 
 void njColorBlendingMode(Int target, Int mode)
 {
-    if ((target == 0 && mode == 8) || (target == 1 && mode == 6)) return;
-    recvxGameBootUnsupported("unported 2D blend mode");
+    recvxGameBootRenderPolygonBlend(target, mode);
 }
 
 void njDrawPolygon2DM(NJS_POINT2COL *polygon, int count, float priority, unsigned int attributes)
@@ -239,6 +271,8 @@ void njDrawPolygon(NJS_POLYGON_VTX *polygon, Int count, Int trans)
                                     .x2 = polygon[3].x, .y2 = polygon[3].y},
                            .depth = polygon[0].z, .color = polygon[0].col};
 }
+void recvxGameBootDrawDiscard(void) { draw_count = 0; }
+
 const RecvxBootDraw *recvxGameBootDraws(size_t *count)
 {
     size_t i, j;
@@ -252,5 +286,4 @@ const RecvxBootDraw *recvxGameBootDraws(size_t *count)
     *count = draw_count; draw_count = 0;
     return draws;
 }
-void njFogDisable(void) { }
 void njSetScreen(NJS_SCREEN *screen) { (void)screen; }

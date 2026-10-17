@@ -19,8 +19,8 @@ static int actor(const O_WRK *object)
 {
     return object && (object == (O_WRK *)plp || member(object, ene, 128, sizeof(*ene)) ||
         member(object, eff, 512, sizeof(*eff)) ||
-        member(object, sys->obwp, 39936u / sizeof(O_WRK), sizeof(O_WRK)) ||
-        member(object, sys->itwp, 39936u / sizeof(O_WRK), sizeof(O_WRK)));
+        (member(object, sys->obwp, 39936u / sizeof(O_WRK), sizeof(O_WRK)) && arena(object, sizeof(*object))) ||
+        (member(object, sys->itwp, 39936u / sizeof(O_WRK), sizeof(O_WRK)) && arena(object, sizeof(*object))));
 }
 static int hidden(const O_WRK *object)
 {
@@ -122,20 +122,8 @@ void recvxGameBootEffectDrawObjectPrepare(O_WRK *object, int polygon)
     }
 }
 
-#define UNSUPPORTED_LEAF(name) \
-void name(unsigned int *objects, int count) { \
-    recvxGameBootEffectDrawQueuePrepare((O_WRK **)objects, count); \
-    if (count) recvxGameBootUnsupported(#name); \
-}
-UNSUPPORTED_LEAF(bhDrawMdfEffect)
-UNSUPPORTED_LEAF(bhDrawLinEffect)
-UNSUPPORTED_LEAF(bhDrawNtxEffect3D)
-UNSUPPORTED_LEAF(bhDrawTrsEffect3D)
-UNSUPPORTED_LEAF(bhDrawOpqEffect3D)
-UNSUPPORTED_LEAF(bhDrawThlEffect3D)
-UNSUPPORTED_LEAF(bhDrawTrsEffect2D)
-#undef UNSUPPORTED_LEAF
-void recvxGameBootEffectDrawThunder(void) { recvxGameBootUnsupported("bhDrawThunder"); }
+void bhDrawThunder(void);
+void recvxGameBootEffectDrawThunder(void) { bhDrawThunder(); }
 
 /* Scalar equivalent of the original VU translation wrapper. */
 void njTranslateEx(NJS_VECTOR *translation)

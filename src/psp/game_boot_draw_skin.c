@@ -4,6 +4,15 @@
 #include "ps2/veronica/prog/main.h"
 #include "ps2/veronica/prog/njplus.h"
 
+extern size_t recvxGameBootSkinRemaining(const void *) __attribute__((weak));
+extern size_t recvxGameBootMorphRemaining(const void *) __attribute__((weak));
+static int vertex_owned(const void *pointer)
+{
+    if ((uintptr_t)pointer & 3u) return 0;
+    return (recvxGameBootSkinRemaining && recvxGameBootSkinRemaining(pointer) >= 4) ||
+        (recvxGameBootMorphRemaining && recvxGameBootMorphRemaining(pointer) >= 4);
+}
+
 typedef struct StreamSave {
     NJS_CNK_OBJECT *objects;
     int count;
@@ -49,7 +58,7 @@ void recvxGameBootDrawSkinPrepare(NJS_CNK_OBJECT *objects, int count, int varian
             if (save->model[i] != object->model || save->eligible[i] != eligible)
                 recvxGameBootUnsupported("original model stream save identity changed");
         } else if (eligible) {
-            if ((object->model->vlist && !owned(object->model->vlist, 4, 4)) ||
+            if ((object->model->vlist && !owned(object->model->vlist, 4, 4) && !vertex_owned(object->model->vlist)) ||
                 (variant && object->model->plist && !owned(object->model->plist, 2, 2)))
                 recvxGameBootUnsupported("original model stream source exceeds arena");
             if (variant && (!isfinite(object->pos[0]) || !isfinite(object->pos[1]) || !isfinite(object->pos[2])))

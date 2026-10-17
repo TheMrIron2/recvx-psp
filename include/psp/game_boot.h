@@ -74,8 +74,13 @@ typedef struct RecvxBootDraw {
     unsigned int color;
     const RecvxBootTexture *texture;
     int filter;
+    int color_gradient;
+    NJS_POINT2 points[4];
+    unsigned int vertex_color[4];
 } RecvxBootDraw;
+void recvxGameBootDrawGradientQuad(const NJS_POINT2 points[4], const NJS_COLOR colors[4], float depth);
 const RecvxBootDraw *recvxGameBootDraws(size_t *count);
+void recvxGameBootDrawDiscard(void);
 void recvxGameBootPresent(void);
 int recvxGameBootDisplayInit(void);
 void recvxGameBootDisplaySwap(void);

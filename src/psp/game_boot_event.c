@@ -14,6 +14,15 @@ unsigned int (*bhScenarioJmpT[256])(void) = {
 #undef RECVX_EVENT_CORE
 #undef RECVX_EVENT_ENGINE
 #undef RECVX_EVENT_FULL
+    [250] = bhFor, [251] = bhNext,
+    [31] = bhMessageSet, [92] = bhMesDispEndSet,
+    [18] = bhCineSet, [19] = bhCamSet, [54] = bhFadeSet,
+    [145] = bhEffModeSet, [173] = bhEffTypeSet, [23] = bhSeOn, [24] = bhSeOff,
+    [25] = bhVoiceOn, [26] = bhVoiceOff, [28] = bhBGSeOn, [29] = bhBGSeOff,
+    [13] = bhDieCk, [27] = bhAdxCk, [21] = bhBgmOn, [22] = bhBgmOff, [166] = bhBgmOnEx,
+    [6] = bhCmpB, [7] = bhCmpW, [129] = bhSubMapBusyCk, [188] = bhEvtKill,
+    [38] = bhArmsItemCheck, [39] = bhArmsItemChange,
+    [14] = bhItmCk, [15] = bhUseItemClear, [16] = bhUseItemCheck,
     [1] = bhIfelCk, [2] = bhElseCk, [3] = bhEndif, [4] = bhCk, [20] = bhEvtOn, [36] = bhInitModelSet, [50] = bhObjLinkSet,
     [32] = bhSetDispObj, [47] = bhInitSetKage, [83] = bhObjLinkSetEneItem, [59] = bhDefModelSet, [67] = bhEffDispSet,
     [101] = bhLoadWork, [105] = bhCommonCtr, [10] = bhWalAtariSet,

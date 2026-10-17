@@ -14,6 +14,8 @@ typedef struct RecvxGameBootRenderState {
     int blend_source, blend_destination;
     unsigned int texture_filter;
     NJS_TEXLIST *texture_list;
+    const RecvxBootTexture *selected_texture;
+    int polygon_blend_source, polygon_blend_destination;
 } RecvxGameBootRenderState;
 
 typedef struct RecvxGameBootSampler {
@@ -26,6 +28,8 @@ void recvxGameBootRenderTextureReset(void);
 const RecvxGameBootRenderState *recvxGameBootRenderStateGet(void);
 void recvxGameBootRenderTextureList(NJS_TEXLIST *list);
 NJS_TEXLIST *recvxGameBootRenderTextureCurrentList(void);
+void recvxGameBootRenderTextureSelected(const RecvxBootTexture *texture);
+void recvxGameBootRenderPolygonBlend(int target, int mode);
 void recvxGameBootRenderTextureFilter(unsigned int mode);
 const RecvxBootTexture *recvxGameBootRenderTextureSelect(NJS_TEXLIST *list, unsigned int index);
 void recvxGameBootRenderTextureSampler(uint16_t texture_word, uint8_t texture_flags,

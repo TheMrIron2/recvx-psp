@@ -10,7 +10,7 @@ unsigned int ulCnkCurrentDrawMode;
 unsigned char ucNaCnkAttr;
 float fNaCnkConstantA = 1, fNaCnkConstantR = 1, fNaCnkConstantG = 1, fNaCnkConstantB = 1;
 static RecvxGameBootRenderState state = {
-    .constant_material = {1, 1, 1, 1}, .blend_source = 8, .blend_destination = 6
+    .constant_material = {1, 1, 1, 1}, .blend_source = 8, .blend_destination = 6, .polygon_blend_source = 8, .polygon_blend_destination = 6
 };
 
 void recvxGameBootRenderTextureReset(void)
@@ -18,6 +18,7 @@ void recvxGameBootRenderTextureReset(void)
     memset(&state, 0, sizeof(state));
     state.constant_material = (NJS_ARGB){1, 1, 1, 1};
     state.blend_source = 8; state.blend_destination = 6;
+    state.polygon_blend_source = 8; state.polygon_blend_destination = 6;
     _nj_control_3d_flag_ = Ps2_njControl3D_flag = Ps2_use_pt_flag = 0;
     ulNaCnkFlagConstMaterial = ulNaCnkFlagConstAttr = ulNaCnkFlagModelClip = 0;
     ulCnkCurrentDrawMode = ucNaCnkAttr = 0;
@@ -32,6 +33,7 @@ void recvxGameBootRenderTextureList(NJS_TEXLIST *list)
     if (list && (!list->textures || !list->nbTexture || list->nbTexture > 256))
         recvxGameBootUnsupported("invalid original render texture list");
     state.texture_list = list;
+    state.selected_texture = NULL;
 }
 
 const RecvxBootTexture *recvxGameBootRenderTextureSelect(NJS_TEXLIST *list, unsigned int index)
@@ -48,6 +50,16 @@ const RecvxBootTexture *recvxGameBootRenderTextureSelect(NJS_TEXLIST *list, unsi
         texture->tile_count != texture->width / texture->tile_width)
         recvxGameBootUnsupported("original material has no valid owned texture");
     return texture;
+}
+
+void recvxGameBootRenderTextureSelected(const RecvxBootTexture *texture)
+{ state.selected_texture = texture; }
+void recvxGameBootRenderPolygonBlend(int target, int mode)
+{
+    if ((target != 0 && target != 1) || mode < 2 || mode > 11)
+        recvxGameBootUnsupported("invalid original polygon blend mode");
+    if (target == 0) state.polygon_blend_source = mode;
+    else state.polygon_blend_destination = mode;
 }
 
 void recvxGameBootRenderTextureFilter(unsigned int mode)

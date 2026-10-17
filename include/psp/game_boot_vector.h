@@ -66,4 +66,25 @@ static inline void recvxFaceTransform(const float *matrix, const float *src, flo
 #endif
 }
 
+/* Skin normals use the upper 3x3, without affine translation or normalization. */
+static inline void recvxSkinDirection(const float *matrix, const float *src, float *dst)
+{
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+    float aligned[16] __attribute__((aligned(16)));
+    memcpy(aligned, matrix, sizeof(aligned));
+    __asm__ volatile (
+        "lv.q C600, 0(%0)\n" "lv.q C610, 16(%0)\n"
+        "lv.q C620, 32(%0)\n" "lv.q C630, 48(%0)\n"
+        "lv.s S710, 0(%1)\n" "lv.s S711, 4(%1)\n" "lv.s S712, 8(%1)\n"
+        "vzero.s S713\n" "vtfm4.q C700, E600, C710\n"
+        "sv.s S700, 0(%2)\n" "sv.s S701, 4(%2)\n" "sv.s S702, 8(%2)\n"
+        : : "r"(aligned), "r"(src), "r"(dst) : "memory");
+#else
+    float result[3];
+    for (unsigned int i = 0; i < 3; ++i)
+        result[i] = matrix[i] * src[0] + matrix[4 + i] * src[1] + matrix[8 + i] * src[2];
+    memcpy(dst, result, sizeof(result));
+#endif
+}
+
 #endif

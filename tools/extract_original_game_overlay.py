@@ -7,7 +7,7 @@ from extract_original_boot_initializers import extract
 def prepare(destination):
     path = Path('src/ps2/veronica/prog/screen.c')
     source = path.read_text()
-    output = ['/* Original cinematic letterbox and thermometer HUD. */',
+    output = ['/* Original screen fade, cinematic letterbox, and thermometer HUD. */',
               '#include "ps2/veronica/prog/screen.h"',
               '#include "ps2/veronica/prog/main.h"',
               '#include "ps2/veronica/prog/ps2_NaDraw2D.h"',
@@ -18,9 +18,10 @@ def prepare(destination):
               'Sint32 recvxGameBootOverlaySetTexture(NJS_TEXLIST *);',
               'Sint32 recvxGameBootOverlaySetTextureNum(Uint32);',
               'void recvxGameBootOverlayPolygon2D(NJS_POINT2COL *, Int, Float, Uint32);']
-    for name in ('bhDrawCinesco', 'bhDrawThermometer', 'bhDrawThermoNumber'):
+    for name in ('bhDrawScreenFade', 'bhDrawCinesco', 'bhDrawThermometer', 'bhDrawThermoNumber'):
         line, function = extract(source, name)
-        guard = ('recvxGameBootOverlayPrepare(0);' if name == 'bhDrawCinesco' else
+        guard = ('recvxGameBootOverlayPrepare(2);' if name == 'bhDrawScreenFade' else
+                 'recvxGameBootOverlayPrepare(0);' if name == 'bhDrawCinesco' else
                  'recvxGameBootOverlayPrepare(1);' if name == 'bhDrawThermometer' else
                  'recvxGameBootOverlayNumberPrepare(px, py, num);')
         opening = function.index('{') + 1

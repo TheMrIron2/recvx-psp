@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "psp/game_boot_render_texture.h"
+#include "ps2/veronica/prog/ps2_NaDraw.h"
 #include "ps2/veronica/prog/main.h"
 #include "ps2/veronica/prog/ps2_NinjaCnk.h"
 #include "ps2/veronica/prog/ps2_NaSystem.h"
@@ -16,9 +17,19 @@ SYS_WORK *sys = &work;
 static jmp_buf fault;
 static const char *fault_name;
 static int expecting_fault;
+unsigned int palbuf[4096];
+static RecvxBootTexture snapshots[8];
+static size_t snapshot_count;
+static int render_pending;
 void recvxGameBootLog(const char *format, ...) { (void)format; }
 void recvxGameBootPresent(void) { assert(!"texture test must not submit draws"); }
-int recvxGameBootRenderPending(void) { return 0; }
+int recvxGameBootRenderPending(void) { return render_pending; }
+const RecvxBootTexture *recvxGameBootRenderSnapshotTexture(const RecvxBootTexture *texture)
+{
+    assert(snapshot_count < sizeof(snapshots)/sizeof(snapshots[0]));
+    snapshots[snapshot_count] = *texture;
+    return &snapshots[snapshot_count++];
+}
 void recvxGameBootUnsupported(const char *name)
 {
     if (!expecting_fault) { fprintf(stderr, "unexpected render-state fault: %s\n", name); abort(); }
@@ -70,6 +81,15 @@ static void texture_resolution(void)
     other = recvxGameBootRenderTextureSelect(&list, 1);
     assert(other->width == 1024 && other->tile_width == 512 && other->tile_count == 2);
     assert(texture != other && recvxGameBootRenderTextureCurrentList() == &list);
+    njSetTexture(&list); njSetTextureNum(0);
+    assert(recvxGameBootRenderStateGet()->selected_texture == texture);
+    njSetTextureNumG(101);
+    assert(recvxGameBootRenderStateGet()->selected_texture == other);
+    REJECT(njSetTextureNumG(99999), "global texture index");
+    njColorBlendingMode(0, 11); njColorBlendingMode(1, 2);
+    assert(recvxGameBootRenderStateGet()->polygon_blend_source == 11 &&
+        recvxGameBootRenderStateGet()->polygon_blend_destination == 2);
+    njColorBlendingMode(0, 8); njColorBlendingMode(1, 6);
     REJECT(recvxGameBootRenderTextureSelect(NULL, 3), "texture exceeds");
     REJECT(recvxGameBootRenderTextureSelect(NULL, 2), "texture descriptor");
     recvxGameBootTexturesShutdown();
@@ -108,6 +128,39 @@ static void original_render_controls(void)
     REJECT(njCnkSetSimpleMultiAmbient(0, 0, NAN), "simple ambient");
 }
 
+static void queued_palette_changes(void)
+{
+    NJS_TEXNAME name = {0};
+    NJS_TEXLIST list = {.textures=&name,.nbTexture=1};
+    QUAD quad = {.x2=16,.y2=8,.u2=1,.v2=1};
+    size_t bytes, count;
+    unsigned char *data=texture_data(16,4,&bytes);
+    recvxGameBootRenderTextureReset();
+    recvxGameBootTextureInstall(&list,0,data,bytes,0,102,0,0);free(data);
+    njSetTexture(&list);njSetQuadTexture(0,0xffffffffu);
+    const RecvxBootTexture *live=recvxGameBootRenderTextureSelect(NULL,0);
+    for(unsigned int i=0;i<4096;++i)palbuf[i]=0xff000000u|i;
+    snapshot_count=0;
+    njDrawQuadTexture(&quad,1);
+    njSetPaletteBankNum(0,1);
+    assert(snapshot_count==1&&snapshots[0].palette[2]==0xff000002u&&live->palette[2]==0xff000012u);
+    njDrawQuadTexture(&quad,2);njSetPaletteBankNum(0,2);njDrawQuadTexture(&quad,3);
+    assert(snapshot_count==2&&snapshots[1].palette[2]==0xff000012u&&live->palette[2]==0xff000022u);
+    const RecvxBootDraw *queued=recvxGameBootDraws(&count);
+    assert(count==3&&queued[0].texture==&snapshots[0]&&queued[1].texture==&snapshots[1]&&queued[2].texture==live);
+    for(unsigned int i=0;i<2;++i)
+        assert(snapshots[i].pixels==live->pixels&&snapshots[i].source==live->source);
+    render_pending=1;njSetPaletteBankNum(0,3);
+    assert(snapshot_count==3&&snapshots[2].palette[2]==0xff000022u&&live->palette[2]==0xff000032u);
+    REJECT(njSetPaletteBankNum(0,256),"palette bank selection");assert(snapshot_count==3);
+    render_pending=0;njSetPaletteBankNum(0,4);assert(snapshot_count==3);
+    njDrawQuadTexture(&quad,1); njSetPaletteBankNum(0,5);
+    assert(snapshot_count==4);
+    recvxGameBootDrawDiscard();
+    recvxGameBootTexturesShutdown(); /* No partial-frame Present may dereference a discarded view. */
+    recvxGameBootDraws(&count); assert(count==0);
+}
+
 static void sampler_bits(void)
 {
     RecvxGameBootSampler sampler;
@@ -126,7 +179,7 @@ static void sampler_bits(void)
 
 int main(void)
 {
-    texture_resolution(); original_render_controls(); sampler_bits();
-    puts("PASS: real owned TIM2 material resolution, wide texture tiles, released/missing descriptors, original control/material/ambient state, blend mapping and authored clamp/mirror/filter bits");
+    texture_resolution(); original_render_controls(); sampler_bits(); queued_palette_changes();
+    puts("PASS: real owned TIM2 material resolution, wide texture tiles, released/missing descriptors, queued palette bank snapshots, original control/material/ambient state, blend mapping and authored clamp/mirror/filter bits");
     return 0;
 }

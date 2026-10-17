@@ -7,6 +7,9 @@
 #include "psp/game_boot_chunk.h"
 #include "ps2/veronica/prog/main.h"
 
+extern size_t recvxGameBootSkinRemaining(const void *) __attribute__((weak));
+extern size_t recvxGameBootMorphRemaining(const void *) __attribute__((weak));
+
 #define CHUNK_COMMAND_LIMIT 65536u
 #define CHUNK_TRIANGLE_LIMIT 65536u
 
@@ -34,7 +37,10 @@ static size_t remaining(const void *pointer, unsigned int alignment)
     uintptr_t first = (uintptr_t)freemem, end = sys ? (uintptr_t)sys->endp : 0;
     uintptr_t p = (uintptr_t)pointer;
     size_t size, source;
-    if (!pointer || !freemem || end < first || p < first || p > end || (p & (alignment - 1u)))
+    if (!pointer || (p & (alignment - 1u))) return 0;
+    if (recvxGameBootSkinRemaining && (size = recvxGameBootSkinRemaining(pointer))) return size;
+    if (recvxGameBootMorphRemaining && (size = recvxGameBootMorphRemaining(pointer))) return size;
+    if (!freemem || end < first || p < first || p > end || (p & (alignment - 1u)))
         return 0;
     size = end - p;
     source = recvxGameBootSourceRemaining(pointer);

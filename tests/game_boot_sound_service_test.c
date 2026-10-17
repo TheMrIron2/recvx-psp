@@ -1,0 +1,88 @@
+/* The real scenario sound service calls firmware-backed audio controls.
+   This fixture records those calls; it never decodes compressed samples. */
+#include <assert.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include "psp/game_boot.h"
+#include "psp/game_boot_audio.h"
+#include "ps2/veronica/prog/main.h"
+#include "ps2/veronica/prog/sdfunc.h"
+
+static SYS_WORK work;
+SYS_WORK *sys = &work;
+CAM_WORK cam;
+int PatId[4] = {0, 1, 2, 3};
+char ThreeDVolTbl[510], PanTbl360[68], PanTbl360Vol[68];
+static int slot_seen, sound_seen, volume_seen, pan_seen, fade_seen, stop_seen;
+static int midi_starts, adx_starts, adx_stops, stream_active;
+static unsigned int partition_seen;
+
+extern void recvxGameBootSoundReset(void);
+void recvxGameBootLog(const char *format, ...) { (void)format; }
+void recvxGameBootUnsupported(const char *reason) { fprintf(stderr, "%s\n", reason); abort(); }
+const char *recvxAudioFault(void) { return NULL; }
+int recvxAudioNativeError(void) { return 0; }
+const char *recvxAudioNativeErrorCall(void) { return NULL; }
+int recvxAudioEnvironment(unsigned int field) { return field == 9 ? 24 : -(int)field - 10; }
+int recvxAudioPlayMidiFade(int slot, int sound, int volume, int pan, int frames)
+{
+    slot_seen = slot; sound_seen = sound; volume_seen = volume; pan_seen = pan;
+    fade_seen = frames; ++midi_starts; return 0;
+}
+int recvxAudioPlayMidi(int slot, int sound, int volume, int pan)
+{ return recvxAudioPlayMidiFade(slot, sound, volume, pan, 0); }
+void recvxAudioStopMidi(int slot) { slot_seen = slot; stop_seen = 1; }
+void recvxAudioStopSounds(int frames) { (void)frames; }
+void recvxAudioMidiVolume(int slot, int volume, int frames, int stop)
+{ slot_seen = slot; volume_seen = volume; fade_seen = frames; stop_seen = stop; }
+void recvxAudioVolume(unsigned int slot, int volume, int frames)
+{ slot_seen = (int)slot; volume_seen = volume; fade_seen = frames; }
+void recvxAudioPan(unsigned int slot, unsigned int channel, int pan)
+{ assert(slot == 1 && channel == 0); pan_seen = pan; }
+int recvxAudioAdx(unsigned int slot, unsigned int partition, unsigned int file)
+{ slot_seen = (int)slot; partition_seen = partition; sound_seen = (int)file; stream_active = 1; ++adx_starts; return 0; }
+void recvxAudioPause(unsigned int slot, int pause) { assert(slot == 1 && pause == 1); }
+int recvxAudioStatus(unsigned int slot) { assert(slot == 1); return stream_active; }
+void recvxAudioStop(unsigned int slot) { slot_seen = (int)slot; stream_active = 0; ++adx_stops; }
+
+int main(void)
+{
+    recvxGameBootSoundReset();
+    for (int i = 0; i < 68; ++i) { PanTbl360[i] = (char)(i - 34); PanTbl360Vol[i] = -3; }
+    ThreeDVolTbl[10] = -20;
+    NJS_POINT3 p = {10, 0, 0};
+    assert(CallNativeEventSe(0, &p, 0x123, 0) == 0);
+    assert(slot_seen == 7 && sound_seen == 0x223 && pan_seen == 20 && volume_seen == -25);
+    assert(CallNativeEventSe(4, &p, 0x456, 1) == 0);
+    assert(slot_seen == 3 && sound_seen == 0x256 && pan_seen == 0 && volume_seen == 0);
+    for (int i = 0; i < 5; ++i) { StopNativeEventSe(i); assert(slot_seen == 7 - i); }
+    assert(CustomMidiSlotDef(3, 2) == 0);
+    int before = midi_starts;
+    assert(CallNativeEventSe(3, &p, 0, 0) == 1 && midi_starts == before);
+    assert(CustomMidiSlotDef(3, 4) == 1);
+    assert(CallNativeEventSe(4, &p, 0, 0) == 0);
+
+    CallBackGroundSeEx(2, 0x123, 30);
+    assert(slot_seen == 2 && sound_seen == 0x323 && fade_seen == 30 && volume_seen == -15);
+    StopBackGroundSeEx(2, 40);
+    assert(slot_seen == 2 && volume_seen == -127 && fade_seen == 40 && stop_seen == 1);
+    SendSoundCommand(3);
+    before = midi_starts;
+    CallBackGroundSeEx(1, 7, 80);
+    assert(midi_starts == before);
+    SendSoundCommand(1);
+    assert(midi_starts == before + 1 && slot_seen == 1 && sound_seen == 0x307 && fade_seen == 80);
+
+    PlayVoiceEx2(1, 19, &p, 0, 50, 0);
+    assert(partition_seen == 1 && sound_seen == 19 && pan_seen == 20 && volume_seen == -23 && fade_seen == 0);
+    before = adx_starts;
+    PlayVoiceEx2(1, 20, &p, 1, 60, 1);
+    assert(adx_starts == before + 1 && adx_stops == 1 && pan_seen == 0 && volume_seen == 0 && fade_seen == 60);
+    before = adx_starts;
+    PlayVoiceEx2(1, 21, &p, 2, 90, 0);
+    assert(adx_starts == before && adx_stops == 2 && pan_seen == 20 && volume_seen == -23);
+    StopVoice(70); assert(slot_seen == 1 && volume_seen == -127 && fade_seen == 70);
+    puts("PASS real native sound service: event/background slot ownership, positional volume/pan, fade frames and voice modes");
+    return 0;
+}

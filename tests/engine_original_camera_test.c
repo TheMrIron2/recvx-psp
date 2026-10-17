@@ -89,8 +89,27 @@ int main(void)
     ++checks;
 
     _Make_ClipVolume(-640.0f, -480.0f);
-    passed &= expect(recvxEngineOriginalFault() != NULL,
-                     "unsupported clip volume raises an engine fault");
+    float width,height,guard_width,guard_height,planes[6][4];
+    recvxEngineOriginalViewClipVolume(&width,&height,&guard_width,&guard_height);
+    passed &= expect(recvxEngineOriginalFault() == NULL && width==320 && height==240 &&
+                     guard_width==320 && guard_height==240,
+                     "negative authored dimensions retain frustum and set display guard");
+    ++checks;
+    passed &= expect(recvxEngineOriginalViewClipVolumePlanes(planes)==1 &&
+                     near(planes[0][0],expected_projection/320) &&
+                     near(planes[2][1],expected_projection/240) &&
+                     planes[4][2]==1 && planes[4][3]==-3 && planes[5][2]==-1 && planes[5][3]==2000,
+                     "custom clip planes preserve original homogeneous matrix equations");
+    ++checks;
+    _Make_ClipVolume(1024,960);
+    recvxEngineOriginalViewClipVolume(&width,&height,&guard_width,&guard_height);
+    recvxEngineOriginalViewClipVolumePlanes(planes);
+    passed &= expect(width==1024 && height==960 && guard_width==2047 && guard_height==2047 &&
+                     near(planes[0][0],expected_projection/1024) && near(planes[2][1],expected_projection/960),
+                     "positive authored extents expand the clipping frustum");
+    ++checks;
+    _Make_ClipVolume(0,240);
+    passed &= expect(recvxEngineOriginalFault()!=NULL,"singular clip volumes stop before division");
     ++checks;
 
     printf("Original camera and view checks: %d\n%s\n", checks,

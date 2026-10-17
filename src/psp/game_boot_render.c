@@ -1,5 +1,6 @@
 #include <math.h>
 #include <limits.h>
+#include <malloc.h>
 #include <stdlib.h>
 #include <string.h>
 #include "psp/game_boot_render.h"
@@ -14,18 +15,44 @@
 
 #define MAX_VERTICES 262144u
 #define MAX_BATCHES 16384u
+extern void recvxGameBootDrawDiscard(void) __attribute__((weak));
 static RecvxBootRenderVertex *vertices;
 static RecvxBootRenderBatch *batches;
 static size_t vertex_capacity, batch_capacity, vertex_count, batch_count;
+static int shadow_active;
+static RecvxBootTexture *texture_snapshots[256];
+static size_t texture_snapshot_count;
 static RecvxBootRenderFrame frame __attribute__((aligned(16)));
 
 _Static_assert(sizeof(RecvxBootRenderVertex) == 24, "PSP GU vertex packing");
 
-void recvxGameBootRenderBeginFrame(void) { vertex_count = batch_count = 0; }
+void recvxGameBootRenderBeginFrame(void)
+{
+    for (size_t i = 0; i < texture_snapshot_count; ++i) free(texture_snapshots[i]);
+    texture_snapshot_count = 0;
+    vertex_count = batch_count = 0; shadow_active = 0;
+}
 void recvxGameBootRenderConsume(void) { recvxGameBootRenderBeginFrame(); }
 int recvxGameBootRenderPending(void) { return vertex_count != 0; }
+const RecvxBootTexture *recvxGameBootRenderSnapshotTexture(const RecvxBootTexture *texture)
+{
+    if (!texture || !texture->source || !texture->pixels)
+        recvxGameBootUnsupported("invalid original palette snapshot texture");
+    if (texture_snapshot_count == sizeof(texture_snapshots) / sizeof(texture_snapshots[0]))
+        recvxGameBootUnsupported("original palette snapshot capacity exceeded");
+    RecvxBootTexture *snapshot = memalign(16, sizeof(*snapshot));
+    if (!snapshot) recvxGameBootUnsupported("original palette snapshot allocation failed");
+    *snapshot = *texture;
+    texture_snapshots[texture_snapshot_count++] = snapshot;
+    for (size_t i = 0; i < batch_count; ++i)
+        if (batches[i].texture == texture) batches[i].texture = snapshot;
+    return snapshot;
+}
 void recvxGameBootRenderReset(void)
 {
+    /* A fault may leave 2D overlays pointing into the same palette views.
+       Discard those draws before freeing their frame-owned snapshots. */
+    if (recvxGameBootDrawDiscard) recvxGameBootDrawDiscard();
     free(vertices); free(batches); vertices = NULL; batches = NULL;
     vertex_capacity = batch_capacity = 0;
     memset(&frame, 0, sizeof(frame));
@@ -43,11 +70,11 @@ static void checked_math(void)
 {
     if (recvxEngineOriginalFault()) recvxGameBootUnsupported(recvxEngineOriginalFault());
 }
-static void reserve(void)
+static void reserve(size_t count)
 {
-    if (vertex_count > MAX_VERTICES - 3 || batch_count >= MAX_BATCHES)
+    if (count > MAX_VERTICES || vertex_count > MAX_VERTICES - count || batch_count >= MAX_BATCHES)
         recvxGameBootUnsupported("original 3D draw queue exceeds capacity");
-    if (vertex_count + 3 > vertex_capacity) {
+    if (vertex_count + count > vertex_capacity) {
         size_t capacity = vertex_capacity ? vertex_capacity * 2 : 4096;
         void *memory;
         if (capacity > MAX_VERTICES) capacity = MAX_VERTICES;
@@ -63,25 +90,143 @@ static void reserve(void)
     }
 }
 
+static void capture_projection(void)
+{
+    float near, far, ax, ay, distance = recvxEngineOriginalViewProjectionDistance();
+    recvxEngineOriginalViewClipPlanes(&near, &far);
+    recvxEngineOriginalViewAspect(&ax, &ay);
+    near = -near; far = -far;
+    if (!isfinite(distance) || !(distance > 0) || !(near > 0) || !(far > near))
+        recvxGameBootUnsupported("invalid original 3D projection");
+    memset(frame.projection, 0, sizeof(frame.projection));
+    frame.projection[0] = 2.0f * distance * ax / 640.0f;
+    frame.projection[5] = 2.0f * distance * ay / 480.0f;
+    frame.projection[10] = -(far + near) / (far - near);
+    frame.projection[11] = -1;
+    frame.projection[14] = -(2.0f * far * near) / (far - near);
+}
+
 const RecvxBootRenderFrame *recvxGameBootRenderFrame(void)
 {
     frame.vertices = vertices; frame.batches = batches;
     frame.vertex_count = vertex_count; frame.batch_count = batch_count;
-    if (vertex_count) {
-        float near, far, ax, ay, distance = recvxEngineOriginalViewProjectionDistance();
-        recvxEngineOriginalViewClipPlanes(&near, &far);
-        recvxEngineOriginalViewAspect(&ax, &ay);
-        near = -near; far = -far;
-        if (!isfinite(distance) || !(distance > 0) || !(near > 0) || !(far > near))
-            recvxGameBootUnsupported("invalid original 3D projection");
-        memset(frame.projection, 0, sizeof(frame.projection));
-        frame.projection[0] = 2.0f * distance * ax / 640.0f;
-        frame.projection[5] = 2.0f * distance * ay / 480.0f;
-        frame.projection[10] = -(far + near) / (far - near);
-        frame.projection[11] = -1;
-        frame.projection[14] = -(2.0f * far * near) / (far - near);
-    }
     return &frame;
+}
+
+static void append(const RecvxBootRenderVertex *output, unsigned int count, RecvxBootRenderKind kind,
+                   unsigned int attributes, unsigned int sampler, int source, int destination,
+                   const RecvxBootTexture *texture, unsigned int fog_color)
+{
+    /* Event scripts run after model submission and may set the next camera.
+       Keep this frame's projection with the view-space vertices it produced. */
+    if (count && !vertex_count) capture_projection();
+    reserve(count);
+    RecvxBootRenderBatch *batch = batch_count ? &batches[batch_count-1] : NULL;
+    if (!count || kind == RECVX_RENDER_SHADOW_COMPOSITE || !batch || batch->count + count > 65535u || batch->kind != kind ||
+        batch->fog_color != fog_color || batch->texture != texture || batch->attributes != attributes || batch->sampler != sampler ||
+        batch->blend_source != source || batch->blend_destination != destination) {
+        batch = &batches[batch_count++];
+        *batch = (RecvxBootRenderBatch){.first=vertex_count, .attributes=attributes, .sampler=sampler,
+            .blend_source=source, .blend_destination=destination, .texture=texture, .kind=kind, .fog_color=fog_color};
+    }
+    if (count) memcpy(vertices + vertex_count, output, count * sizeof(*output));
+    vertex_count += count; batch->count += count;
+}
+
+static void local_vertices(const RecvxGameChunkVertex *input, RecvxBootRenderVertex *output, unsigned int count)
+{
+    NJS_MATRIX matrix;
+    if (!input) recvxGameBootUnsupported("invalid original primitive vertices");
+    njGetMatrix(&matrix); checked_math();
+    for (unsigned int i = 0; i < count; ++i) {
+        NJS_POINT3 local = {input[i].x, input[i].y, input[i].z}, view;
+        njCalcPoint(&matrix, &local, &view); checked_math();
+        if (!isfinite(view.x) || !isfinite(view.y) || !isfinite(view.z))
+            recvxGameBootUnsupported("non-finite original primitive transform");
+        unsigned int color = input[i].color;
+        output[i] = (RecvxBootRenderVertex){0,0,
+            (color & 0xff00ff00u) | ((color >> 16) & 255u) | ((color & 255u) << 16),
+            view.x,-view.y,-view.z};
+    }
+}
+void recvxGameBootRenderScreenTriangle(const RecvxGameChunkVertex input[3], int trans)
+{
+    RecvxBootRenderVertex output[3];
+    const RecvxGameBootRenderState *state = recvxGameBootRenderStateGet();
+    const RecvxBootTexture *texture = state->selected_texture;
+    float near, far;
+    if (!input || (trans != 0 && trans != 1) || !texture || !texture->source ||
+        !texture->pixels || texture->tile_count != 1)
+        recvxGameBootUnsupported("invalid original screen sprite submission");
+    recvxEngineOriginalViewClipPlanes(&near, &far);
+    if (!isfinite(near) || !isfinite(far) || near >= 0 || far >= near)
+        recvxGameBootUnsupported("invalid original screen sprite depth range");
+    float a = (-65536.0f * near) / (far-near);
+    float b = (65536.0f * near * far) / (far-near);
+    for (unsigned int i=0; i<3; ++i) {
+        if (!isfinite(input[i].x) || !isfinite(input[i].y) || !isfinite(input[i].z) ||
+            !isfinite(input[i].u) || !isfinite(input[i].v) || input[i].z < 1)
+            recvxGameBootUnsupported("invalid original screen sprite vertex");
+        float depth = a + b / (-1.0f / input[i].z);
+        unsigned int color=input[i].color;
+        output[i]=(RecvxBootRenderVertex){input[i].u*texture->width, input[i].v*texture->height,
+            (color&0xff00ff00u)|((color>>16)&255u)|((color&255u)<<16),
+            input[i].x*0.75f,input[i].y*(272.0f/480.0f),fmaxf(0,fminf(65534,depth))};
+        if (!isfinite(output[i].x) || !isfinite(output[i].y) || !isfinite(output[i].u) || !isfinite(output[i].v))
+            recvxGameBootUnsupported("screen sprite exceeds PSP coordinate range");
+    }
+    append(output,3,RECVX_RENDER_SCREEN_TRIANGLES,0x13u|(trans?8u:0),3u|(state->texture_filter?4u:0),
+        state->polygon_blend_source,state->polygon_blend_destination,texture,0);
+}
+
+void recvxGameBootRenderLine(const RecvxGameChunkVertex input[2], int trans)
+{
+    RecvxBootRenderVertex output[2];
+    const RecvxGameBootRenderState *state = recvxGameBootRenderStateGet();
+    if (trans != 0 && trans != 1) recvxGameBootUnsupported("invalid original line transparency");
+    local_vertices(input, output, 2);
+    append(output, 2, RECVX_RENDER_LINES, 0x13u | (trans ? 8u : 0), 0,
+        state->polygon_blend_source, state->polygon_blend_destination, NULL, 0);
+}
+void recvxGameBootRenderShadowStart(void)
+{
+    if (shadow_active) recvxGameBootUnsupported("nested original modifier draw");
+    shadow_active = 1;
+    append(NULL,0,RECVX_RENDER_SHADOW_START,0,0,0,0,NULL,0);
+}
+void recvxGameBootRenderShadowTriangle(const RecvxGameChunkVertex input[3], unsigned int pass)
+{
+    RecvxBootRenderVertex output[3];
+    if (!shadow_active || pass > 1) recvxGameBootUnsupported("invalid original modifier pass");
+    local_vertices(input, output, 3);
+    for (unsigned int i = 0; i < 3; ++i) output[i].color = 0xff202020u;
+    append(output,3,pass ? RECVX_RENDER_SHADOW_SUBTRACT : RECVX_RENDER_SHADOW_ADD,0,0,0,0,NULL,0);
+}
+void recvxGameBootRenderShadowComposite(const float bounds[4], unsigned int fog)
+{
+    if (!shadow_active || !bounds || fog > 255)
+        recvxGameBootUnsupported("invalid original modifier composite");
+    for (unsigned int i = 0; i < 4; ++i)
+        if (!isfinite(bounds[i]) || bounds[i] < 0 || bounds[i] > (i & 1 ? 480 : 640))
+            recvxGameBootUnsupported("invalid original modifier bounds");
+    if (bounds[2] <= bounds[0] || bounds[3] <= bounds[1]) return;
+    unsigned int tint = 2u * ((fog * 3u) / 16u);
+    unsigned int color = 0xff000000u | (tint * 0x10101u);
+    RecvxBootRenderVertex output[2];
+    for (unsigned int i = 0; i < 2; ++i) {
+        float bx = bounds[2*i], by = bounds[2*i+1];
+        float x = floorf(bx*16.0f)/16.0f * 0.75f;
+        float y = floorf(by*16.0f)/16.0f * (272.0f/480.0f);
+        output[i] = (RecvxBootRenderVertex){(floorf(bx)+0.5f)*0.75f,
+            (floorf(by)+0.5f)*(272.0f/480.0f),color,x,y,0};
+    }
+    append(output,2,RECVX_RENDER_SHADOW_COMPOSITE,0,0,0,0,NULL,0);
+}
+void recvxGameBootRenderShadowEnd(void)
+{
+    if (!shadow_active) recvxGameBootUnsupported("unmatched original modifier end");
+    append(NULL,0,RECVX_RENDER_SHADOW_END,0,0,0,0,NULL,0);
+    shadow_active = 0;
 }
 
 static float dot(const NJS_VECTOR *a, const NJS_VECTOR *b)
@@ -103,9 +248,88 @@ static unsigned int byte(float value)
 
 typedef struct DrawContext {
     NJS_MATRIX matrix, normals;
+    int sprite, textured, trans, half_fog;
+    int custom_clip;
+    float clip_planes[6][4];
+    unsigned int fog_color;
     const RecvxGameBootRenderState *state;
     const RecvxEngineOriginalLightingState *lighting;
 } DrawContext;
+
+typedef struct ClipVertex {
+    float u,v,x,y,z,color[4];
+} ClipVertex;
+
+static float clip_distance(const ClipVertex *vertex,const float plane[4])
+{
+    /* Queued GU vertices have the original Ninja Y/Z signs reversed. */
+    float result=plane[0]*vertex->x-plane[1]*vertex->y-plane[2]*vertex->z+plane[3];
+    if(!isfinite(result))recvxGameBootUnsupported("original custom clip distance exceeds range");
+    return result;
+}
+static ClipVertex clip_intersection(const ClipVertex *a,const ClipVertex *b,float da,float db)
+{
+    float aa=fabsf(da),bb=fabsf(db),ratio,t;
+    /* Opposite signs guarantee a crossing. Avoid overflowing da-db for large
+       finite coordinates, and preserve UV/color interpolation in view space. */
+    if(aa>bb){ratio=bb/aa;t=1/(1+ratio);}
+    else{ratio=aa/bb;t=ratio/(1+ratio);}
+    ClipVertex result={.u=(1-t)*a->u+t*b->u,.v=(1-t)*a->v+t*b->v,
+        .x=(1-t)*a->x+t*b->x,.y=(1-t)*a->y+t*b->y,.z=(1-t)*a->z+t*b->z};
+    for(unsigned int i=0;i<4;++i)result.color[i]=(1-t)*a->color[i]+t*b->color[i];
+    if(!isfinite(result.u)||!isfinite(result.v)||!isfinite(result.x)||!isfinite(result.y)||!isfinite(result.z))
+        recvxGameBootUnsupported("original custom clip interpolation exceeds range");
+    return result;
+}
+static unsigned int clip_triangle(const RecvxBootRenderVertex input[3],const float planes[6][4],
+                                  RecvxBootRenderVertex output[21])
+{
+    /* Intersecting a triangle with six convex half spaces produces at most
+       nine polygon vertices, or seven fan triangles. Keep two spare slots. */
+    ClipVertex polygon[2][12];
+    unsigned int count=3,current=0;
+    for(unsigned int i=0;i<3;++i){
+        const RecvxBootRenderVertex *v=&input[i];
+        polygon[0][i]=(ClipVertex){.u=v->u,.v=v->v,.x=v->x,.y=v->y,.z=v->z};
+        for(unsigned int c=0;c<4;++c)polygon[0][i].color[c]=(v->color>>(c*8))&255u;
+    }
+    for(unsigned int plane=0;plane<6&&count;++plane){
+        unsigned int next=current^1u,n=0;
+        ClipVertex previous=polygon[current][count-1];
+        float previous_distance=clip_distance(&previous,planes[plane]);
+        for(unsigned int i=0;i<count;++i){
+            ClipVertex vertex=polygon[current][i];
+            float distance=clip_distance(&vertex,planes[plane]);
+            if((previous_distance<0&&distance>0)||(previous_distance>0&&distance<0)){
+                if(n>=12)recvxGameBootUnsupported("original custom clip polygon exceeds capacity");
+                polygon[next][n++]=clip_intersection(&previous,&vertex,previous_distance,distance);
+            }
+            if(distance>=0){
+                if(n>=12)recvxGameBootUnsupported("original custom clip polygon exceeds capacity");
+                polygon[next][n++]=vertex;
+            }
+            previous=vertex;previous_distance=distance;
+        }
+        current=next;count=n;
+    }
+    if(count<3)return 0;
+    if(count>9)recvxGameBootUnsupported("original custom clip fan exceeds capacity");
+    unsigned int emitted=0;
+    for(unsigned int i=2;i<count;++i){
+        const ClipVertex *v[3]={&polygon[current][0],&polygon[current][i-1],&polygon[current][i]};
+        NJS_VECTOR a={v[1]->x-v[0]->x,v[1]->y-v[0]->y,v[1]->z-v[0]->z};
+        NJS_VECTOR b={v[2]->x-v[0]->x,v[2]->y-v[0]->y,v[2]->z-v[0]->z};
+        NJS_VECTOR area={a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};
+        if(area.x==0&&area.y==0&&area.z==0)continue;
+        for(unsigned int j=0;j<3;++j){
+            unsigned int color=0;
+            for(unsigned int c=0;c<4;++c)
+                color|=(unsigned int)(fmaxf(0,fminf(255,v[j]->color[c]))+0.5f)<<(8*c);
+            output[emitted++]=(RecvxBootRenderVertex){v[j]->u,v[j]->v,color,v[j]->x,v[j]->y,v[j]->z};
+        }
+    }
+    return emitted;
+}
 
 static unsigned int shade(const DrawContext *context, const RecvxGameChunkMaterial *material,
                            const RecvxGameChunkVertex *vertex, const NJS_POINT3 *position,
@@ -185,13 +409,20 @@ static int emit(void *user, const RecvxGameChunkMaterial *material, const RecvxG
     DrawContext *context = user;
     RecvxBootRenderVertex output[3];
     NJS_POINT3 positions[3]; NJS_VECTOR face;
-    unsigned int attributes = recvxGameBootRenderStripAttributes(material->flags);
+    unsigned int attributes = context->sprite ? (0x13u | (context->trans ? 8u : 0)) :
+        recvxGameBootRenderStripAttributes(material->flags);
     const RecvxBootTexture *texture = NULL;
     RecvxGameBootSampler sampler = {0};
     if (!(attributes & 3u) && (material->specular & 0xffffffu))
         recvxGameBootUnsupported("unported original specular chunk lighting");
     if (attributes & 0x40u) recvxGameBootUnsupported("unported original environment-mapped chunk material");
-    if (material->texture != UINT_MAX) {
+    if (context->sprite && context->textured) {
+        texture = context->state->selected_texture;
+        if (!texture || !texture->source || !texture->pixels || texture->tile_count != 1)
+            recvxGameBootUnsupported("invalid original sprite texture selection");
+        sampler.clamp_u = sampler.clamp_v = 1;
+        sampler.filter = context->state->texture_filter;
+    } else if (!context->sprite && material->texture != UINT_MAX) {
         texture = recvxGameBootRenderTextureSelect(NULL, material->texture);
         recvxGameBootRenderTextureSampler(material->texture_bits, material->texture_flags, &sampler);
         if (texture->tile_count != 1) recvxGameBootUnsupported("unported tiled 3D material texture");
@@ -212,26 +443,57 @@ static int emit(void *user, const RecvxGameChunkMaterial *material, const RecvxG
         checked_math();
         if ((attributes & 0x20u) || !normalize(&transformed)) transformed = face;
         output[i] = (RecvxBootRenderVertex){input[i].u, input[i].v,
-            shade(context, material, &input[i], &positions[i], &transformed, attributes),
+            context->sprite ? input[i].color : shade(context, material, &input[i], &positions[i], &transformed, attributes),
             positions[i].x, -positions[i].y, -positions[i].z};
         unsigned int color = output[i].color;
         output[i].color = (color & 0xff00ff00u) | ((color >> 16) & 255u) | ((color & 255u) << 16);
+        if (context->half_fog && fabsf(output[i].z) >= 0x1p39f)
+            recvxGameBootUnsupported("authored sprite fog depth exceeds PSP constant range");
         if (!isfinite(output[i].x) || !isfinite(output[i].y) || !isfinite(output[i].z))
             recvxGameBootUnsupported("non-finite original model transform");
     }
-    reserve();
     unsigned int flags = sampler.clamp_u | (sampler.clamp_v << 1) | (!!sampler.filter << 2);
-    int source = context->state->control_flags & 0x8000u ? context->state->blend_source : material->blend_source;
-    int destination = context->state->control_flags & 0x8000u ? context->state->blend_destination : material->blend_destination;
-    RecvxBootRenderBatch *batch = batch_count ? &batches[batch_count-1] : NULL;
-    if (!batch || batch->count >= 65535u || batch->texture != texture || batch->attributes != attributes || batch->sampler != flags ||
-        batch->blend_source != source || batch->blend_destination != destination) {
-        batch = &batches[batch_count++];
-        *batch = (RecvxBootRenderBatch){vertex_count, 0, attributes, flags, source, destination, texture};
-    }
-    memcpy(vertices + vertex_count, output, sizeof(output));
-    vertex_count += 3; batch->count += 3;
+    int source = context->sprite ? context->state->polygon_blend_source : context->state->control_flags & 0x8000u ? context->state->blend_source : material->blend_source;
+    int destination = context->sprite ? context->state->polygon_blend_destination : context->state->control_flags & 0x8000u ? context->state->blend_destination : material->blend_destination;
+    RecvxBootRenderVertex clipped[21];
+    unsigned int count=context->custom_clip?clip_triangle(output,context->clip_planes,clipped):3;
+    if(!count)return 0;
+    append(context->custom_clip?clipped:output, count, context->half_fog ? RECVX_RENDER_HALF_FOG : RECVX_RENDER_TRIANGLES,
+        attributes, flags, source, destination, texture, context->fog_color);
     return 0;
+}
+
+void recvxGameBootRenderSpriteTriangle(const RecvxGameChunkVertex input[3], int textured, int trans)
+{
+    DrawContext context = {.sprite = 1, .textured = textured, .trans = trans};
+    RecvxGameChunkMaterial material = {.texture = UINT_MAX};
+    if (!input || (textured != 0 && textured != 1) || (trans != 0 && trans != 1))
+        recvxGameBootUnsupported("invalid original sprite submission");
+    for (unsigned int i = 0; i < 3; ++i)
+        if (!isfinite(input[i].x) || !isfinite(input[i].y) || !isfinite(input[i].z) ||
+            !isfinite(input[i].u) || !isfinite(input[i].v))
+            recvxGameBootUnsupported("non-finite original sprite vertex");
+    njGetMatrix(&context.matrix); checked_math();
+    memcpy(context.normals, context.matrix, sizeof(context.normals));
+    context.state = recvxGameBootRenderStateGet();
+    emit(&context, &material, input);
+}
+
+void recvxGameBootRenderHalfFogTriangle(const RecvxGameChunkVertex input[3], unsigned int offset_argb, int trans)
+{
+    DrawContext context = {.sprite=1, .textured=1, .trans=trans, .half_fog=1};
+    RecvxGameChunkMaterial material = {.texture=UINT_MAX};
+    if (!input || (trans != 0 && trans != 1))
+        recvxGameBootUnsupported("invalid authored fog sprite submission");
+    for (unsigned int i=0; i<3; ++i)
+        if (!isfinite(input[i].x) || !isfinite(input[i].y) || !isfinite(input[i].z) ||
+            !isfinite(input[i].u) || !isfinite(input[i].v))
+            recvxGameBootUnsupported("non-finite authored fog sprite vertex");
+    njGetMatrix(&context.matrix); checked_math();
+    memcpy(context.normals, context.matrix, sizeof(context.normals));
+    context.state = recvxGameBootRenderStateGet();
+    context.fog_color = ((offset_argb >> 16) & 255u) | (offset_argb & 0xff00u) | ((offset_argb & 255u) << 16);
+    emit(&context, &material, input);
 }
 
 static void normal_matrix(NJS_MATRIX *output, NJS_MATRIX *input)
@@ -244,7 +506,7 @@ static void normal_matrix(NJS_MATRIX *output, NJS_MATRIX *input)
 
 int njCnkDrawModelLocal(NJS_CNK_MODEL *model)
 {
-    DrawContext context;
+    DrawContext context = {0};
     if (!model) return 0;
     if (!sys || !owned(model, sizeof(*model))) recvxGameBootUnsupported("invalid original chunk model pointer");
     if (!isfinite(model->center.x) || !isfinite(model->center.y) || !isfinite(model->center.z) || !isfinite(model->r))
@@ -273,6 +535,7 @@ int njCnkDrawModelLocal(NJS_CNK_MODEL *model)
         }
     }
     normal_matrix(&context.normals, &context.matrix); checked_math();
+    context.custom_clip=recvxEngineOriginalViewClipVolumePlanes(context.clip_planes);checked_math();
     if (recvxGameBootChunkParse(model, emit, &context)) recvxGameBootUnsupported(recvxGameBootChunkFault());
     return 1;
 }

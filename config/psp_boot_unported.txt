@@ -10,18 +10,14 @@ StatusMain
 StatusMapFlagInit
 bhCheckWall
 bhControlDoor
-bhControlEvent
 bhControlGameOver
 bhControlMap
-bhControlMessage
 bhControlScreenSaver
 bhControlSpEvtComputer
 bhCopyMainmem2Texmem
 bhCopyTexmem2MainmemSub
 bhDeleteYakkyou
 bhDispTime
-bhDraw021
-bhDrawScreenFade
 bhDrawScreenSaver
 bhEff000
 bhEff002
@@ -341,7 +337,6 @@ bhFixPositionXYZ
 bhSetEffect
 bhSetWaterSplash
 bhSetWaterSplash3
-bhControlEventCamera
 bhControlPlEyeCamera
 bhControlMonitorCamera
 njCalcTexture
@@ -360,8 +355,4 @@ bhCPM2_act_cro
 bhCPM2_act_hsu
 bhCPM2_act_hsd
 bhCPM2_act_rpsh
-npCalcSkin
-npCalcSkinFM
-npCalcMorphing
-npGetMatColor
 njDrawModel

@@ -1,6 +1,10 @@
 #include <setjmp.h>
 #include "psp/game_boot_audio.h"
 #include "psp/game_boot_render.h"
+#include "psp/game_boot_skin.h"
+#include "psp/game_boot_morph.h"
+#include "psp/game_boot_effect_shadow.h"
+#include "psp/game_boot_fog.h"
 #include "psp/engine_original_view.h"
 #include "psp/engine_original_lighting.h"
 #include <stdarg.h>
@@ -67,6 +71,10 @@ int recvxGameBootInit(const char *directory, void *arena, size_t size)
     recvxGameBootCheckpointReset();
     recvxGameBootRenderReset();
     recvxGameBootDrawSkinReset();
+    recvxGameBootSkinReset();
+    recvxGameBootMorphReset();
+    recvxGameBootEffectShadowReset();
+    recvxGameBootFogReset();
     recvxEngineOriginalFaultReset(); recvxEngineOriginalMemoryReset();
     recvxEngineOriginalMatrixReset();
     recvxEngineOriginalViewReset();

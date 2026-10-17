@@ -13,27 +13,35 @@
 
 typedef struct { float u, v; unsigned int color; float x, y, z; } SpriteVertex;
 typedef struct {
-    int primitive, format, count, depth, cull, blend, alpha, textured, shade;
-    int wrap_u, wrap_v, filter_min, filter_mag, source, destination;
+    int primitive, format, count, depth, cull, blend, alpha, textured, shade, fog;
+    int wrap_u, wrap_v, filter_min, filter_mag, source, destination, operation;
+    int target_format, depth_mask, depth_function, texture_format, texture_swizzle, texture_component;
+    uintptr_t target;
+    unsigned int at, texsync_at, texflush_at;
     unsigned int source_fixed, destination_fixed;
+    float fog_near, fog_far;
+    unsigned int fog_color;
     const void *pointer, *pixels, *palette;
     int width, height, stride;
-    SpriteVertex sprite[2];
+    SpriteVertex sprite[6];
 } Submission;
 
-static RecvxBootRenderVertex vertices[9] __attribute__((aligned(16)));
-static RecvxBootRenderBatch batches[3];
+static RecvxBootRenderVertex vertices[64] __attribute__((aligned(16)));
+static RecvxBootRenderBatch batches[32];
 static RecvxBootRenderFrame frame;
 static RecvxBootDraw overlays[2];
 static size_t overlay_count;
 static RecvxBootTexture texture, wide;
 static unsigned char pixels[1024 * 32] __attribute__((aligned(16)));
 static unsigned char memory[32768] __attribute__((aligned(16)));
-static Submission submissions[16];
+static Submission submissions[64];
 static size_t submission_count, memory_used;
 static int enabled[32], list_active, finished, synchronized, consumed, cache_flushed;
 static int wraps[2], filters[2], blend_source, blend_destination, matrix_mode;
 static int shade_model;
+static int blend_operation, texture_format, texture_swizzle, texture_component;
+static float fog_near, fog_far;
+static unsigned int fog_color;
 static unsigned int blend_src_fixed, blend_dst_fixed, clear_color, clear_depth;
 static int clear_flags, depth_mask, alpha_func, alpha_value, alpha_mask;
 static int texture_width, texture_height, texture_stride;
@@ -42,10 +50,14 @@ static int matrix_loaded[3], identities[3];
 static float projection[16], scales[2], offsets[2];
 static int draw_buffer_mode, draw_buffer_stride, display_width, display_height, display_stride;
 static uintptr_t draw_address, display_address, depth_address;
+static uintptr_t context_draw_address, context_display_address;
 static int depth_stride, depth_near, depth_far, depth_function, front_face;
 static unsigned int screen_offset[2];
 static int viewport[4], scissor[4], display_enabled, vblanks, swaps, terminated;
 static unsigned int calls, start_at, finish_at, sync_at, consume_at, last_model_at, first_sprite_at;
+static unsigned int texsync_at, texflush_at;
+static struct { int flags, format; uintptr_t target; unsigned int color, at; } clears[16];
+static size_t clear_count;
 static jmp_buf fault;
 static const char *fault_name;
 static int expecting_fault;
@@ -78,7 +90,13 @@ int sceGuSync(int mode, int what)
     assert(mode == 0 && what == 0 && finished && list_active);
     list_active = 0; synchronized = 1; sync_at = ++calls; return 0;
 }
-void *sceGuSwapBuffers(void) { assert(synchronized); ++swaps; ++calls; return NULL; }
+void *sceGuSwapBuffers(void)
+{
+    assert(synchronized); ++swaps; ++calls;
+    uintptr_t old = context_draw_address; context_draw_address = context_display_address;
+    context_display_address = old; draw_address = context_draw_address;
+    return (void *)context_draw_address;
+}
 int sceGuDisplay(int on) { display_enabled = on; ++calls; return 0; }
 int sceDisplayWaitVblankStart(void) { ++vblanks; ++calls; return 0; }
 void sceKernelDcacheWritebackAll(void) { assert(!list_active); cache_flushed = 1; ++calls; }
@@ -89,12 +107,19 @@ void *sceGuGetMemory(int size)
     result = memory + memory_used; memory_used += (size + 15u) & ~15u; ++calls; return result;
 }
 void sceGuDrawBuffer(int mode, void *address, int stride)
-{ draw_buffer_mode = mode; draw_address = (uintptr_t)address; draw_buffer_stride = stride; ++calls; }
+{ draw_buffer_mode = mode; draw_address = context_draw_address = (uintptr_t)address; draw_buffer_stride = stride; ++calls; }
+void sceGuDrawBufferList(int mode, void *address, int stride)
+{
+    assert(list_active); draw_buffer_mode = mode; draw_address = (uintptr_t)address;
+    draw_buffer_stride = stride; ++calls;
+}
 void sceGuDispBuffer(int width, int height, void *address, int stride)
-{ display_width = width; display_height = height; display_address = (uintptr_t)address; display_stride = stride; ++calls; }
+{ display_width = width; display_height = height; display_address = context_display_address = (uintptr_t)address; display_stride = stride; ++calls; }
 void sceGuDepthBuffer(void *address, int stride) { depth_address = (uintptr_t)address; depth_stride = stride; ++calls; }
 void sceGuDepthRange(int near, int far) { depth_near = near; depth_far = far; ++calls; }
 void sceGuDepthFunc(int function) { depth_function = function; ++calls; }
+void sceGuFog(float near, float far, unsigned int color)
+{ fog_near=near; fog_far=far; fog_color=color; ++calls; }
 void sceGuFrontFace(int order) { front_face = order; ++calls; }
 void sceGuOffset(unsigned int x, unsigned int y) { screen_offset[0] = x; screen_offset[1] = y; ++calls; }
 void sceGuViewport(int x, int y, int width, int height)
@@ -109,15 +134,23 @@ void sceGuAlphaFunc(int func, int value, int mask)
 { alpha_func = func; alpha_value = value; alpha_mask = mask; ++calls; }
 void sceGuBlendFunc(int op, int source, int destination, unsigned int sf, unsigned int df)
 {
-    assert(op == GU_ADD); blend_source = source; blend_destination = destination;
+    assert(op == GU_ADD || op == GU_REVERSE_SUBTRACT); blend_operation = op;
+    blend_source = source; blend_destination = destination;
     blend_src_fixed = sf; blend_dst_fixed = df; ++calls;
 }
 void sceGuTexFunc(int function, int component)
-{ assert(function == GU_TFX_MODULATE && component == GU_TCC_RGBA); ++calls; }
+{
+    assert(function == GU_TFX_MODULATE && (component == GU_TCC_RGBA || component == GU_TCC_RGB));
+    texture_component=component; ++calls;
+}
 void sceGuTexWrap(int u, int v) { wraps[0] = u; wraps[1] = v; ++calls; }
 void sceGuTexFilter(int min, int mag) { filters[0] = min; filters[1] = mag; ++calls; }
 void sceGuTexMode(int psm, int mips, int cache, int swizzle)
-{ assert(psm == GU_PSM_T8 && mips == 0 && cache == 0 && swizzle == 1); ++calls; }
+{
+    assert(!mips && !cache && ((psm == GU_PSM_T8 && swizzle == 1) ||
+        (psm == GU_PSM_5551 && swizzle == 0)));
+    texture_format = psm; texture_swizzle = swizzle; ++calls;
+}
 void sceGuClutMode(unsigned int psm, unsigned int shift, unsigned int mask, unsigned int offset)
 { assert(psm == GU_PSM_8888 && !shift && mask == 255 && !offset); ++calls; }
 void sceGuClutLoad(int blocks, const void *palette)
@@ -129,10 +162,18 @@ void sceGuTexImage(int mip, int width, int height, int stride, const void *data)
 }
 void sceGuTexScale(float u, float v) { scales[0] = u; scales[1] = v; ++calls; }
 void sceGuTexOffset(float u, float v) { offsets[0] = u; offsets[1] = v; ++calls; }
-void sceGuTexFlush(void) { ++calls; }
+void sceGuTexFlush(void) { texflush_at = ++calls; }
+void sceGuTexSync(void) { assert(list_active); texsync_at = ++calls; }
 void sceGuClearColor(unsigned int color) { clear_color = color; ++calls; }
 void sceGuClearDepth(unsigned int depth) { clear_depth = depth; ++calls; }
-void sceGuClear(int flags) { clear_flags = flags; ++calls; }
+void sceGuClear(int flags)
+{
+    assert(clear_count < sizeof(clears)/sizeof(clears[0]));
+    clear_flags = flags;
+    clears[clear_count].flags=flags; clears[clear_count].format=draw_buffer_mode;
+    clears[clear_count].target=draw_address; clears[clear_count].color=clear_color;
+    clears[clear_count++].at=++calls;
+}
 void sceGumMatrixMode(int mode) { matrix_mode = mode; ++calls; }
 void sceGumLoadIdentity(void)
 { assert(matrix_mode == GU_VIEW || matrix_mode == GU_MODEL); identities[matrix_mode] = 1; ++calls; }
@@ -150,9 +191,15 @@ static Submission *submission(int primitive, int format, int count, const void *
     s->primitive = primitive; s->format = format; s->count = count; s->pointer = data;
     s->depth = enabled[GU_DEPTH_TEST]; s->cull = enabled[GU_CULL_FACE]; s->blend = enabled[GU_BLEND];
     s->alpha = enabled[GU_ALPHA_TEST]; s->textured = enabled[GU_TEXTURE_2D];
+    s->fog=enabled[GU_FOG]; s->fog_near=fog_near; s->fog_far=fog_far; s->fog_color=fog_color;
     s->shade = shade_model;
     s->wrap_u = wraps[0]; s->wrap_v = wraps[1]; s->filter_min = filters[0]; s->filter_mag = filters[1];
     s->source = blend_source; s->destination = blend_destination;
+    s->operation = blend_operation; s->depth_mask = depth_mask; s->depth_function = depth_function;
+    s->target = draw_address; s->target_format = draw_buffer_mode;
+    s->texture_format = texture_format; s->texture_swizzle = texture_swizzle;
+    s->texture_component = texture_component;
+    s->at = calls; s->texsync_at = texsync_at; s->texflush_at = texflush_at;
     s->source_fixed = blend_src_fixed; s->destination_fixed = blend_dst_fixed;
     s->pixels = texture_pixels; s->palette = texture_palette;
     s->width = texture_width; s->height = texture_height; s->stride = texture_stride;
@@ -162,7 +209,8 @@ void sceGumDrawArray(int primitive, int format, int count, const void *indices, 
 {
     submission(primitive, format, count, indices, data);
     assert(matrix_loaded[GU_PROJECTION] && identities[GU_VIEW] && identities[GU_MODEL]);
-    assert(primitive == GU_TRIANGLES && format == (GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D));
+    assert((primitive == GU_TRIANGLES || primitive == GU_LINES) && format ==
+        (GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D));
     assert((const RecvxBootRenderVertex *)data >= vertices && (const RecvxBootRenderVertex *)data + count <= vertices + frame.vertex_count);
     assert((uintptr_t)data < (uintptr_t)memory || (uintptr_t)data >= (uintptr_t)(memory + sizeof(memory)));
     last_model_at = ++calls;
@@ -170,11 +218,15 @@ void sceGumDrawArray(int primitive, int format, int count, const void *indices, 
 void sceGuDrawArray(int primitive, int format, int count, const void *indices, const void *data)
 {
     Submission *s = submission(primitive, format, count, indices, data);
-    assert(primitive == GU_SPRITES && count == 2 && format ==
+    assert(((primitive == GU_SPRITES && count == 2) || (primitive == GU_TRIANGLES && count > 0 && !(count%3))) && format ==
         (GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D));
-    assert((const unsigned char *)data >= memory && (const unsigned char *)data + 2 * sizeof(SpriteVertex) <= memory + memory_used);
-    memcpy(s->sprite, data, sizeof(s->sprite));
-    if (!first_sprite_at) first_sprite_at = calls + 1;
+    uintptr_t pointer=(uintptr_t)data;
+    assert((pointer >= (uintptr_t)memory && pointer + count * sizeof(SpriteVertex) <= (uintptr_t)memory + memory_used) ||
+        (pointer >= (uintptr_t)vertices && pointer + count * sizeof(SpriteVertex) <= (uintptr_t)vertices + frame.vertex_count*sizeof(*vertices)));
+    memcpy(s->sprite, data, (count > 6 ? 6u : (unsigned int)count)*sizeof(SpriteVertex));
+    if (primitive==GU_SPRITES) {
+        if (!first_sprite_at) first_sprite_at = calls + 1;
+    } else last_model_at = calls + 1;
     ++calls;
 }
 
@@ -183,6 +235,7 @@ static void reset_frame(void)
     memset(vertices, 0, sizeof(vertices)); memset(batches, 0, sizeof(batches)); memset(overlays, 0, sizeof(overlays));
     memset(submissions, 0, sizeof(submissions)); memset(&frame, 0, sizeof(frame));
     submission_count = memory_used = overlay_count = 0; consumed = cache_flushed = 0;
+    clear_count = texsync_at = texflush_at = 0;
     first_sprite_at = last_model_at = consume_at = 0;
     memset(matrix_loaded, 0, sizeof(matrix_loaded)); memset(identities, 0, sizeof(identities));
     frame.vertices = vertices; frame.batches = batches;
@@ -267,11 +320,208 @@ static void blend_mappings(void)
     }
 }
 
+static void shadow_protocol(void)
+{
+    const uintptr_t mask_target=1392640u;
+    const uintptr_t scene_target=context_draw_address;
+    reset_frame(); frame.vertex_count=24; frame.batch_count=11;
+    for(unsigned int i=0;i<24;++i)
+        vertices[i]=(RecvxBootRenderVertex){0,0,0xff202020u,i,1,-40};
+    vertices[9]=(RecvxBootRenderVertex){30.5f,17.5f,0xff5e5e5eu,30,17,0};
+    vertices[10]=(RecvxBootRenderVertex){120.5f,68.5f,0xff5e5e5eu,120,68,0};
+    vertices[17]=(RecvxBootRenderVertex){60.5f,34.5f,0xff242424u,60,34,0};
+    vertices[18]=(RecvxBootRenderVertex){180.5f,136.5f,0xff242424u,180,136,0};
+    batches[0]=(RecvxBootRenderBatch){.count=3,.texture=&texture,.kind=RECVX_RENDER_HALF_FOG,.fog_color=0x332211};
+    batches[1]=(RecvxBootRenderBatch){.first=3,.kind=RECVX_RENDER_SHADOW_START};
+    batches[2]=(RecvxBootRenderBatch){.first=3,.count=3,.kind=RECVX_RENDER_SHADOW_ADD};
+    batches[3]=(RecvxBootRenderBatch){.first=6,.count=3,.kind=RECVX_RENDER_SHADOW_SUBTRACT};
+    batches[4]=(RecvxBootRenderBatch){.first=9,.count=2,.kind=RECVX_RENDER_SHADOW_COMPOSITE};
+    batches[5]=(RecvxBootRenderBatch){.first=11,.count=3,.kind=RECVX_RENDER_SHADOW_ADD};
+    batches[6]=(RecvxBootRenderBatch){.first=14,.count=3,.kind=RECVX_RENDER_SHADOW_SUBTRACT};
+    batches[7]=(RecvxBootRenderBatch){.first=17,.count=2,.kind=RECVX_RENDER_SHADOW_COMPOSITE};
+    batches[8]=(RecvxBootRenderBatch){.first=19,.kind=RECVX_RENDER_SHADOW_END};
+    batches[9]=(RecvxBootRenderBatch){.first=19,.count=2,.attributes=0x18,.blend_source=8,
+        .blend_destination=6,.kind=RECVX_RENDER_LINES};
+    batches[10]=(RecvxBootRenderBatch){.first=21,.count=3,.texture=&texture};
+    overlays[0]=(RecvxBootDraw){.quad={.x1=0,.y1=0,.x2=640,.y2=480},.color=0xff112233};
+    overlay_count=1;
+    recvxGameBootPresent();
+    assert(consumed && submission_count==12 && clear_count==2);
+    assert(submissions[0].fog && submissions[0].fog_color==0x332211);
+    for(unsigned int i=1;i<12;++i)assert(!submissions[i].fog);
+    assert(clears[0].target==scene_target && clears[0].format==GU_PSM_8888 &&
+        clears[0].flags==(GU_COLOR_BUFFER_BIT|GU_DEPTH_BUFFER_BIT));
+    assert(clears[1].target==mask_target && clears[1].format==GU_PSM_5551 &&
+        clears[1].flags==GU_COLOR_BUFFER_BIT && clears[1].color==0);
+    assert(submissions[0].at<clears[1].at && clears[1].at<submissions[1].at);
+    for(unsigned int object=0;object<2;++object) {
+        size_t first=1+object*4;
+        const Submission *add=&submissions[first], *subtract=&submissions[first+1];
+        const Submission *composite=&submissions[first+2], *clear=&submissions[first+3];
+        assert(add->primitive==GU_TRIANGLES && subtract->primitive==GU_TRIANGLES);
+        assert(add->target==mask_target && subtract->target==mask_target &&
+            add->target_format==GU_PSM_5551 && subtract->target_format==GU_PSM_5551);
+        assert(add->depth && subtract->depth && add->depth_mask==GU_TRUE && subtract->depth_mask==GU_TRUE);
+        assert(add->depth_function==GU_GEQUAL && subtract->depth_function==GU_GEQUAL);
+        assert(!add->cull && !subtract->cull && !add->alpha && !subtract->alpha &&
+            !add->textured && !subtract->textured && add->blend && subtract->blend);
+        assert(add->operation==GU_ADD && subtract->operation==GU_REVERSE_SUBTRACT);
+        assert(add->source==GU_FIX && add->destination==GU_FIX && add->source_fixed==0xffffffu && add->destination_fixed==0xffffffu);
+        assert(subtract->source==GU_FIX && subtract->destination==GU_FIX &&
+            subtract->source_fixed==0xffffffu && subtract->destination_fixed==0xffffffu);
+        assert(composite->primitive==GU_SPRITES && composite->count==2 && composite->target==scene_target &&
+            composite->target_format==GU_PSM_8888 && composite->textured && composite->blend);
+        assert(!composite->depth && composite->depth_mask==GU_TRUE && !composite->alpha && !composite->cull);
+        assert(composite->operation==GU_REVERSE_SUBTRACT && composite->source==GU_FIX && composite->destination==GU_FIX &&
+            composite->source_fixed==0xffffffu && composite->destination_fixed==0xffffffu);
+        assert(composite->texture_format==GU_PSM_5551 && !composite->texture_swizzle && composite->texture_component==GU_TCC_RGB);
+        assert((uintptr_t)composite->pixels==0x04000000u+mask_target && composite->width==512 && composite->height==512 && composite->stride==512);
+        assert(composite->wrap_u==GU_CLAMP && composite->wrap_v==GU_CLAMP &&
+            composite->filter_min==GU_NEAREST && composite->filter_mag==GU_NEAREST);
+        assert(subtract->at<composite->texsync_at && composite->texsync_at<composite->texflush_at &&
+            composite->texflush_at<composite->at);
+        assert(composite->sprite[0].color==(object?0xff242424u:0xff5e5e5eu));
+        assert(composite->sprite[0].u==composite->sprite[0].x+0.5f && composite->sprite[1].v==composite->sprite[1].y+0.5f);
+        assert(clear->target==mask_target && clear->target_format==GU_PSM_5551 && clear->primitive==GU_SPRITES);
+        assert(!clear->blend && !clear->depth && clear->depth_mask==GU_TRUE && !clear->textured && !clear->alpha);
+        for(unsigned int i=0;i<2;++i) {
+            assert(!clear->sprite[i].color && clear->sprite[i].x==composite->sprite[i].x &&
+                clear->sprite[i].y==composite->sprite[i].y);
+        }
+    }
+    assert(submissions[9].primitive==GU_LINES && submissions[9].count==2 &&
+        submissions[9].target==scene_target && submissions[9].target_format==GU_PSM_8888);
+    assert(submissions[9].depth && submissions[9].depth_mask==GU_FALSE && submissions[9].alpha && submissions[9].operation==GU_ADD);
+    assert(submissions[10].primitive==GU_TRIANGLES && submissions[10].target==scene_target &&
+        submissions[10].depth && submissions[10].depth_mask==GU_FALSE && submissions[10].alpha && submissions[10].texture_format==GU_PSM_T8);
+    assert(submissions[11].primitive==GU_SPRITES && submissions[11].target==scene_target &&
+        !submissions[11].depth && !submissions[11].alpha && submissions[11].operation==GU_ADD);
+    assert(draw_buffer_mode==GU_PSM_8888 && draw_address==scene_target && context_draw_address==scene_target);
+    assert(depth_address==2u*512u*272u*4u && depth_stride==512);
+    assert(mask_target+512u*512u*2u<=2u*1024u*1024u);
+}
+
+static float ge_command_float(float value)
+{
+    uint32_t bits; memcpy(&bits,&value,sizeof(bits));
+    bits&=0xffffff00u; memcpy(&value,&bits,sizeof(value));
+    return value;
+}
+
+static void authored_half_fog(void)
+{
+    reset_frame(); frame.vertex_count=11; frame.batch_count=4;
+    batches[0]=(RecvxBootRenderBatch){.count=3,.texture=&texture,.kind=RECVX_RENDER_HALF_FOG,.fog_color=0x776655};
+    batches[1]=(RecvxBootRenderBatch){.first=3,.count=3,.texture=&texture};
+    batches[2]=(RecvxBootRenderBatch){.first=6,.count=3,.texture=&texture,.kind=RECVX_RENDER_HALF_FOG,.fog_color=0xabcdef};
+    batches[3]=(RecvxBootRenderBatch){.first=9,.count=2,.kind=RECVX_RENDER_LINES};
+    vertices[0].z=-0x1.fffffep38f; vertices[1].z=-1; vertices[2].z=-10;
+    vertices[6].z=0; vertices[7].z=0x1.fffffep38f; vertices[8].z=-100000;
+    overlays[0]=(RecvxBootDraw){.quad={.x1=0,.y1=0,.x2=10,.y2=10},.color=0xffffffff};
+    overlay_count=1;
+    recvxGameBootPresent();assert(consumed && submission_count==5);
+    for(unsigned int i=0;i<5;++i) {
+        const Submission *s=&submissions[i];
+        if(i==0||i==2) {
+            assert(s->fog && s->fog_near==-0x1p64f && s->fog_far==0x1p64f);
+            assert(s->fog_color==(i==0?0x776655u:0xabcdefu));
+            assert(s->textured && s->texture_format==GU_PSM_T8 && s->depth && s->alpha);
+            const RecvxBootRenderVertex *v=s->pointer;
+            for(unsigned int j=0;j<3;++j) {
+                /* The finite powers of two preserve an exactly representable
+                   half factor throughout the renderer's validated Z range. */
+                float factor=(s->fog_far+v[j].z)/(s->fog_far-s->fog_near);
+                assert(factor==0.5f);
+                /* sceGuFog emits far and 1/(far-near) as GE float24 command
+                   payloads, dropping the low eight IEEE mantissa bits. */
+                float far=ge_command_float(s->fog_far);
+                float slope=ge_command_float(1.0f/(s->fog_far-s->fog_near));
+                assert(ge_command_float((far+v[j].z)*slope)==0.5f);
+            }
+        } else assert(!s->fog);
+    }
+    assert(!enabled[GU_FOG]);
+}
+
+static void screen_gradient_triangles(void)
+{
+    reset_frame();frame.vertex_count=12;frame.batch_count=4;
+    batches[0]=(RecvxBootRenderBatch){.count=3,.kind=RECVX_RENDER_HALF_FOG,.texture=&texture,.fog_color=0x123456};
+    batches[1]=(RecvxBootRenderBatch){.first=3,.count=3,.kind=RECVX_RENDER_SCREEN_TRIANGLES,
+        .texture=&texture,.attributes=0x18,.sampler=5,.blend_source=8,.blend_destination=6};
+    batches[2]=(RecvxBootRenderBatch){.first=6,.count=3,.texture=&texture,.attributes=0x20};
+    batches[3]=(RecvxBootRenderBatch){.first=9,.count=3,.kind=RECVX_RENDER_SCREEN_TRIANGLES,
+        .texture=&texture,.attributes=0x18,.sampler=2,.blend_source=10,.blend_destination=11};
+    vertices[3]=(RecvxBootRenderVertex){0,0,0x80102040u,0,0,0};
+    vertices[4]=(RecvxBootRenderVertex){64,0,0x406080a0u,480,0,65534};
+    vertices[5]=(RecvxBootRenderVertex){16,32,0xffefcdabu,240,272,32767};
+    memcpy(vertices+9,vertices+3,3*sizeof(*vertices));
+    overlays[0]=(RecvxBootDraw){.quad={.x1=0,.y1=0,.x2=640,.y2=480,.u2=1,.v2=1},.texture=&texture,.color=0xffffffff};
+    overlay_count=1;
+    recvxGameBootPresent();assert(consumed&&submission_count==5);
+    assert(submissions[0].fog&&submissions[0].format==
+        (GU_TEXTURE_32BITF|GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_3D));
+    for(unsigned int i=1;i<=3;i+=2) {
+        const Submission *s=&submissions[i];
+        assert(s->primitive==GU_TRIANGLES&&s->count==3&&s->format==
+            (GU_TEXTURE_32BITF|GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_2D));
+        assert(s->pointer==vertices+batches[i].first&&!s->fog&&!s->cull&&s->depth&&s->alpha&&s->blend);
+        assert(s->depth_mask==GU_FALSE&&s->depth_function==GU_GEQUAL&&s->shade==GU_SMOOTH);
+        assert(s->target==context_draw_address&&s->target_format==GU_PSM_8888);
+        assert(s->textured&&s->texture_format==GU_PSM_T8&&s->pixels==pixels&&s->palette==texture.palette);
+        for(unsigned int j=0;j<3;++j) {
+            const RecvxBootRenderVertex *v=&vertices[3+j];
+            assert(s->sprite[j].u==v->u&&s->sprite[j].v==v->v&&s->sprite[j].color==v->color);
+            assert(s->sprite[j].x==v->x&&s->sprite[j].y==v->y&&s->sprite[j].z==v->z);
+        }
+        assert(s->operation==GU_ADD);
+    }
+    assert(submissions[1].filter_min==GU_LINEAR&&submissions[1].wrap_u==GU_CLAMP&&submissions[1].wrap_v==GU_REPEAT);
+    assert(submissions[1].source==GU_SRC_ALPHA&&submissions[1].destination==GU_ONE_MINUS_SRC_ALPHA);
+    assert(submissions[3].filter_min==GU_NEAREST&&submissions[3].wrap_u==GU_REPEAT&&submissions[3].wrap_v==GU_CLAMP);
+    assert(submissions[3].source==GU_FIX&&submissions[3].source_fixed==0xffffffu&&submissions[3].destination==GU_FIX&&!submissions[3].destination_fixed);
+    assert(submissions[2].primitive==GU_TRIANGLES&&submissions[2].format==
+        (GU_TEXTURE_32BITF|GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_3D));
+    assert(submissions[2].depth&&submissions[2].depth_mask==GU_FALSE&&submissions[2].cull&&submissions[2].shade==GU_FLAT&&!submissions[2].fog);
+    assert(submissions[4].primitive==GU_SPRITES&&!submissions[4].depth&&!submissions[4].alpha&&!submissions[4].fog&&
+        submissions[4].blend&&submissions[4].operation==GU_ADD&&submissions[4].wrap_u==GU_CLAMP&&submissions[4].wrap_v==GU_CLAMP);
+    assert(last_model_at<first_sprite_at&&first_sprite_at<finish_at&&sync_at<consume_at);
+}
+
+static void gradient_overlays(void)
+{
+    reset_frame();
+    overlays[0] = (RecvxBootDraw){.color_gradient=1,
+        .points={{0,40},{640,40},{640,104},{0,104}},
+        .vertex_color={0xff102030,0xff405060,0x00708090,0x00a0b0c0}};
+    overlays[1] = (RecvxBootDraw){.quad={.x1=0,.y1=0,.x2=640,.y2=480},.color=0x80000000};
+    overlay_count=2;
+    recvxGameBootPresent();
+    assert(submission_count==2 && consumed);
+    const Submission *gradient=&submissions[0], *fade=&submissions[1];
+    assert(gradient->primitive==GU_TRIANGLES && gradient->count==6 && !gradient->textured);
+    assert(gradient->shade==GU_SMOOTH && !gradient->depth && !gradient->alpha && !gradient->cull);
+    assert(gradient->blend && gradient->source==GU_SRC_ALPHA && gradient->destination==GU_ONE_MINUS_SRC_ALPHA);
+    static const unsigned int order[6]={0,1,2,0,2,3};
+    for(unsigned int i=0;i<6;++i) {
+        unsigned int corner=order[i], color=overlays[0].vertex_color[corner];
+        assert(gradient->sprite[i].color==((color&0xff00ff00u)|((color>>16)&255u)|((color&255u)<<16)));
+        assert(gradient->sprite[i].x==overlays[0].points[corner].x*0.75f);
+        assert(gradient->sprite[i].y==overlays[0].points[corner].y*(272.0f/480));
+        assert(gradient->sprite[i].z==0);
+    }
+    assert(fade->primitive==GU_SPRITES && fade->sprite[0].color==0x80000000);
+    assert(gradient->at<fade->at && fade->at<finish_at && sync_at<consume_at);
+}
+
 int main(void)
 {
-    display_init(); models_then_overlays(); blend_mappings(); empty_and_capacity();
-    recvxGameBootDisplaySwap(); assert(swaps == 1);
+    display_init(); models_then_overlays(); blend_mappings(); authored_half_fog(); screen_gradient_triangles(); shadow_protocol();
+    recvxGameBootDisplaySwap(); assert(swaps==1 && context_draw_address==512u*272u*4u);
+    shadow_protocol(); /* Offscreen switches must preserve the swapped scene target. */
+    recvxGameBootDisplaySwap(); assert(swaps==2 && context_draw_address==0);
+    shadow_protocol(); gradient_overlays(); empty_and_capacity();
     recvxGameBootDisplayShutdown(); assert(terminated);
-    puts("PASS: actual GU adapter viewport/VRAM/depth state, perspective matrix, external ABGR model vertices, materials, indexed textures, overlays and consume-after-sync lifetime");
+    puts("PASS: actual GU adapter viewport/VRAM/depth state, perspective matrix, external ABGR geometry/lines, materials, indexed textures, authored constant half-fog, screen triangle gradients/depth, modifier add/subtract mask passes/composite/bounded clears, swap target restoration, overlays and consume-after-sync lifetime");
     return 0;
 }

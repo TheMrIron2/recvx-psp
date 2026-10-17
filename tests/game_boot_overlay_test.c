@@ -68,11 +68,42 @@ void njDrawPolygon(NJS_POLYGON_VTX *polygon, Int count, Int trans)
     captured[draw_count++] = (RecvxBootDraw){.quad = {.x1 = polygon[0].x, .y1 = polygon[0].y,
         .x2 = polygon[3].x, .y2 = polygon[3].y}, .depth = polygon[0].z, .color = polygon[0].col};
 }
+void recvxGameBootDrawGradientQuad(const NJS_POINT2 points[4], const NJS_COLOR colors[4], float depth)
+{
+    expect(draw_count < 32, "gradient capture capacity");
+    RecvxBootDraw *draw = &captured[draw_count++];
+    *draw = (RecvxBootDraw){.depth=depth, .color_gradient=1};
+    memcpy(draw->points,points,sizeof(draw->points));
+    for(unsigned int i=0;i<4;++i)draw->vertex_color[i]=colors[i].color;
+}
 static void clear(void) { draw_count = 0; memset(captured, 0, sizeof(captured)); fault = NULL; }
 
 int main(void)
 {
     sys = &state; texture.width = texture.height = 512;
+    sys->fade_an = 127.75f; sys->fade_rn = 64.5f; sys->fade_gn = 32.25f; sys->fade_bn = 16.75f;
+    bhDrawScreenFade();
+    expect(draw_count == 1 && !captured[0].texture && captured[0].color == 0x7f402010u,
+           "screen fade packs original current ARGB channels with integer truncation");
+    expect(captured[0].quad.x1 == 0 && captured[0].quad.y1 == 0 && captured[0].quad.x2 == 640 &&
+           captured[0].quad.y2 == 480 && captured[0].depth == 1,
+           "screen fade covers the authored logical screen through the checked overlay queue");
+    clear(); sys->fade_an = 255; sys->fade_rn = sys->fade_gn = sys->fade_bn = 0;
+    bhDrawScreenFade(); expect(captured[0].color == 0xff000000u, "opaque screen fade retains original black");
+    clear(); sys->fade_an = 0;
+    bhDrawScreenFade(); expect(captured[0].color == 0, "transparent fade clears its previous alpha");
+    const float invalid_fade[] = {NAN, INFINITY, -1, 256};
+    float *fade_channels[] = {&sys->fade_an, &sys->fade_rn, &sys->fade_gn, &sys->fade_bn};
+    for (unsigned int c = 0; c < 4; ++c) {
+        for (unsigned int i = 0; i < 4; ++i) {
+            clear(); *fade_channels[c] = invalid_fade[i];
+            if (!setjmp(fault_jump)) { bhDrawScreenFade(); expect(0, "invalid fade channel must fault"); }
+            expect(fault && strstr(fault, "fade color") && draw_count == 0,
+                   "screen fade validates channels before unsigned packing or geometry submission");
+            *fade_channels[c] = 0;
+        }
+    }
+    clear();
     sys->cine_an = 0.5f;
     bhDrawCinesco();
     expect(draw_count == 2 && !captured[0].texture && !captured[1].texture,
@@ -131,9 +162,9 @@ int main(void)
     for (unsigned int i = 0; i < 4; ++i) colors[i].color = 0xffffffffu;
     NJS_POINT2COL polygon = {.p = points, .col = colors, .num = 1};
     clear();
-    if (!setjmp(fault_jump)) { recvxGameBootOverlayPolygon2D(&polygon, 4, -1, 0x60); expect(0, "rotation must fault"); }
-    expect(fault && strstr(fault, "rotated") && draw_count == 0,
-           "rotated scope geometry remains an explicit renderer boundary");
+    recvxGameBootOverlayPolygon2D(&polygon, 4, -1, 0x60);
+    expect(draw_count == 1 && captured[0].color_gradient && captured[0].points[3].x == -1,
+           "untextured scope quadrilateral retains original points");
     printf("original game overlays: %u checks passed\n", checks);
     return 0;
 }

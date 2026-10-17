@@ -12,6 +12,13 @@ static int overlay_texture_selected;
 void recvxGameBootOverlayPrepare(int thermometer)
 {
     if (!sys) recvxGameBootUnsupported("missing game overlay state");
+    if (thermometer == 2) {
+        const float channels[] = {sys->fade_an, sys->fade_rn, sys->fade_gn, sys->fade_bn};
+        for (unsigned int i = 0; i < sizeof(channels) / sizeof(channels[0]); ++i)
+            if (!isfinite(channels[i]) || channels[i] < 0 || channels[i] > 255)
+                recvxGameBootUnsupported("invalid original screen fade color");
+        return;
+    }
     if (!thermometer) {
         if (!(sys->cb_flg & 0x40u) &&
             (!isfinite(sys->cine_an) || sys->cine_an < 0 || sys->cine_an > 1))
@@ -49,19 +56,21 @@ Sint32 recvxGameBootOverlaySetTextureNum(Uint32 number)
 void recvxGameBootOverlayPolygon2D(NJS_POINT2COL *polygon, Int count, Float priority, Uint32 attributes)
 {
     unsigned int i;
+    int gradient = 0;
     if (!polygon || !polygon->p || !polygon->col || count != 4 || polygon->num != 1 ||
         !isfinite(priority) || (attributes != 0x60u && attributes != 0x80000060u))
         recvxGameBootUnsupported("unsupported original game overlay polygon");
     for (i = 0; i < 4; ++i)
-        if (!isfinite(polygon->p[i].x) || !isfinite(polygon->p[i].y) ||
-            polygon->col[i].color != polygon->col[0].color)
-            recvxGameBootUnsupported("invalid game overlay vertex or gradient");
-    if (polygon->p[0].x != polygon->p[3].x || polygon->p[1].x != polygon->p[2].x ||
-        polygon->p[0].y != polygon->p[1].y || polygon->p[2].y != polygon->p[3].y)
-        recvxGameBootUnsupported("unported rotated game overlay polygon");
+        if (!isfinite(polygon->p[i].x) || !isfinite(polygon->p[i].y))
+            recvxGameBootUnsupported("invalid game overlay vertex");
+        else if (polygon->col[i].color != polygon->col[0].color) gradient = 1;
+    int rectangle = polygon->p[0].x == polygon->p[3].x && polygon->p[1].x == polygon->p[2].x &&
+        polygon->p[0].y == polygon->p[1].y && polygon->p[2].y == polygon->p[3].y;
     if (priority > -1.0f) priority = -1.0f;
     if (attributes & 0x80000000u) {
         QUAD quad;
+        if (gradient) recvxGameBootUnsupported("unported textured game overlay gradient");
+        if (!rectangle) recvxGameBootUnsupported("unported rotated game overlay polygon");
         if (!polygon->tex || !overlay_list || !overlay_texture_selected)
             recvxGameBootUnsupported("missing game overlay texture selection");
         if (polygon->tex[0].tex.u != polygon->tex[3].tex.u ||
@@ -81,6 +90,8 @@ void recvxGameBootOverlayPolygon2D(NJS_POINT2COL *polygon, Int count, Float prio
         njSetTexture(overlay_list);
         njSetQuadTexture(overlay_number, polygon->col[0].color);
         njDrawQuadTexture(&quad, -priority);
+    } else if (gradient || !rectangle) {
+        recvxGameBootDrawGradientQuad(polygon->p, polygon->col, -priority);
     } else {
         static const unsigned int order[4] = {0, 3, 1, 2};
         NJS_POLYGON_VTX vertices[4];
