@@ -128,17 +128,42 @@ void recvxGameBootPresent(void)
     for (i = 0; i < count; ++i) {
         const RecvxBootDraw *d = &draws[i];
         const QUAD *q = &d->quad;
-        if (i) assert(draws[i - 1].depth <= d->depth);
+        if (i) assert(draws[i - 1].depth >= d->depth);
         if (!capture) continue;
         for (y = 0; y < 272; ++y) for (x = 0; x < 480; ++x) {
             float sx = (x + 0.5f) / 0.75f, sy = (y + 0.5f) * 480 / 272;
             unsigned int rgba = 0xffffffffu, color = d->color;
             unsigned int alpha, channel;
-            if (sx < q->x1 || sx >= q->x2 || sy < q->y1 || sy >= q->y2) continue;
-            if (d->texture) {
-                float u = q->u1 + (q->u2 - q->u1) * (sx - q->x1) / (q->x2 - q->x1);
-                float v = q->v1 + (q->v2 - q->v1) * (sy - q->y1) / (q->y2 - q->y1);
-                rgba = sample(d->texture, u * d->texture->width, v * d->texture->height);
+            if (d->color_gradient) {
+                static const unsigned int triangles[2][3]={{0,1,2},{0,2,3}};
+                int inside=0;
+                for(unsigned int triangle=0;triangle<2&&!inside;++triangle){
+                    unsigned int a=triangles[triangle][0],b=triangles[triangle][1],c=triangles[triangle][2];
+                    NJS_POINT2 p=d->points[a],r=d->points[b],s=d->points[c];
+                    float denominator=(r.y-s.y)*(p.x-s.x)+(s.x-r.x)*(p.y-s.y);
+                    if(fabsf(denominator)<.0001f)continue;
+                    float wa=((r.y-s.y)*(sx-s.x)+(s.x-r.x)*(sy-s.y))/denominator;
+                    float wb=((s.y-p.y)*(sx-s.x)+(p.x-s.x)*(sy-s.y))/denominator;
+                    float wc=1-wa-wb;
+                    if(wa<0||wb<0||wc<0)continue;
+                    inside=1;color=0;
+                    for(unsigned int ch=0;ch<4;++ch){
+                        float value=wa*((d->vertex_color[a]>>(8*ch))&255)+
+                            wb*((d->vertex_color[b]>>(8*ch))&255)+wc*((d->vertex_color[c]>>(8*ch))&255);
+                        color|=(unsigned int)fminf(255,fmaxf(0,value+.5f))<<(8*ch);
+                    }
+                    if(d->texture)rgba=sample(d->texture,
+                        wa*d->uv[a].x+wb*d->uv[b].x+wc*d->uv[c].x,
+                        wa*d->uv[a].y+wb*d->uv[b].y+wc*d->uv[c].y);
+                }
+                if(!inside)continue;
+            } else {
+                if (sx < q->x1 || sx >= q->x2 || sy < q->y1 || sy >= q->y2) continue;
+                if (d->texture) {
+                    float u = q->u1 + (q->u2 - q->u1) * (sx - q->x1) / (q->x2 - q->x1);
+                    float v = q->v1 + (q->v2 - q->v1) * (sy - q->y1) / (q->y2 - q->y1);
+                    rgba = sample(d->texture, u * d->texture->width, v * d->texture->height);
+                }
             }
             alpha = (rgba >> 24) * (color >> 24) / 255;
             for (channel = 0; channel < 3; ++channel) {
@@ -1363,6 +1388,7 @@ static void test_loaded_inventory_transition(void)
     tick(&input);
     assert(!recvxGameBootFault() && swork.subscreenmode == 2 && swork.pip == sys->itm);
     for (unsigned int frame = 0; frame < 40; ++frame) {
+        if(frame==39){capture=1;capture_path="/tmp/recvx-game-inventory.ppm";}
         tick(&input);
         assert(!recvxGameBootFault());
     }

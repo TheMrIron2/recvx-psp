@@ -12,6 +12,11 @@ logic. Entry backs up room textures; exit restores their pixels, live palettes,
 render settings and the original arena cursor. The PSP draw adapter supports
 rotated/flipped sprites, textured quads, border lines, per-batch scissoring and
 multiple ordering-table flushes without clearing the already drawn scene.
+The shared 2D queue draws larger depth values first, keeping backgrounds behind
+nearer panels, item icons, text and fades. Equal-depth submissions retain their
+original order. The native integration test captures an assembled inventory
+frame at `/tmp/recvx-game-inventory.ppm`, including textured triangle sprites
+and per-vertex color, so visual checks exercise the actual menu composition.
 Pulse strips use native GE texture and blend passes for the authored base/offset
 colors. Ordinary 3D fog uses the GE near/far ramp; it does not reproduce every
 quantization step in the PS2 lookup table.

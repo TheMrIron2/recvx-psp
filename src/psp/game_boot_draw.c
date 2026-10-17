@@ -495,10 +495,11 @@ void recvxGameBootDrawDiscard(void) { draw_count = 0; }
 const RecvxBootDraw *recvxGameBootDraws(size_t *count)
 {
     size_t i, j;
-    /* Original PS2 sorts submissions by depth; fades are submitted before art. */
+    /* Depth is positive distance from the screen. Draw distant backgrounds
+       before nearer controls/fades; preserve submission order for equal Z. */
     for (i = 1; i < draw_count; ++i) {
         RecvxBootDraw draw = draws[i];
-        for (j = i; j > 0 && draws[j - 1].depth > draw.depth; --j)
+        for (j = i; j > 0 && draws[j - 1].depth < draw.depth; --j)
             draws[j] = draws[j - 1];
         draws[j] = draw;
     }

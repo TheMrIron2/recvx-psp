@@ -231,7 +231,9 @@ static void queued_palette_changes(void)
     njDrawQuadTexture(&quad,2);njSetPaletteBankNum(0,2);njDrawQuadTexture(&quad,3);
     assert(snapshot_count==2&&snapshots[1].palette[2]==0xff000012u&&live->palette[2]==0xff000022u);
     const RecvxBootDraw *queued=recvxGameBootDraws(&count);
-    assert(count==3&&queued[0].texture==&snapshots[0]&&queued[1].texture==&snapshots[1]&&queued[2].texture==live);
+    assert(count==3&&queued[0].depth==3&&queued[0].texture==live&&
+        queued[1].depth==2&&queued[1].texture==&snapshots[1]&&
+        queued[2].depth==1&&queued[2].texture==&snapshots[0]);
     for(unsigned int i=0;i<2;++i)
         assert(snapshots[i].pixels==live->pixels&&snapshots[i].source==live->source);
     render_pending=1;njSetPaletteBankNum(0,3);

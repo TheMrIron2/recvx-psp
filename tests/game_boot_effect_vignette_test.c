@@ -57,7 +57,7 @@ int main(void)
     recvxGameBootOverlayPolygon2D(&polygon,4,-2,96);
     memset(points,0,sizeof(points)); memset(colors,0,sizeof(colors));
     draw = recvxGameBootDraws(&count);
-    assert(count == 3 && draw[0].depth == 1 && draw[1].depth == 2 && draw[2].depth == 3);
+    assert(count == 3 && draw[0].depth == 3 && draw[1].depth == 2 && draw[2].depth == 1);
     for (unsigned int i=0; i<3; ++i) {
         assert(draw[i].color_gradient && draw[i].points[0].x == 4 && draw[i].points[2].y == 16);
         assert(draw[i].vertex_color[0] == 0x80102030 && draw[i].vertex_color[3] == 0x20a0b0c0);
