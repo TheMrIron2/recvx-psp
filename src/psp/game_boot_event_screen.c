@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdint.h>
 #include <string.h>
 #include "psp/game_boot.h"
@@ -29,6 +30,9 @@ static void room_message(unsigned int index)
 void recvxGameBootEventScreenPrepare(unsigned int opcode)
 {
     if (!sys || !bhScePtr) recvxGameBootUnsupported("invalid original screen event state");
+    if (opcode == 91 && (!plp || !isfinite(plp->px) ||
+        !isfinite(plp->py) || !isfinite(plp->pz)))
+        recvxGameBootUnsupported("invalid original camera reset player position");
     if (opcode == 31 && bhScePtr[1] == 0) room_message(bhScePtr[2]);
     if (opcode == 19 && bhScePtr[1] == 0)
         recvxGameBootEventCameraPrepare(bhScePtr[2], bhScePtr[3]);

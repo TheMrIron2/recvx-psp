@@ -110,7 +110,7 @@ if __name__ == '__main__':
                     'bhFinishRoom', 'bhSetEneMtn', 'bhSetRoomMtn', 'bhSetEffectTable', 'bhSetEffectLink', 'bhPushGameData']),
         ('MdlPut.c', ['bhCalcModel', 'bhCalcTree']),
         ('light.c', ['bhInitLight']),
-        ('effect.c', ['bhControlEffect']),
+        ('effect.c', ['bhControlEffect', 'bhDeleteYakkyou']),
         ('effsub1.c', ['bhEffDmy', 'bhEff001', 'bhEff009', 'bhEff2D', 'bhEff021', 'bhEffFil', 'bhEff115', 'bhEff125', 'bhEff015', 'bhEff124', 'bhEff126']),
         ('hitchk.c', ['bhResetAtariAttr', 'bhGetGroundPosition', 'bhCheckInnerTriangle3']),
         ('screen.c', ['bhSetScreenFade']),

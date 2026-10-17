@@ -1,18 +1,4 @@
 # Explicit original services still awaiting implementation; each stops its update.
-ControlRanking
-ControlTypewriter
-CreateSysSaveScreen
-ExecuteSysSaveScreen
-ItemTaskCheck
-SbsTextureInit
-StatusMain
-StatusMapFlagInit
-bhCheckWall
-bhControlDoor
-bhControlGameOver
-bhControlMap
-bhControlSpEvtComputer
-bhDeleteYakkyou
 bhDispTime
 bhEff000
 bhEff002
@@ -290,16 +276,12 @@ bhEne55
 bhEne56
 bhEne71
 bhExitDoor
-bhExitMap
 bhInitDoor
-bhInitMap
-bhKeepSpEvtComputer
 bhPopAllTexture
 bhPushAllTexture
 bhReadDoorData
 bhReleaseMainTexture
 bhSetDoor
-bhSetMap
 # Gameplay-loop callbacks: keep real boundaries until their ports are ready.
 bhStartDoorDemo
 bhCheckEvtTimer
@@ -328,12 +310,6 @@ bhSetWaterSplash
 bhSetWaterSplash3
 bhControlPlEyeCamera
 bhControlMonitorCamera
-njCalcTexture
-njFogEnable
-njGarbageTexture
-njPrintC
-njPrintColor
-njPrintSize
 bhCPM1_act_atk
 bhCPM2_act_kdu
 bhCPM2_act_kdd

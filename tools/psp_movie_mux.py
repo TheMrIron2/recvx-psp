@@ -3,6 +3,10 @@
 Container fields follow MPEG-2 Systems and the public PSP header layout:
 https://github.com/hrydgard/ppsspp/blob/master/Core/HLE/scePsmf.cpp
 No source decoder or copyrighted movie data is bundled here.
+
+Native sceMpeg also requires private_stream_2 (BF) frame-size tables; a generic
+PS demuxer can decode E0 without these, hiding this requirement in emulators.
+Table layout: https://github.com/TotalKommando/psp-media-toolkit/blob/master/pspmedia.py
 """
 import re
 import struct
@@ -71,13 +75,36 @@ def access_units(data):
 def mux(data):
     stream = bytearray()
     frames = 0
-    for frames,unit in enumerate(access_units(data),1):
+    units = list(access_units(data))
+    if not units:
+        raise ValueError('empty video stream')
+    # Describe each IDR group before its elementary bytes. Table entries are
+    # a continuation flag and a 16-bit byte count, excluding PES headers.
+    groups = {}
+    for i,unit in enumerate(units):
+        kinds = [unit[m.end()] & 31 for m in re.finditer(b'\x00\x00(?:\x00)?\x01',unit)]
+        if i == 0 or 5 in kinds:
+            groups[i] = []
+        if len(unit) > 65535:
+            raise ValueError('AVC access unit exceeds native frame-size entry')
+        groups[next(reversed(groups))].append(len(unit))
+    for frames,unit in enumerate(units,1):
         pts = FIRST_PTS + (frames-1)*FRAME_TICKS
         cursor = 0
         while cursor < len(unit):
             first = cursor == 0
             prefix = pack_header(pts - FIRST_PTS)
             if not stream: prefix += system_header()
+            if first and frames-1 in groups:
+                sizes = groups[frames-1]
+                control = (0,0,1,1,0,0) if frames == 1 else (0,1,1,2,0,0)
+                table = b'\x01\xe0' + struct.pack('>6H',*control)
+                table += struct.pack('>HH',2+4*len(sizes),len(sizes))
+                table += b''.join(struct.pack('>HH',0x80 if i+1<len(sizes) else 0,size)
+                                  for i,size in enumerate(sizes))
+                if len(table) > 1024:
+                    raise ValueError('AVC group exceeds native frame table capacity')
+                prefix += b'\0\0\1\xbf' + struct.pack('>H',len(table)) + table
             optional = timestamp(pts) if first else b''
             capacity = SECTOR - len(prefix) - 9 - len(optional) - 6
             chunk = unit[cursor:cursor+capacity]

@@ -10,6 +10,7 @@
 
 #define SHADOW_OFFSET (5u * 512u * 272u * 2u)
 static void *scene_buffer;
+static int frame_drawn;
 static unsigned int display_list[262144] __attribute__((aligned(16)));
 typedef struct { float u, v; unsigned int color; float x, y, z; } Vertex;
 
@@ -19,6 +20,7 @@ static unsigned int abgr(unsigned int argb)
 int recvxGameBootDisplayInit(void)
 {
     scene_buffer = NULL;
+    frame_drawn = 0;
     sceGuInit();
     sceGuStart(GU_DIRECT, display_list);
     sceGuDrawBuffer(GU_PSM_8888, (void *)0, 512);
@@ -56,7 +58,7 @@ static void gradient_polygon(const RecvxBootDraw *draw)
     Vertex *vertices = sceGuGetMemory(6 * sizeof(*vertices));
     for (unsigned int i = 0; i < 6; ++i) {
         unsigned int corner = order[i];
-        vertices[i] = (Vertex){0, 0, abgr(draw->vertex_color[corner]),
+        vertices[i] = (Vertex){draw->uv[corner].x, draw->uv[corner].y, abgr(draw->vertex_color[corner]),
             draw->points[corner].x * 0.75f, draw->points[corner].y * (272.0f / 480), 0};
     }
     sceGuShadeModel(GU_SMOOTH);
@@ -144,10 +146,14 @@ static void models(const RecvxBootRenderFrame *frame)
             shadow(frame, batch);
             continue;
         }
+        sceGuScissor(batch->scissor[0], batch->scissor[1], batch->scissor[2], batch->scissor[3]);
         if (batch->kind == RECVX_RENDER_HALF_FOG) {
             /* Finite powers of two keep the GE's (far + viewZ)/(far-near)
                exactly 1/2 for the validated authored sprite depth range. */
             sceGuFog(-0x1p64f, 0x1p64f, batch->fog_color);
+            sceGuEnable(GU_FOG);
+        } else if (batch->fog_enabled) {
+            sceGuFog(batch->fog_near, batch->fog_far, batch->fog_color);
             sceGuEnable(GU_FOG);
         } else sceGuDisable(GU_FOG);
         const RecvxBootTexture *texture = batch->texture;
@@ -162,6 +168,10 @@ static void models(const RecvxBootRenderFrame *frame)
                 batch->blend_source == 10 ? 0xffffff : 0, batch->blend_destination == 10 ? 0xffffff : 0);
         } else sceGuDisable(GU_BLEND);
         if (texture) {
+            if (batch->kind == RECVX_RENDER_SCREEN_OFFSET) {
+                sceGuTexEnvColor(batch->fog_color);
+                sceGuTexFunc(GU_TFX_BLEND,GU_TCC_RGBA);
+            } else sceGuTexFunc(GU_TFX_MODULATE,GU_TCC_RGBA);
             sceGuEnable(GU_TEXTURE_2D); sceGuTexMode(GU_PSM_T8, 0, 0, 1);
             sceGuClutMode(GU_PSM_8888, 0, 255, 0); sceGuClutLoad(32, texture->palette);
             sceGuTexImage(0, texture->width, texture->height, texture->tile_width, texture->pixels);
@@ -170,7 +180,8 @@ static void models(const RecvxBootRenderFrame *frame)
             sceGuTexFilter(batch->sampler & 4 ? GU_LINEAR : GU_NEAREST, batch->sampler & 4 ? GU_LINEAR : GU_NEAREST);
             sceGuTexFlush();
         } else sceGuDisable(GU_TEXTURE_2D);
-        if (batch->kind == RECVX_RENDER_SCREEN_TRIANGLES)
+        if (batch->kind == RECVX_RENDER_SCREEN_TRIANGLES || batch->kind == RECVX_RENDER_SCREEN_OFFSET ||
+            batch->kind == RECVX_RENDER_SCREEN_HALF_BASE)
             sceGuDrawArray(GU_TRIANGLES, GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
                 batch->count, NULL, frame->vertices + batch->first);
         else sceGumDrawArray(batch->kind == RECVX_RENDER_LINES ? GU_LINES : GU_TRIANGLES,
@@ -218,10 +229,14 @@ void recvxGameBootPresent(void)
     sceKernelDcacheWritebackAll();
     sceGuStart(GU_DIRECT, display_list);
     sceGuClearColor(frame->vertex_count ? abgr(recvxEngineOriginalViewBackgroundColor()) : 0xff000000);
-    sceGuClearDepth(0); sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+    sceGuClearDepth(0);
+    if (!frame_drawn) sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+    frame_drawn = 1;
     const uint32_t *video = recvxGameBootMovieGetFrame();
     if (video) movie_frame(video);
     else models(frame);
+    sceGuScissor(0, 0, 480, 272);
+    sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
     sceGuTexWrap(GU_CLAMP, GU_CLAMP);
     sceGuTexScale(1, 1); sceGuTexOffset(0, 0);
     for (i = 0; i < count; ++i) {
@@ -239,6 +254,12 @@ void recvxGameBootPresent(void)
             sceGuEnable(GU_TEXTURE_2D); sceGuTexMode(GU_PSM_T8, 0, 0, 1);
             sceGuClutMode(GU_PSM_8888, 0, 255, 0); sceGuClutLoad(32, t->palette);
             sceGuTexFilter(d->filter ? GU_LINEAR : GU_NEAREST, d->filter ? GU_LINEAR : GU_NEAREST);
+            if (d->color_gradient) {
+                if (t->tile_count != 1) recvxGameBootUnsupported("tiled rotated UI sprite is not ported");
+                sceGuTexImage(0,t->width,t->height,t->tile_width,t->pixels);
+                gradient_polygon(d);
+                continue;
+            }
             /* PSP textures stop at 512 pixels. Split the original 1024-wide
                artwork at the tile boundary, preserving authored screen UVs. */
             for (tile = 0; tile < t->tile_count; ++tile) {
@@ -258,5 +279,6 @@ void recvxGameBootPresent(void)
     recvxGameBootMovieFrameConsumed();
     recvxGameBootRenderConsume();
 }
-void recvxGameBootDisplaySwap(void) { scene_buffer = sceGuSwapBuffers(); }
+void recvxGameBootDisplayBeginFrame(void) { frame_drawn = 0; }
+void recvxGameBootDisplaySwap(void) { scene_buffer = sceGuSwapBuffers(); recvxGameBootDisplayBeginFrame(); }
 void recvxGameBootDisplayShutdown(void) { sceGuTerm(); }

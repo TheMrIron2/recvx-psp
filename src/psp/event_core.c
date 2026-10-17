@@ -730,12 +730,12 @@ static int validate_core_instruction(unsigned int opcode)
             return -1;
         }
         return 0;
-    } else if (opcode == 31 || opcode == 92) {
+    } else if (opcode == 31 || opcode == 91 || opcode == 92) {
         if (!has_task_bytes(bhScePtr, opcode == 31 ? 4 : 2)) {
             set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
             return -1;
         }
-        if (sys == NULL) {
+        if (sys == NULL || (opcode == 91 && plp == NULL)) {
             set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
             return -1;
         }

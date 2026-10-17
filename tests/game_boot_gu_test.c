@@ -27,6 +27,8 @@ typedef struct {
 } Submission;
 
 static const uint32_t *movie_pixels;
+static unsigned int texture_environment;
+static int texture_function;
 static uint32_t movie_surface[512*512] __attribute__((aligned(64)));
 
 static RecvxBootRenderVertex vertices[64] __attribute__((aligned(16)));
@@ -147,9 +149,12 @@ void sceGuBlendFunc(int op, int source, int destination, unsigned int sf, unsign
 void sceGuTexFunc(int function, int component)
 {
     assert((function == GU_TFX_MODULATE && (component == GU_TCC_RGBA || component == GU_TCC_RGB)) ||
+        (function == GU_TFX_BLEND && component == GU_TCC_RGBA) ||
         (function == GU_TFX_REPLACE && component == GU_TCC_RGB));
+    texture_function=function;
     texture_component=component; ++calls;
 }
+void sceGuTexEnvColor(unsigned int color) {texture_environment=color;}
 void sceGuTexWrap(int u, int v) { wraps[0] = u; wraps[1] = v; ++calls; }
 void sceGuTexFilter(int min, int mag) { filters[0] = min; filters[1] = mag; ++calls; }
 void sceGuTexMode(int psm, int mips, int cache, int swizzle)
@@ -239,6 +244,7 @@ void sceGuDrawArray(int primitive, int format, int count, const void *indices, c
 
 static void reset_frame(void)
 {
+    recvxGameBootDisplayBeginFrame();
     memset(vertices, 0, sizeof(vertices)); memset(batches, 0, sizeof(batches)); memset(overlays, 0, sizeof(overlays));
     memset(submissions, 0, sizeof(submissions)); memset(&frame, 0, sizeof(frame));
     movie_pixels = NULL;
@@ -451,6 +457,26 @@ static void authored_half_fog(void)
     assert(!enabled[GU_FOG]);
 }
 
+static void ordinary_depth_fog(void)
+{
+    reset_frame(); frame.vertex_count=12; frame.batch_count=4;
+    batches[0]=(RecvxBootRenderBatch){.count=3,.texture=&texture,.fog_enabled=1,
+        .fog_near=10,.fog_far=1000,.fog_color=0x332211};
+    batches[1]=(RecvxBootRenderBatch){.first=3,.count=3,.texture=&texture,.fog_enabled=1,
+        .fog_near=20,.fog_far=2000,.fog_color=0x665544};
+    batches[2]=(RecvxBootRenderBatch){.first=6,.count=3,.texture=&texture,
+        .kind=RECVX_RENDER_HALF_FOG,.fog_color=0xabcdef};
+    batches[3]=(RecvxBootRenderBatch){.first=9,.count=3,.texture=&texture};
+    overlays[0]=(RecvxBootDraw){.quad={.x2=10,.y2=10},.color=0xffffffff}; overlay_count=1;
+    recvxGameBootPresent(); assert(consumed && submission_count==5);
+    assert(submissions[0].fog && submissions[0].fog_near==10 && submissions[0].fog_far==1000 &&
+        submissions[0].fog_color==0x332211 && submissions[0].textured);
+    assert(submissions[1].fog && submissions[1].fog_near==20 && submissions[1].fog_far==2000 &&
+        submissions[1].fog_color==0x665544 && submissions[1].textured);
+    assert(submissions[2].fog && submissions[2].fog_near==-0x1p64f && submissions[2].fog_far==0x1p64f);
+    assert(!submissions[3].fog && !submissions[4].fog && !enabled[GU_FOG]);
+}
+
 static void screen_gradient_triangles(void)
 {
     reset_frame();frame.vertex_count=12;frame.batch_count=4;
@@ -545,12 +571,22 @@ static void movie_display(void)
 
 int main(void)
 {
-    display_init(); models_then_overlays(); blend_mappings(); authored_half_fog(); screen_gradient_triangles(); shadow_protocol();
+    display_init(); models_then_overlays(); blend_mappings(); authored_half_fog(); ordinary_depth_fog(); screen_gradient_triangles(); shadow_protocol();
+    reset_frame(); frame.vertex_count=3; frame.batch_count=1;
+    batches[0]=(RecvxBootRenderBatch){.count=3,.texture=&texture,.kind=RECVX_RENDER_SCREEN_OFFSET,
+        .attributes=0x1b,.blend_source=8,.blend_destination=6,.fog_color=0x102030,.scissor={0,0,480,272}};
+    recvxGameBootPresent();
+    assert(texture_environment==0x102030 && texture_function==GU_TFX_MODULATE && submission_count==1);
+    assert(submissions[0].format & GU_TRANSFORM_2D);
+    /* Ordering-table flushes preserve the scene until the next display swap. */
+    unsigned int prior_clears=clear_count;
+    consumed=0;
+    recvxGameBootPresent(); assert(clear_count==prior_clears);
     recvxGameBootDisplaySwap(); assert(swaps==1 && context_draw_address==512u*272u*4u);
     shadow_protocol(); /* Offscreen switches must preserve the swapped scene target. */
     recvxGameBootDisplaySwap(); assert(swaps==2 && context_draw_address==0);
     shadow_protocol(); gradient_overlays(); movie_display(); empty_and_capacity();
     recvxGameBootDisplayShutdown(); assert(terminated);
-    puts("PASS: actual GU adapter viewport/VRAM/depth state, perspective matrix, external ABGR geometry/lines, materials, indexed textures, authored constant half-fog, screen triangle gradients/depth, modifier add/subtract mask passes/composite/bounded clears, swap target restoration, overlays and consume-after-sync lifetime");
+    puts("PASS: actual GU adapter viewport/VRAM/depth state, perspective matrix, external ABGR geometry/lines, materials, indexed textures, native geometry depth fog and authored constant half-fog isolation, screen triangle gradients/depth, modifier add/subtract mask passes/composite/bounded clears, swap target restoration, overlays and consume-after-sync lifetime");
     return 0;
 }

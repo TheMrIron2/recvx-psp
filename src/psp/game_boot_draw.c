@@ -13,6 +13,8 @@
 #include "ps2/veronica/prog/main.h"
 #include "ps2/veronica/prog/ps2_texture.h"
 #include "psp/engine_original_texture.h"
+#include "psp/engine_original_view.h"
+#include "ps2/veronica/prog/ps2_NaDebugFontFunction.h"
 
 #define TEXTURE_LIMIT 256
 #define DRAW_LIMIT 512
@@ -23,6 +25,59 @@ static unsigned int current_number, quad_color, palette_mode;
 static int texture_filter;
 static RecvxBootDraw draws[DRAW_LIMIT];
 static size_t draw_count;
+/* PSPSDK supplies the 256-glyph 8x8 font in libpspdebug. Render it through GU,
+   never through the debug console's separate framebuffer. */
+extern unsigned char msx[2048];
+static unsigned char print_pixels[128 * 128] __attribute__((aligned(16)));
+static RecvxBootTexture print_texture;
+static unsigned int print_size = 13, print_color = 0xffe0e0e0u;
+
+void njPrintSize(Uint16 size)
+{
+    if (!size || size > 128) recvxGameBootUnsupported("invalid debug print size");
+    print_size = size;
+}
+void njPrintColor(Uint32 color) { print_color = color; }
+
+void njPrintC(Int location, const char *string)
+{
+    size_t length;
+    if (!string) recvxGameBootUnsupported("missing debug print string");
+    for (length = 0; length < 1024 && string[length]; ++length) { }
+    if (length == 1024) recvxGameBootUnsupported("debug print string exceeds limit");
+    if (!print_texture.pixels) {
+        for (unsigned int ch = 0; ch < 256; ++ch)
+            for (unsigned int row = 0; row < 8; ++row)
+                for (unsigned int col = 0; col < 8; ++col) {
+                    unsigned int x = (ch & 15u) * 8 + col, y = (ch >> 4) * 8 + row;
+                    unsigned int swizzled = ((y / 8) * 8 + x / 16) * 128 + (y & 7) * 16 + (x & 15);
+                    print_pixels[swizzled] = !!(msx[ch * 8 + row] & (0x80u >> col));
+                }
+        print_texture.source = msx; print_texture.source_size = sizeof(msx);
+        print_texture.pixels = print_pixels; print_texture.palette[1] = 0xffffffffu;
+        print_texture.width = print_texture.height = print_texture.tile_width = 128;
+        print_texture.tile_count = 1;
+    }
+    float origin = (float)(int16_t)((uint32_t)location >> 16) * print_size;
+    float x = origin, y = (float)(int16_t)location * print_size;
+    for (size_t i = 0; i < length; ++i) {
+        unsigned int ch = (unsigned char)string[i];
+        if (ch == '\n') { x = origin; y += print_size; continue; }
+        if (ch == '\r') { x = origin; continue; }
+        if (ch == '\t') { x += 4 * print_size; continue; }
+        if (ch != ' ' && x < 640 && y < 480 && x + print_size > 0 && y + print_size > 0) {
+            if (draw_count == DRAW_LIMIT) recvxGameBootUnsupported("debug print draw queue exhausted");
+            float left = fmaxf(x, 0), top = fmaxf(y, 0);
+            float right = fminf(x + print_size, 640), bottom = fminf(y + print_size, 480);
+            float u = (ch & 15u) * 8.0f, v = (ch >> 4) * 8.0f;
+            draws[draw_count++] = (RecvxBootDraw){.quad = {.x1=left,.y1=top,.x2=right,.y2=bottom,
+                .u1=(u + (left-x)*8/print_size)/128, .v1=(v + (top-y)*8/print_size)/128,
+                .u2=(u + (right-x)*8/print_size)/128, .v2=(v + (bottom-y)*8/print_size)/128},
+                .depth=1.0f, .color=print_color, .texture=&print_texture};
+        }
+        x += print_size;
+    }
+}
 /* The retail engine has one active room-texture save. Its caller reserves the
    returned arena span until restore. PSP textures already live in RAM, but
    their owned copies must survive the menu's release/reuse of texture slots. */
@@ -302,7 +357,38 @@ void njReleaseTextureAll(void)
     recvxGameBootRenderTextureList(NULL);
 }
 void recvxGameBootTexturesShutdown(void) { njReleaseTextureAll(); Init_PS2_SAVE_TEX(); }
-void bhGarbageTexture(NJS_TEXMEMLIST *list, unsigned int count) { (void)list; (void)count; }
+Uint32 njCalcTexture(Uint32 flag)
+{
+    /* Retail reports this fixed compatibility capacity, not measured free
+       bytes; the movie state machine compares it with exactly one MiB. */
+    (void)flag;
+    return 1048576;
+}
+void njGarbageTexture(NJS_TEXMEMLIST *list, Uint32 count)
+{
+    /* Retail ignores these arguments and compacts its TIM2 arena, retaining
+       all live surfaces. PSP surfaces are independent heap allocations:
+       release already reclaims each hole, so moving live surfaces would
+       invalidate descriptor and queued palette-view pointers unnecessarily. */
+    (void)list; (void)count;
+    if (draw_count || recvxGameBootRenderPending()) recvxGameBootPresent();
+    for (unsigned int slot = 0; slot < TEXTURE_LIMIT; ++slot) {
+        if (!textures[slot].source) {
+            recvxBootTextureFree(&textures[slot]);
+            if (Ps2_current_texmemlist == &descriptors[slot]) {
+                Ps2_current_texmemlist = NULL;
+                recvxGameBootRenderTextureSelected(NULL);
+            }
+            memset(&descriptors[slot], 0, sizeof(descriptors[slot]));
+        } else if (!textures[slot].pixels ||
+            descriptors[slot].texinfo.texaddr != textures[slot].pixels ||
+            descriptors[slot].texinfo.texsurface.pSurface != (Uint32 *)textures[slot].source ||
+            !descriptors[slot].count) {
+            recvxGameBootUnsupported("invalid original garbage texture ownership");
+        }
+    }
+}
+void bhGarbageTexture(NJS_TEXMEMLIST *list, unsigned int count) { njGarbageTexture(list, count); }
 void njSetPaletteMode(Uint32 mode) { palette_mode = mode; }
 Uint32 njGetPaletteMode(void) { return palette_mode; }
 void njSetPaletteData(Sint32 offset, Sint32 count, void *data)
@@ -350,6 +436,14 @@ void njDrawQuadTexture(QUAD *quad, float depth)
 void njColorBlendingMode(Int target, Int mode)
 {
     recvxGameBootRenderPolygonBlend(target, mode);
+}
+
+void recvxGameBootDrawSelectedTexture(NJS_TEXLIST **list, Uint32 *number)
+{
+    if (!current_list || current_number >= current_list->nbTexture)
+        recvxGameBootUnsupported("missing public 2D texture selection");
+    *list = current_list;
+    *number = current_number;
 }
 
 void njDrawPolygon2DM(NJS_POINT2COL *polygon, int count, float priority, unsigned int attributes)
@@ -411,4 +505,101 @@ const RecvxBootDraw *recvxGameBootDraws(size_t *count)
     *count = draw_count; draw_count = 0;
     return draws;
 }
-void njSetScreen(NJS_SCREEN *screen) { (void)screen; }
+void njSetScreen(NJS_SCREEN *screen) { recvxEngineOriginalViewSetScreen(screen); }
+
+void njDrawSprite2D(NJS_SPRITE *sprite, Int number, Float priority, Uint32 attributes)
+{
+    if (!sprite || !sprite->tanim || !sprite->tlist || number < 0 || number > 255 ||
+        !(attributes & NJD_SPRITE_ALPHA) || (attributes & ~0x2fu) ||
+        !isfinite(priority) || !isfinite(sprite->sx) || !isfinite(sprite->sy) ||
+        !isfinite(sprite->p.x) || !isfinite(sprite->p.y))
+        recvxGameBootUnsupported("invalid original inventory sprite");
+    const NJS_TEXANIM *animation = &sprite->tanim[number];
+    njSetTexture(sprite->tlist);
+    njSetTextureNum(animation->texid);
+    const RecvxBootTexture *texture = recvxGameBootTextureGet(sprite->tlist, animation->texid);
+    if (texture->tile_count != 1)
+        recvxGameBootUnsupported("tiled inventory sprite is not ported");
+    float left = -animation->cx * sprite->sx, right = (animation->sx-animation->cx)*sprite->sx;
+    float top = -animation->cy * sprite->sy, bottom = (animation->sy-animation->cy)*sprite->sy;
+    float x[4] = {left,right,right,left}, y[4] = {top,top,bottom,bottom};
+    float ub = attributes & NJD_SPRITE_HFLIP ? -.5f : .5f;
+    float vb = attributes & NJD_SPRITE_VFLIP ? -.5f : .5f;
+    float u[2] = {fmaxf(0,animation->u1*(texture->width/256.0f)+ub),
+                  fmaxf(0,animation->u2*(texture->width/256.0f)+ub)};
+    float v[2] = {fmaxf(0,animation->v1*(texture->width/256.0f)+vb),
+                  fmaxf(0,animation->v2*(texture->width/256.0f)+vb)};
+    if (!(((sprite->ang+0xffffu)&0xc000u)/16384u)) { v[0]-=1; v[1]-=1; }
+    if(attributes & NJD_SPRITE_HFLIP){float t=u[0];u[0]=u[1];u[1]=t;}
+    if(attributes & NJD_SPRITE_VFLIP){float t=v[0];v[0]=v[1];v[1]=t;}
+    unsigned int color=0xffffffffu;
+    if (attributes & NJD_SPRITE_COLOR) {
+        const RecvxGameBootRenderState *state = recvxGameBootRenderStateGet();
+        const NJS_ARGB *c = &state->constant_material;
+        color = ((unsigned int)(fminf(1,fmaxf(0,c->a))*255)<<24) |
+                ((unsigned int)(fminf(1,fmaxf(0,c->r))*255)<<16) |
+                ((unsigned int)(fminf(1,fmaxf(0,c->g))*255)<<8) |
+                (unsigned int)(fminf(1,fmaxf(0,c->b))*255);
+    }
+    RecvxBootDraw *draw=next_draw();
+    *draw=(RecvxBootDraw){.depth=fmaxf(1,-priority),.texture=texture,.filter=texture_filter,.color_gradient=1};
+    float co=1,si=0;
+    if(attributes & NJD_SPRITE_ANGLE){co=cosf(.0000958738f*sprite->ang);si=sinf(.0000958738f*sprite->ang);}
+    static const unsigned int ui[4]={0,1,1,0},vi[4]={0,0,1,1};
+    for(unsigned int i=0;i<4;++i){
+        draw->points[i]=(NJS_POINT2){sprite->p.x+co*x[i]-si*y[i],sprite->p.y+si*x[i]+co*y[i]};
+        draw->uv[i]=(NJS_POINT2){u[ui[i]],v[vi[i]]};
+        draw->vertex_color[i]=color;
+    }
+}
+
+void njDrawLine2D(NJS_POINT2COL *polygon, Int count, Float priority, Uint32 attributes)
+{
+    int vertices = attributes & 2u ? count+1 : count*2;
+    if (!polygon || !polygon->p || !polygon->col || count < 1 || vertices > 32 ||
+        (attributes & ~0x42u) || !isfinite(priority))
+        recvxGameBootUnsupported("invalid inventory 2D line");
+    for(int i=0;i<vertices;++i)
+        if(!isfinite(polygon->p[i].x)||!isfinite(polygon->p[i].y))
+            recvxGameBootUnsupported("invalid inventory 2D line coordinate");
+    for(int i=0;i<count;++i){
+        int a=attributes&2u?i:i*2,b=a+1;
+        float dx=polygon->p[b].x-polygon->p[a].x,dy=polygon->p[b].y-polygon->p[a].y;
+        float length=hypotf(dx,dy);
+        if(length==0)continue;
+        float ox=-dy*.5f/length,oy=dx*.5f/length;
+        NJS_POINT2 p[4]={{polygon->p[a].x+ox,polygon->p[a].y+oy},
+            {polygon->p[b].x+ox,polygon->p[b].y+oy},{polygon->p[b].x-ox,polygon->p[b].y-oy},
+            {polygon->p[a].x-ox,polygon->p[a].y-oy}};
+        NJS_COLOR c[4]={polygon->col[a],polygon->col[b],polygon->col[b],polygon->col[a]};
+        recvxGameBootDrawGradientQuad(p,c,fmaxf(1,-priority));
+    }
+}
+
+void SyncPath(void) { /* GU users synchronize before queue storage is reclaimed. */ }
+void Ps2DrawOTag(void) { recvxGameBootPresent(); }
+void Ps2DrawOTagI(void) { recvxGameBootPresent(); }
+int ViewType;
+
+void recvxGameBootDrawTexturedOverlay(NJS_POINT2COL *polygon, Float priority)
+{
+    const RecvxBootTexture *texture=recvxGameBootRenderStateGet()->selected_texture;
+    if (!texture || texture->tile_count!=1)
+        recvxGameBootUnsupported("invalid public textured overlay material");
+    for(unsigned int i=0;i<4;++i)
+        if(!isfinite(polygon->p[i].x)||!isfinite(polygon->p[i].y))
+            recvxGameBootUnsupported("invalid public textured overlay coordinate");
+    static const unsigned int perimeter[4]={0,1,2,3}, strip[4]={0,2,3,1};
+    const unsigned int *order=polygon->p[0].x==polygon->p[1].x &&
+        polygon->p[2].x==polygon->p[3].x && polygon->p[0].y==polygon->p[2].y &&
+        polygon->p[1].y==polygon->p[3].y ? strip : perimeter;
+    RecvxBootDraw *draw=next_draw();
+    *draw=(RecvxBootDraw){.depth=fmaxf(1,-priority),.texture=texture,.filter=texture_filter,.color_gradient=1};
+    for(unsigned int i=0;i<4;++i){
+        unsigned int corner=order[i];
+        draw->points[i]=polygon->p[corner];
+        draw->vertex_color[i]=polygon->col[corner].color;
+        draw->uv[i]=(NJS_POINT2){(polygon->tex[corner].tex.u+.5f)*texture->width/256,
+            (polygon->tex[corner].tex.v+.5f)*texture->height/256};
+    }
+}

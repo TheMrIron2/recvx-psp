@@ -110,3 +110,24 @@ void njDrawTexture3DHEx(NJS_TEXTUREH_VTX *input,Int count,Int trans)
         recvxGameBootRenderHalfFogTriangle(triangle,input[0].ocol,trans);
     }
 }
+
+void njDrawTextureH(NJS_TEXTUREH_VTX *input, Int count, Int texture, Int trans)
+{
+    RecvxGameChunkVertex v[32];
+    if (count < 3 || count > 32 || (trans != 0 && trans != 1))
+        recvxGameBootUnsupported("invalid half-lit screen strip");
+    vertices(input, count);
+    for (int i=0; i<count; ++i) {
+        if (input[i].z <= 0) recvxGameBootUnsupported("invalid half-lit screen depth");
+        unsigned int color = input[i].bcol;
+        v[i] = (RecvxGameChunkVertex){.x=input[i].x,.y=input[i].y,.z=input[i].z,
+            .u=input[i].u,.v=input[i].v,.color=color};
+    }
+    njSetTextureNumG(texture);
+    for (int i=2; i<count; ++i) {
+        int a=i-2,b=i-1;
+        if(i&1){int swap=a;a=b;b=swap;}
+        const RecvxGameChunkVertex triangle[3]={v[a],v[b],v[i]};
+        recvxGameBootRenderHalfFogScreenTriangle(triangle,input[0].ocol,trans);
+    }
+}

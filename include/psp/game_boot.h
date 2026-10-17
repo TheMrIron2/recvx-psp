@@ -36,6 +36,9 @@ int recvxGameBootValidateModel(const unsigned char *data, size_t size);
 int recvxGameBootValidateSkinnedModel(const unsigned char *data, size_t size,
     const unsigned char *skin, size_t skin_size);
 int recvxGameBootValidatePvp(const unsigned char *data, size_t size, unsigned int textures);
+/* Count installed descriptors (excluding palette-only entries); -1 if malformed. */
+int recvxGameBootPvpTextureCount(const unsigned char *data, size_t size);
+void recvxGameBootInventoryTexturePrepare(void);
 int recvxGameBootValidateRoomSource(const void *data, size_t size);
 void recvxGameBootRoomPrepare(void);
 void recvxGameBootRoomFinishPrepare(void);
@@ -76,10 +79,12 @@ typedef struct RecvxBootDraw {
     int filter;
     int color_gradient;
     NJS_POINT2 points[4];
+    NJS_POINT2 uv[4];
     unsigned int vertex_color[4];
 } RecvxBootDraw;
 void recvxGameBootDrawGradientQuad(const NJS_POINT2 points[4], const NJS_COLOR colors[4], float depth);
 const RecvxBootDraw *recvxGameBootDraws(size_t *count);
+void recvxGameBootDisplayBeginFrame(void);
 void recvxGameBootDrawDiscard(void);
 void recvxGameBootPresent(void);
 int recvxGameBootDisplayInit(void);

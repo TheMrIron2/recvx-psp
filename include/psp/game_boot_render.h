@@ -10,7 +10,8 @@ typedef struct RecvxBootRenderVertex {
 } RecvxBootRenderVertex;
 
 typedef enum RecvxBootRenderKind {
-    RECVX_RENDER_TRIANGLES, RECVX_RENDER_LINES, RECVX_RENDER_HALF_FOG, RECVX_RENDER_SCREEN_TRIANGLES, RECVX_RENDER_SHADOW_START,
+    RECVX_RENDER_TRIANGLES, RECVX_RENDER_LINES, RECVX_RENDER_HALF_FOG, RECVX_RENDER_SCREEN_TRIANGLES,
+    RECVX_RENDER_SCREEN_OFFSET, RECVX_RENDER_SCREEN_HALF_BASE, RECVX_RENDER_SHADOW_START,
     RECVX_RENDER_SHADOW_ADD, RECVX_RENDER_SHADOW_SUBTRACT,
     RECVX_RENDER_SHADOW_COMPOSITE, RECVX_RENDER_SHADOW_END
 } RecvxBootRenderKind;
@@ -20,7 +21,10 @@ typedef struct RecvxBootRenderBatch {
     int blend_source, blend_destination;
     const RecvxBootTexture *texture;
     RecvxBootRenderKind kind;
-    unsigned int fog_color; /* PSP RGB for authored half-fog sprites. */
+    unsigned int fog_color; /* PSP RGB for native depth fog or authored half fog. */
+    unsigned int fog_enabled;
+    float fog_near, fog_far; /* Positive view distances, captured at submission. */
+    int scissor[4]; /* PSP pixel bounds, snapshotted from Ninja user clipping. */
 } RecvxBootRenderBatch;
 
 typedef struct RecvxBootRenderFrame {
@@ -34,6 +38,7 @@ typedef struct RecvxBootRenderFrame {
 void recvxGameBootRenderSpriteTriangle(const RecvxGameChunkVertex input[3], int textured, int trans);
 void recvxGameBootRenderHalfFogTriangle(const RecvxGameChunkVertex input[3], unsigned int offset_argb, int trans);
 void recvxGameBootRenderScreenTriangle(const RecvxGameChunkVertex input[3], int trans);
+void recvxGameBootRenderHalfFogScreenTriangle(const RecvxGameChunkVertex input[3], unsigned int offset, int trans);
 void recvxGameBootRenderLine(const RecvxGameChunkVertex input[2], int trans);
 void recvxGameBootRenderShadowStart(void);
 void recvxGameBootRenderShadowTriangle(const RecvxGameChunkVertex input[3], unsigned int pass);

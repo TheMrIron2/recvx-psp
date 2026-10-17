@@ -22,8 +22,7 @@ void recvxGameBootFogReset(void)
 }
 
 void njFogDisable(void) { ulNaFogState=0; }
-/* njFogEnable stays a named unsupported service until geometry fog rendering
-   is implemented. The scalar lookup remains usable by modifier shadows. */
+void njFogEnable(void) { ulNaFogState=1; }
 
 void njSetFogColor(Uint32 color)
 {

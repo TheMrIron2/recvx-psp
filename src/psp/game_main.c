@@ -45,6 +45,7 @@ int main(int argc, char **argv)
         recvxAudioOutputShutdown();
     } else {
         recvxGameBootLog("main thread attributes=%08x; VFPU enabled", (unsigned int)main_thread.attr);
+        recvxGameBootLog("native audio ready: AVCODEC + SASCORE; %u Hz stereo; grain=%u",RECVX_AUDIO_RATE,RECVX_AUDIO_FRAMES);
         recvxGameBootDisplayInit();
         previous_vblank = sceDisplayGetVcount();
         while (!exit_requested) {

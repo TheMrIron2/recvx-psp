@@ -19,6 +19,13 @@
 #include "../../../ps2/veronica/prog/main.h"
 
 #include <string.h>
+#ifdef RECVX_GAME_BOOT
+#include "psp/game_boot_save_storage.h"
+static int psp_title_has_saves;
+#define TITLE_STORAGE_AVAILABLE(port) (psp_title_has_saves)
+#else
+#define TITLE_STORAGE_AVAILABLE(port) CheckMcSelectPortInfoState(port)
+#endif
 
 SYSLOAD_SCREEN SysLoad;
 SYSSAVE_SCREEN SysSave;
@@ -940,6 +947,10 @@ int CheckConnectVmDrive(int param, int SlotNo) // first parameter is not present
 // 100% matching!
 int FindFirstVmDrive() 
 { 
+#ifdef RECVX_GAME_BOOT
+    psp_title_has_saves = recvxGameBootSaveStorageAny();
+    return psp_title_has_saves ? 0 : -1;
+#else
     int j;
     int DriveNo;
 
@@ -961,6 +972,7 @@ int FindFirstVmDrive()
     }
         
     return -1; 
+#endif
 }
 
 // 100% matching! 
@@ -2274,6 +2286,9 @@ int Adv_BioCvTitle()
         FadeOutPlate(); 
         break; 
     case 8:
+#ifdef RECVX_GAME_BOOT
+        psp_title_has_saves = recvxGameBootSaveStorageAny();
+#endif
         ap->DepthLevel = 1; 
         
         sys->ss_flg |= 0x20000; 
@@ -2296,7 +2311,7 @@ int Adv_BioCvTitle()
     case 9:
         if (ulFrame == 0) 
         { 
-            McCrntResult = CheckMcSelectPortInfoState(0); 
+            McCrntResult = TITLE_STORAGE_AVAILABLE(0);
             
             if ((McCrntResult | McPrevResult) == 1) 
             {
@@ -2313,7 +2328,7 @@ int Adv_BioCvTitle()
         } 
         else if (ulFrame == 1)
         { 
-            McCrntResult = CheckMcSelectPortInfoState(1); 
+            McCrntResult = TITLE_STORAGE_AVAILABLE(1);
             
             if ((McCrntResult | McPrevResult) == 1) 
             {
@@ -2330,8 +2345,8 @@ int Adv_BioCvTitle()
         } 
         else
         { 
-            McCrntResult = CheckMcSelectPortInfoState(0);
-            McPrevResult = CheckMcSelectPortInfoState(1);
+            McCrntResult = TITLE_STORAGE_AVAILABLE(0);
+            McPrevResult = TITLE_STORAGE_AVAILABLE(1);
             
             if ((McCrntResult | McPrevResult) == 1) 
             { 

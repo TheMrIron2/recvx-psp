@@ -46,6 +46,17 @@ These fields follow the [PPSSPP PSMF parser](https://github.com/hrydgard/ppsspp/
 and the [PSMF container investigation](https://github.com/TotalKommando/psp-media-toolkit/blob/master/pspmedia.py).
 The PS pack, system, PES, padding, and end packets use MPEG-2 Systems framing.
 
+Cooker version 2 also writes Sony private-stream-2 (`0xBF`) access-unit size
+tables before each IDR group. The table covers every encoded picture, counts
+only elementary video bytes and ends each group with the final-entry flag.
+Without these tables, generic FFmpeg/PPSSPP playback can succeed while the real
+PSP's `sceMpegGetAvcAu` waits until the input ring fills and reports no data.
+The layout is documented by the [PSP media toolkit's reference muxer](https://github.com/TotalKommando/psp-media-toolkit/blob/master/pspmedia.py).
+The runtime rejects old files with `missing native frame index; recook
+data/movies`. Rerun the preparation command above, then copy **both** the new
+EBOOT and `data/movies` to the PSP. Verified version 1 assets are remuxed without
+re-encoding video or changing the native ADPCM soundtrack.
+
 The original PS2 `MovieTypeDef` and `MovieDef` tables determine placement.
 The raw MPEG-2 stream's sample aspect ratio does not describe the original
 on-screen movie rectangle. The cooker places that authored rectangle inside
@@ -71,6 +82,9 @@ units, container bounds, original PCM extraction, malformed streams, and the
 RVAG channel/terminator contract. The PCM encoder test uses ASan/UBSan and
 checks reconstruction error against synthetic stereo input on the host.
 Native firmware playback still requires testing on a physical PSP.
+The native adapter test now also checks rejection and cleanup for legacy
+streams without frame tables; the host mux test independently verifies every
+table entry against the actual multi-sector frame lengths and IDR groups.
 
 ## Build and playback
 
@@ -91,6 +105,31 @@ not determine picture times. The PSMF duration sets the expected picture count;
 extra or missing decoded pictures remain errors after decoder drain.
 The original event requests, movie task pause/restore, cancel buttons and
 30-frame cancellation fade are retained.
+
+The cooker places MPEG `program_end_code` (`B9`) in a separate final sector
+after an otherwise empty padding packet. The native ring parser can return
+`80618007` when it reaches that marker before the sector boundary. On open,
+the adapter recognizes and excludes this exact padding-only tail from ring
+input, then drains the decoder after all video sectors have been consumed.
+The authored picture count remains mandatory. Other illegal streams, malformed
+trailers, read failures and missing pictures remain errors. Existing version 2
+movie files work with this runtime fix; no asset regeneration is needed.
+
+The native adapter supplies four valid destination pointers to both AVC decode
+and drain. The 6.61 firmware walks this list once for each returned picture
+before returning to the caller; a single stack pointer cannot safely handle
+multi-picture output. Three extra aligned 512×272 RGB surfaces (about 1.6 MiB)
+hold additional pictures, returned on subsequent calls in presentation order.
+The GE-facing two-buffer ownership rule remains unchanged. Hardware CSC writes
+through uncached aliases, with cache maintenance around CPU access. MPEG
+initialization, decode and teardown share the SAS lock so firmware codec calls
+cannot overlap synthesis. Failure cleanup uses the already-held lock.
+
+The hardware report at `sceMpeg_library + 0x7984` matches the
+`sceMpegBaseCscAvc` import in the locally inspected 6.61 module. This identifies
+the RGB conversion boundary, but does not alone prove which input caused the
+exception. Regression tests exercise two- and four-picture output, queue order,
+drain, cache ownership and lock release; a physical PSP rerun is still required.
 
 Validation targets are `game-movie-assets-test`, `game-boot-movie-psp-test`,
 `game-boot-movie-audio-test`, `game-boot-movie-test`,

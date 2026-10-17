@@ -191,17 +191,18 @@ int recvxGameBootValidateSkinnedModel(const unsigned char *data, size_t size,
     return skin_source(&model);
 }
 
-int recvxGameBootValidatePvp(const unsigned char *data, size_t size, unsigned int textures)
+int recvxGameBootPvpTextureCount(const unsigned char *data, size_t size)
 {
     size_t cursor = 0;
     unsigned int entries[64], palettes = 0, count = 0;
+    if (!data) return -1;
     for (;;) {
         unsigned int code, length, chunk_length, i;
         const unsigned char *payload;
         if (!span(size, cursor, 4)) return -1;
         code = word(data + cursor);
         if (code == UINT32_MAX)
-            return textures == UINT32_MAX ? (count ? 0 : -1) : (count == textures ? 0 : -1);
+            return (int)count;
         if (!span(size, cursor, 32)) return -1;
         chunk_length = length = word(data + cursor + 4); cursor += 32;
         if (!span(size, cursor, length)) return -1;
@@ -225,11 +226,17 @@ int recvxGameBootValidatePvp(const unsigned char *data, size_t size, unsigned in
                 if (!palettes) return -1;
                 for (i = 0; i < palettes; ++i) if (!(entries[i] & 255)) ++count;
             }
-            if (count > textures || count > 256) return -1;
+            if (count > 256) return -1;
         } else return -1;
         /* Keep the outer length when the TIM2 wrapper has been stripped. */
         cursor += chunk_length;
     }
+}
+
+int recvxGameBootValidatePvp(const unsigned char *data, size_t size, unsigned int textures)
+{
+    int count = recvxGameBootPvpTextureCount(data, size);
+    return count >= 0 && (textures == UINT32_MAX ? count > 0 : (unsigned int)count == textures) ? 0 : -1;
 }
 
 static int aligned_motions(const RecvxPlayerAssets *assets)

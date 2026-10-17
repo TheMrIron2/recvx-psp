@@ -9,10 +9,12 @@ def main(destination):
               '#include "ps2/veronica/prog/event.h"',
               '#include "ps2/veronica/prog/main.h"',
               '#include "ps2/veronica/prog/cut.h"',
+              '#include "ps2/veronica/prog/camera.h"',
+              '#include "ps2/veronica/prog/light.h"',
               '#include "ps2/veronica/prog/screen.h"',
               '#include "ps2/veronica/prog/message.h"',
               '#include "ps2/veronica/prog/ps2_NaView.h"']
-    for name, opcode in [('bhCineSet',18), ('bhCamSet',19), ('bhFadeSet',54), ('bhMessageSet',31), ('bhMesDispEndSet',92)]:
+    for name, opcode in [('bhCineSet',18), ('bhCamSet',19), ('bhFadeSet',54), ('bhMessageSet',31), ('bhInitCamSet',91), ('bhMesDispEndSet',92)]:
         line, function = extract(source.read_text(), name)
         function = function.replace('unsigned int '+name+'()', 'static unsigned int '+name+'Original(void)', 1)
         if name == 'bhFadeSet':

@@ -37,14 +37,16 @@ static struct {
     O_WRK work[2];
     O_WORK poses[3];
 } data;
-static unsigned int checks,cut_calls;
+static unsigned int checks,cut_calls,reset_step;
 static jmp_buf stopped;
 static const char *fault;
 static int expecting_fault;
 #define CHECK(condition) do{++checks;assert(condition);}while(0)
 #define REJECT(call,message) do{fault=NULL;expecting_fault=1;if(!setjmp(stopped)){call;assert(!"expected camera guard");}expecting_fault=0;CHECK(fault&&strstr(fault,message));}while(0)
 void recvxGameBootUnsupported(const char *name){if(!expecting_fault){fprintf(stderr,"unexpected camera fault: %s\n",name);abort();}fault=name;longjmp(stopped,1);}
-void bhCheckCut(int index){CHECK(index==1);++cut_calls;}
+void bhCheckCut(int index){CHECK(index==1);++cut_calls;if(reset_step){CHECK(reset_step++==1);CHECK(!(sys->st_flg&1));CHECK(plp->gpx==plp->px&&plp->gpy==plp->py&&plp->gpz==plp->pz);}}
+void bhControlCamera(void){CHECK(reset_step++==2);}
+void bhControlLight(void){CHECK(reset_step++==3);}
 static int close_to(float a,float b){return fabsf(a-b)<0.001f;}
 static void reset(void)
 {
@@ -70,7 +72,7 @@ static void reset(void)
     for(unsigned int i=0;i<3;++i)data.object[i].model=&data.model;
     player.mlwP=&player.mdl[0];player.mlwP->obj_num=3;player.mlwP->owP=data.poses;
     player.mtx=(NJS_MATRIX *)player.mtxbuf;
-    BackColorFlag=1;cut_calls=0;fault=NULL;
+    BackColorFlag=1;cut_calls=0;reset_step=0;fault=NULL;
     recvxEngineOriginalFaultReset();recvxEngineOriginalMatrixReset();recvxEngineOriginalViewReset();
     njUnitMatrix(player.mtx);
     for(unsigned int i=0;i<3;++i)njUnitMatrix(&data.poses[i].mtx);
@@ -105,6 +107,19 @@ static void screen_commands(void)
     CHECK(near==-1&&far==-99);
     reset();camera[1]=0;camera[2]=2;bhScePtr=camera;cam.flg=0x46;
     REJECT(bhCamSet(),"table or index");CHECK(bhScePtr==camera&&cam.flg==0x46);
+}
+static void reset_command(void)
+{
+    reset();unsigned char command[]={91,255};bhScePtr=command;
+    player.px=17;player.py=-9;player.pz=42;
+    sys->st_flg=0x8001;reset_step=1;
+    CHECK(bhInitCamSet()==1&&bhScePtr==command+2);
+    CHECK(reset_step==4&&cut_calls==1&&sys->st_flg==0x8000);
+    reset();bhScePtr=command;player.py=NAN;sys->st_flg=1;
+    REJECT(bhInitCamSet(),"player position");
+    CHECK(bhScePtr==command&&sys->st_flg==1&&!cut_calls);
+    reset();bhScePtr=command;plp=NULL;
+    REJECT(bhInitCamSet(),"player position");
 }
 static void setter_and_locks(void)
 {
@@ -198,7 +213,7 @@ static void malformed(void)
 }
 int main(void)
 {
-    screen_commands();setter_and_locks();spline_control();malformed();
+    screen_commands();reset_command();setter_and_locks();spline_control();malformed();
     printf("PASS: original screen commands, camera setters/visibility/lock targets, clip/background tables and spline transitions/self-loops: %u checks\n",checks);
     return 0;
 }

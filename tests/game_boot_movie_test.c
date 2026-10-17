@@ -52,6 +52,7 @@ void recvxGameBootMoviePspClose(void) {++closed;}
 int recvxGameBootMoviePspError(void) {return (int)0x80610002u;}
 const char *recvxGameBootMoviePspStage(void) {return "mock sceMpegAvcDecode";}
 int recvxAudioNativeError(void) {return (int)0x80420016u;}
+const char *recvxAudioNativeErrorCall(void) {return "mock SAS failure";}
 void StopBgm(int frames_to_fade) {assert(!frames_to_fade);++bgm_stops;}
 void StopVoice(int frames_to_fade) {assert(!frames_to_fade);++voice_stops;}
 int recvxMovieAudioStart(const char *path)

@@ -10,6 +10,7 @@ static SYS_WORK work;
 static ROM_WORK room;
 SYS_WORK *sys=&work;
 ROM_WORK *rom=&room;
+BH_PWORK *plp;
 unsigned char *bhScePtr;
 static unsigned int messages[]={2,12,16,0xffff0021u,0xffff0022u};
 static jmp_buf stopped;

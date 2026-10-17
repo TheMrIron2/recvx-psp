@@ -6,6 +6,7 @@
 #include "psp/game_boot_render.h"
 #include "psp/game_boot_chunk.h"
 #include "psp/game_boot_render_texture.h"
+#include "psp/game_boot_fog.h"
 #include "psp/engine_original_fault.h"
 #include "psp/engine_original_lighting.h"
 #include "psp/engine_original_matrix.h"
@@ -13,14 +14,37 @@
 #include "ps2/veronica/prog/main.h"
 #include "ps2/veronica/prog/ps2_NinjaCnk.h"
 #include "ps2/veronica/prog/ps2_dummy.h"
+#include "ps2/veronica/prog/ps2_NaView.h"
 
 #define MAX_VERTICES 262144u
 #define MAX_BATCHES 16384u
 extern void recvxGameBootDrawDiscard(void) __attribute__((weak));
+extern unsigned int ulCnkCurrentDrawMode;
 static RecvxBootRenderVertex *vertices;
 static RecvxBootRenderBatch *batches;
 static size_t vertex_capacity, batch_capacity, vertex_count, batch_count;
 static int shadow_active;
+static int user_scissor[4] = {0,0,480,272};
+
+void njUserClipping(Int mode, NJS_POINT2 *points)
+{
+    if (mode == 0) {
+        const int full[4] = {0,0,480,272};
+        memcpy(user_scissor, full, sizeof(full));
+        return;
+    }
+    if (mode != 2 || !points || !isfinite(points[0].x) || !isfinite(points[0].y) ||
+        !isfinite(points[1].x) || !isfinite(points[1].y) || points[0].x < 0 || points[0].y < 0 ||
+        points[1].x < points[0].x || points[1].y < points[0].y ||
+        points[1].x > 640.0f/32 || points[1].y > 480.0f/32)
+        recvxGameBootUnsupported("invalid original user clipping rectangle");
+    /* Retail receives coordinates divided by32; the inclusive GS maximum
+       expands by one32-pixel unit before conversion to PSP pixels. */
+    user_scissor[0] = (int)(points[0].x*32*0.75f);
+    user_scissor[1] = (int)(points[0].y*32*(272.0f/480));
+    user_scissor[2] = (int)fminf(480, (points[1].x*32+33)*0.75f);
+    user_scissor[3] = (int)fminf(272, (points[1].y*32+33)*(272.0f/480));
+}
 static RecvxBootTexture *texture_snapshots[256];
 static size_t texture_snapshot_count;
 static RecvxBootRenderFrame frame __attribute__((aligned(16)));
@@ -66,6 +90,7 @@ void recvxGameBootRenderReset(void)
     free(vertices); free(batches); vertices = NULL; batches = NULL;
     vertex_capacity = batch_capacity = 0;
     memset(&frame, 0, sizeof(frame));
+    njUserClipping(0, NULL);
     recvxGameBootRenderBeginFrame();
     recvxGameBootRenderTextureReset(); recvxGameBootChunkReset();
 }
@@ -111,6 +136,8 @@ static void capture_projection(void)
     memset(frame.projection, 0, sizeof(frame.projection));
     frame.projection[0] = 2.0f * distance * ax / 640.0f;
     frame.projection[5] = 2.0f * distance * ay / 480.0f;
+    frame.projection[8] = (2048.0f - fNaViwOffsetX) / 320.0f;
+    frame.projection[9] = (fNaViwOffsetY - 2048.0f) / 240.0f;
     frame.projection[10] = -(far + near) / (far - near);
     frame.projection[11] = -1;
     frame.projection[14] = -(2.0f * far * near) / (far - near);
@@ -127,17 +154,34 @@ static void append(const RecvxBootRenderVertex *output, unsigned int count, Recv
                    unsigned int attributes, unsigned int sampler, int source, int destination,
                    const RecvxBootTexture *texture, unsigned int fog_color)
 {
+    /* GE fog blends after texturing, preserving the texture and alpha. The
+       original reciprocal-depth table represents this near/far ramp with
+       quantized interpolation; GE evaluates the ramp directly. Snapshot its
+       parameters because events may change them before this queue is shown. */
+    unsigned int fog_enabled = ulNaFogState && (kind == RECVX_RENDER_TRIANGLES || kind == RECVX_RENDER_LINES);
+    float fog_near = fog_enabled ? fNaFogNear : 0;
+    float fog_far = fog_enabled ? fNaFogFar : 0;
+    if (fog_enabled) {
+        if (!isfinite(fog_near) || !isfinite(fog_far) || fog_near < 0 || fog_far <= fog_near)
+            recvxGameBootUnsupported("invalid original geometry fog range");
+        fog_color = ulNaFogR | (ulNaFogG << 8) | (ulNaFogB << 16);
+    }
     /* Event scripts run after model submission and may set the next camera.
        Keep this frame's projection with the view-space vertices it produced. */
     if (count && !vertex_count) capture_projection();
     reserve(count);
     RecvxBootRenderBatch *batch = batch_count ? &batches[batch_count-1] : NULL;
     if (!count || kind == RECVX_RENDER_SHADOW_COMPOSITE || !batch || batch->count + count > 65535u || batch->kind != kind ||
-        batch->fog_color != fog_color || batch->texture != texture || batch->attributes != attributes || batch->sampler != sampler ||
-        batch->blend_source != source || batch->blend_destination != destination) {
+        batch->fog_color != fog_color || batch->fog_enabled != fog_enabled ||
+        batch->fog_near != fog_near || batch->fog_far != fog_far ||
+        batch->texture != texture || batch->attributes != attributes || batch->sampler != sampler ||
+        batch->blend_source != source || batch->blend_destination != destination ||
+        memcmp(batch->scissor, user_scissor, sizeof(user_scissor))) {
         batch = &batches[batch_count++];
         *batch = (RecvxBootRenderBatch){.first=vertex_count, .attributes=attributes, .sampler=sampler,
-            .blend_source=source, .blend_destination=destination, .texture=texture, .kind=kind, .fog_color=fog_color};
+            .blend_source=source, .blend_destination=destination, .texture=texture, .kind=kind, .fog_color=fog_color,
+            .fog_enabled=fog_enabled, .fog_near=fog_near, .fog_far=fog_far};
+        memcpy(batch->scissor, user_scissor, sizeof(user_scissor));
     }
     if (count) memcpy(vertices + vertex_count, output, count * sizeof(*output));
     vertex_count += count; batch->count += count;
@@ -159,7 +203,7 @@ static void local_vertices(const RecvxGameChunkVertex *input, RecvxBootRenderVer
             view.x,-view.y,-view.z};
     }
 }
-void recvxGameBootRenderScreenTriangle(const RecvxGameChunkVertex input[3], int trans)
+static void screen_triangle(const RecvxGameChunkVertex input[3], int trans, int half, unsigned int offset)
 {
     RecvxBootRenderVertex output[3];
     const RecvxGameBootRenderState *state = recvxGameBootRenderStateGet();
@@ -175,7 +219,7 @@ void recvxGameBootRenderScreenTriangle(const RecvxGameChunkVertex input[3], int 
     float b = (65536.0f * near * far) / (far-near);
     for (unsigned int i=0; i<3; ++i) {
         if (!isfinite(input[i].x) || !isfinite(input[i].y) || !isfinite(input[i].z) ||
-            !isfinite(input[i].u) || !isfinite(input[i].v) || input[i].z < 1)
+            !isfinite(input[i].u) || !isfinite(input[i].v) || input[i].z <= 0)
             recvxGameBootUnsupported("invalid original screen sprite vertex");
         float depth = a + b / (-1.0f / input[i].z);
         unsigned int color=input[i].color;
@@ -185,9 +229,27 @@ void recvxGameBootRenderScreenTriangle(const RecvxGameChunkVertex input[3], int 
         if (!isfinite(output[i].x) || !isfinite(output[i].y) || !isfinite(output[i].u) || !isfinite(output[i].v))
             recvxGameBootUnsupported("screen sprite exceeds PSP coordinate range");
     }
-    append(output,3,RECVX_RENDER_SCREEN_TRIANGLES,0x13u|(trans?8u:0),3u|(state->texture_filter?4u:0),
+    if (half) {
+        RecvxBootRenderVertex constant[3];
+        unsigned int rgb = ((offset & 0x00fefefeu) >> 1);
+        rgb = ((rgb >> 16)&255u) | (rgb&0xff00u) | ((rgb&255u)<<16);
+        for (unsigned int i=0;i<3;++i) {
+            constant[i]=output[i];
+            constant[i].color=(output[i].color&0xff000000u)|rgb;
+            output[i].color=(output[i].color&0xff000000u)|((output[i].color&0x00fefefeu)>>1);
+        }
+        /* GE texture BLEND with equal vertex/environment RGB yields the
+           authored offset while retaining texture*vertex alpha. Then add
+           half the modulated base, weighted by the same source alpha. */
+        append(constant,3,RECVX_RENDER_SCREEN_OFFSET,0x13u|(trans?8u:0),3u|(state->texture_filter?4u:0),8,6,texture,rgb);
+        append(output,3,RECVX_RENDER_SCREEN_HALF_BASE,0x1bu,3u|(state->texture_filter?4u:0),trans?8:10,10,texture,0);
+    } else append(output,3,RECVX_RENDER_SCREEN_TRIANGLES,0x13u|(trans?8u:0),3u|(state->texture_filter?4u:0),
         state->polygon_blend_source,state->polygon_blend_destination,texture,0);
 }
+void recvxGameBootRenderScreenTriangle(const RecvxGameChunkVertex input[3], int trans)
+{ screen_triangle(input,trans,0,0); }
+void recvxGameBootRenderHalfFogScreenTriangle(const RecvxGameChunkVertex input[3], unsigned int offset, int trans)
+{ screen_triangle(input,trans,1,offset); }
 
 void recvxGameBootRenderLine(const RecvxGameChunkVertex input[2], int trans)
 {
@@ -579,3 +641,5 @@ void njCnkEasyDrawObject(NJS_CNK_OBJECT *object)
 { unsigned int visited = 0; njCnkSetCurrentDrawMode(0); tree(object, 0, &visited); }
 void njCnkEasyMultiDrawObject(NJS_CNK_OBJECT *object)
 { unsigned int visited = 0; njCnkSetCurrentDrawMode(1); tree(object, 0, &visited); }
+void njCnkEasyMultiDrawObjectI(NJS_CNK_OBJECT *object)
+{ unsigned int visited = 0; njCnkSetCurrentDrawMode(1); ulCnkCurrentDrawMode |= 4; tree(object, 0, &visited); }

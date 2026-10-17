@@ -4,6 +4,47 @@
 #include "ps2/veronica/prog/main.h"
 #include "ps2/veronica/prog/ps2_dummy.h"
 #include "ps2/veronica/prog/ps2_texture.h"
+#include "ps2/veronica/prog/sub1.h"
+
+void recvxGameBootInventoryTexturePrepare(void)
+{
+    if (!sys || !sys->subtxp)
+        recvxGameBootUnsupported("missing inventory texture payload");
+    int count = recvxGameBootPvpTextureCount(sys->subtxp, recvxGameBootSourceRemaining(sys->subtxp));
+    if (count <= 0 || (unsigned int)count > sizeof(swork.subtx) / sizeof(swork.subtx[0]))
+        recvxGameBootUnsupported("invalid inventory texture payload or descriptor count");
+}
+
+static int inventory_cursor(const void *pointer)
+{
+    uintptr_t p = (uintptr_t)pointer;
+    return pointer && freemem && p >= (uintptr_t)freemem && p <= (uintptr_t)sys->memp &&
+        p <= (uintptr_t)sys->endp;
+}
+
+void recvxGameBootInventoryTaskPrepare(void)
+{
+    if (!sys) recvxGameBootUnsupported("missing inventory task state");
+    if ((sys->ts_flg & 0x200u) || (swork.subscreenmode & 0x40u)) {
+        if (!inventory_cursor(sys->memp)) recvxGameBootUnsupported("invalid inventory entry cursor");
+        return;
+    }
+    if (!(swork.statusflg & 0x80000u)) return;
+    if (swork.flgchk & 2u) {
+        if (!inventory_cursor(swork.subp)) recvxGameBootUnsupported("invalid inventory return cursor");
+        return;
+    }
+    if (swork.taskloop > 4) recvxGameBootUnsupported("invalid inventory close phase");
+    if (!swork.taskloop && !(swork.flgchk & 8u)) {
+        if (swork.subtx_list.textures != swork.subtx ||
+            swork.subtx_list.nbTexture > sizeof(swork.subtx) / sizeof(swork.subtx[0]))
+            recvxGameBootUnsupported("invalid inventory texture release list");
+    }
+    if (swork.taskloop == 4 && !sys->mn_md0 && !sys->mn_md1 && !sys->mn_md2 && !sys->mn_md3) {
+        if (!rom || !plp || (!(swork.flgchk & 8u) && !inventory_cursor(sys->sbs_sp)))
+            recvxGameBootUnsupported("invalid inventory gameplay return state");
+    }
+}
 
 static unsigned int u16(const unsigned char *p)
 { return p[0] | ((unsigned int)p[1] << 8); }
@@ -170,7 +211,7 @@ int bhSetMemPvpTexture(NJS_TEXLIST *list, unsigned char *data, int offset)
                     sys->gm_flg |= 4;
                     if (entry & 255) continue; /* Palette-only entries still advance the source CLUT. */
                     recvxGameBootTextureInstall(list, offset + count++, payload, tim_size, i,
-                        (global_index & 0x03ffffffu) | (bank << 26),
+                        global_index & 0x03ffffffu,
                         i == 0 ? 0x41000000u : 0x41010000u, bank);
                 }
             }

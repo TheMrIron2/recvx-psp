@@ -38,6 +38,10 @@ void njColorBlendingMode(Int target, Int mode)
            "original overlays retain supported alpha blending");
 }
 Sint32 njSetTexture(NJS_TEXLIST *list) { selected_list = list; return 0; }
+void recvxGameBootDrawSelectedTexture(NJS_TEXLIST **list, Uint32 *number)
+{ *list=selected_list; *number=selected_number; }
+void recvxGameBootDrawTexturedOverlay(NJS_POINT2COL *polygon, Float priority)
+{ (void)polygon; (void)priority; abort(); }
 Sint32 njSetTextureNum(Uint32 number)
 {
     expect(selected_list && number < selected_list->nbTexture, "overlay selects a valid original texture index");
@@ -208,6 +212,18 @@ int main(void)
     recvxGameBootOverlayPolygon2D(&polygon, 4, -1, 0x60);
     expect(draw_count == 1 && captured[0].color_gradient && captured[0].points[3].x == -1,
            "untextured scope quadrilateral retains original points");
+    clear();
+    points[0] = (NJS_POINT2){0,0}; points[1] = (NJS_POINT2){0,480};
+    points[2] = (NJS_POINT2){640,480}; points[3] = (NJS_POINT2){640,0};
+    for (unsigned int i = 0; i < 4; ++i) colors[i].color = 0x80000000u;
+    polygon.num = 4;
+    njDrawPolygon2D(&polygon, 4, -1.5f, 0x60);
+    expect(draw_count == 1 && !captured[0].color_gradient &&
+           captured[0].quad.x2 == 640 && captured[0].quad.y2 == 480 &&
+           captured[0].depth == 1.5f && captured[0].color == 0x80000000u,
+           "public Ninja polygon bridge draws the original ranking fade");
+    expect(polygon.num == 4 && points[1].x == 0,
+           "public polygon normalization preserves caller data");
     printf("original game overlays: %u checks passed\n", checks);
     return 0;
 }

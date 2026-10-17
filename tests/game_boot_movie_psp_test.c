@@ -19,16 +19,19 @@ enum Call { LOAD=1,INIT,RING_SIZE,CONSTRUCT,MEM_SIZE,CREATE,OFFSET,SIZE,REGISTER
 static int fail_at,borrowed,module_live,library_live,ring_live,mpeg_live,stream_live,es_live;
 static unsigned int checks,loads,unloads,finishes,deletes,destructs,flushes,stop_calls;
 static unsigned int packets_read,buffered,au_count,output_count,cache_before,cache_after;
-static int delayed,put_zero,missing_pts,reordered,repeated;
-static int declared_frame_adjust;
+static int delayed,put_zero,missing_pts,reordered,repeated,batched,locked;
+static int declared_frame_adjust,terminal_sector,malformed_terminal;
 static uint64_t first_pts;
 static SceMpeg *handle_address;
 static SceMpegRingbuffer *live_ring;
 static void *last_output;
+static void *prepared[4];
 static const int native_error=(int32_t)0x80629999u;
 static char movie_path[]="/tmp/recvx-native-mpeg-XXXXXX";
 static unsigned int packet_count=5,stream_offset=4096;
 #define CHECK(condition) do{++checks;assert(condition);}while(0)
+void recvxAudioLock(void){CHECK(!locked);locked=1;}
+void recvxAudioUnlock(void){CHECK(locked);locked=0;}
 static SceInt32 result(int call){return fail_at==call?native_error:0;}
 static void put_be32(unsigned char *p,uint32_t value)
 {p[0]=value>>24;p[1]=value>>16;p[2]=value>>8;p[3]=value;}
@@ -40,7 +43,7 @@ static void fixture(void)
 {
     FILE *file=fopen(movie_path,"wb");CHECK(file);
     unsigned char block[2048]={0};memcpy(block,"PSMF0014",8);
-    put_be32(block+8,stream_offset);put_be32(block+12,packet_count*2048);
+    put_be32(block+8,stream_offset);put_be32(block+12,(packet_count+(unsigned int)terminal_sector)*2048);
     block[142]=30;block[143]=17;
     uint64_t end=90000+(uint64_t)((int)packet_count+declared_frame_adjust)*3003;
     put_be48(block+0x54,90000);put_be48(block+0x5a,end);
@@ -51,6 +54,18 @@ static void fixture(void)
     for(unsigned int offset=2048;offset<stream_offset;offset+=2048)CHECK(fwrite(block,1,sizeof(block),file)==sizeof(block));
     for(unsigned int i=0;i<packet_count+1;++i){
         memset(block,i==packet_count?0xfe:(int)(i&255u),sizeof(block));
+        if(i==0){
+            memcpy(block,"\0\0\1\xba",4);block[13]=0;
+            memcpy(block+14,"\0\0\1\xbf\0\x16\x01\xe0",8);
+            memset(block+22,0,20);block[35]=6;block[37]=1;block[41]=64;
+        }
+        if(i==packet_count&&terminal_sector){
+            memset(block,0xff,sizeof(block));
+            memcpy(block,"\0\0\1\xba\x44\0\x04\0\x04\x01\x01\x86\xa3\xf8",14);
+            memcpy(block+14,"\0\0\1\xbe\x07\xe8",6);
+            memcpy(block+2044,"\0\0\1\xb9",4);
+            if(malformed_terminal)block[20]=0;
+        }
         CHECK(fwrite(block,1,sizeof(block),file)==sizeof(block));
     }
     CHECK(!fclose(file));
@@ -119,6 +134,9 @@ SceInt32 sceMpegRingbufferPut(SceMpegRingbuffer *ring,SceInt32 packets,SceInt32 
         SceInt32 count=ring->Callback(data,parts[part],ring->pCBparam);
         if(count<0)return count;
         CHECK(count==parts[part]);
+        for(SceInt32 i=0;i<count;++i)
+            if(!memcmp(data+i*2048+2044,"\0\0\1\xb9",4))
+                return (int32_t)0x80618007u;
         for(SceInt32 i=0;i<count;++i)CHECK(data[i*2048]==((packets_read+(unsigned int)i)&255u));
         packets_read+=(unsigned int)count;total+=count;
     }
@@ -140,24 +158,31 @@ SceInt32 sceMpegGetAvcAu(SceMpeg *mpeg,SceMpegStream *stream,SceMpegAu *au,SceIn
 void sceKernelDcacheWritebackRange(const void *data,unsigned int size)
 {CHECK(ring_live&&data&&size&&!(size&2047u));}
 void sceKernelDcacheWritebackInvalidateRange(const void *pixels,unsigned int size)
-{CHECK(size==RECVX_MOVIE_PSP_FRAME_BYTES&&!((uintptr_t)pixels&63u));last_output=(void *)pixels;++cache_before;}
+{CHECK(locked&&size==RECVX_MOVIE_PSP_FRAME_BYTES&&!((uintptr_t)pixels&63u));prepared[cache_before%4]=(void *)pixels;last_output=(void *)pixels;++cache_before;}
 void sceKernelDcacheInvalidateRange(const void *pixels,unsigned int size)
-{CHECK(size==RECVX_MOVIE_PSP_FRAME_BYTES&&pixels==last_output&&cache_before>cache_after);++cache_after;}
+{CHECK(locked&&size==RECVX_MOVIE_PSP_FRAME_BYTES&&cache_before>cache_after);int found=0;for(unsigned int i=0;i<4;++i)found|=pixels==prepared[i];CHECK(found);++cache_after;}
+static void write_pictures(void *pointer,SceInt32 count)
+{
+    void **outputs=pointer;
+    CHECK(locked&&outputs[0]==prepared[3]);
+    for(unsigned int i=1;i<4;++i)CHECK(outputs[i]==prepared[i-1]&&outputs[i]!=outputs[0]);
+    for(int i=0;i<count;++i){((uint32_t *)outputs[i])[0]=0xabc00000u|output_count;++output_count;}
+}
 SceInt32 sceMpegAvcDecode(SceMpeg *mpeg,SceMpegAu *au,SceInt32 width,ScePVoid pointer,SceInt32 *status)
 {
     CHECK(mpeg==handle_address&&width==512&&au->iEsBuffer==1&&*(void **)pointer==last_output);
-    CHECK(*status==0&&cache_before==au_count);
+    CHECK(*status==0&&cache_before==au_count*4);
     if(fail_at==DECODE)return native_error;
-    *status=delayed&&au_count==1?0:1;
-    if(*status){((uint32_t *)last_output)[0]=0xabc00000u|output_count;++output_count;}
+    *status=batched?(au_count%(unsigned int)batched==0?batched:0):(delayed&&au_count==1?0:1);
+    write_pictures(pointer,*status);
     return 0;
 }
 SceInt32 sceMpegAvcDecodeStop(SceMpeg *mpeg,SceInt32 width,ScePVoid pointer,SceInt32 *status)
 {
     CHECK(mpeg==handle_address&&width==512&&*(void **)pointer==last_output&&*status==0);++stop_calls;
     if(fail_at==STOP)return native_error;
-    *status=output_count<au_count;
-    if(*status){((uint32_t *)last_output)[0]=0xabc00000u|output_count;++output_count;}
+    *status=batched?(SceInt32)(au_count-output_count):(output_count<au_count);
+    write_pictures(pointer,*status);
     return 0;
 }
 static void reset(void)
@@ -166,7 +191,7 @@ static void reset(void)
     CHECK(!library_live&&!ring_live&&!mpeg_live&&!stream_live&&!es_live);
     if(borrowed)module_live=0;
     CHECK(!module_live);
-    fail_at=borrowed=delayed=put_zero=missing_pts=reordered=repeated=declared_frame_adjust=0;
+    fail_at=borrowed=delayed=put_zero=missing_pts=reordered=repeated=declared_frame_adjust=batched=terminal_sector=malformed_terminal=0;
     loads=unloads=finishes=deletes=destructs=flushes=stop_calls=0;
     packets_read=buffered=au_count=output_count=cache_before=cache_after=0;
     first_pts=90000;packet_count=5;stream_offset=4096;fixture();
@@ -175,8 +200,9 @@ static void playback(void)
 {
     uint32_t *buffers[2]={memalign(64,RECVX_MOVIE_PSP_FRAME_BYTES),memalign(64,RECVX_MOVIE_PSP_FRAME_BYTES)};
     CHECK(buffers[0]&&buffers[1]);uint64_t pts;
-    for(unsigned int delay=0;delay<2;++delay){
-        reset();delayed=(int)delay;CHECK(recvxGameBootMoviePspOpen(movie_path)==0);
+    for(unsigned int variant=0;variant<8;++variant){
+        reset();terminal_sector=variant>=4;if(terminal_sector)packet_count=603;fixture();
+        delayed=variant%4==1;batched=variant%4==2?4:variant%4==3?2:0;CHECK(recvxGameBootMoviePspOpen(movie_path)==0);
         for(unsigned int i=0;i<packet_count;++i){
             unsigned int slot=i&1u;
             CHECK(recvxGameBootMoviePspDecode(buffers[slot],&pts)==1&&pts==(uint64_t)i*3003);
@@ -226,6 +252,9 @@ static void failures(void)
     reset();FILE *timing_file=fopen(movie_path,"r+b");CHECK(timing_file);
     CHECK(!fseek(timing_file,0x5f,SEEK_SET));CHECK(fputc(1,timing_file)!=EOF);fclose(timing_file);
     CHECK(recvxGameBootMoviePspOpen(movie_path)==-1&&loads==0&&strstr(recvxGameBootMoviePspStage(),"CFR timing"));
+    reset();FILE *legacy=fopen(movie_path,"r+b");CHECK(legacy);
+    CHECK(!fseek(legacy,stream_offset+17,SEEK_SET));CHECK(fputc(0xbe,legacy)!=EOF);fclose(legacy);
+    CHECK(recvxGameBootMoviePspOpen(movie_path)==-1&&strstr(recvxGameBootMoviePspStage(),"recook data/movies"));
     reset();put_zero=1;CHECK(!recvxGameBootMoviePspOpen(movie_path));
     CHECK(recvxGameBootMoviePspDecode(pixels,&pts)==-1&&strstr(recvxGameBootMoviePspStage(),"no progress"));
     reset();CHECK(!recvxGameBootMoviePspOpen(movie_path));CHECK(!truncate(movie_path,2048));
@@ -237,12 +266,24 @@ static void failures(void)
     reset();file=fopen(movie_path,"r+b");CHECK(file&&fseek(file,12,SEEK_SET)==0);
     unsigned char bad_size[4]={0x7f,0xff,0xf8,0};CHECK(fwrite(bad_size,1,4,file)==4);fclose(file);
     CHECK(recvxGameBootMoviePspOpen(movie_path)==-1&&strstr(recvxGameBootMoviePspStage(),"extent"));
+    /* Do not turn an arbitrary illegal stream at EOF into successful playback.
+       A trailer containing any non-padding byte is still fed and rejected. */
+    reset();terminal_sector=malformed_terminal=1;fixture();
+    CHECK(recvxGameBootMoviePspOpen(movie_path)==0);
+    CHECK(recvxGameBootMoviePspDecode(pixels,&pts)==-1);
+    CHECK((uint32_t)recvxGameBootMoviePspError()==0x80618007u&&stop_calls==0);
+    CHECK(!library_live&&!ring_live&&!mpeg_live&&!stream_live&&!es_live&&!locked);
     free(pixels);recvxGameBootMoviePspClose();
 }
-int main(void)
+int main(int argc,char **argv)
 {
     int descriptor=mkstemp(movie_path);CHECK(descriptor>=0);close(descriptor);
-    playback();failures();CHECK(!unlink(movie_path));
-    printf("PASS: native MPEG call protocol, streamed sector callback, double-buffer ownership, authored CFR timing despite repeated/missing packet PTS, frame-count bounds, delayed EOF drain, all initialization/decode failures and cleanup: %u checks\n",checks);
+    playback();failures();
+    for(int i=1;i<argc;++i){
+        reset();CHECK(recvxGameBootMoviePspOpen(argv[i])==0);
+        recvxGameBootMoviePspClose();
+    }
+    CHECK(!unlink(movie_path));
+    printf("PASS: native MPEG call protocol, exclusive codec ownership, four hardware destinations, queued 2/4-picture output, ring refills, padding-only EOF trailer exclusion, strict illegal-stream errors, exact frame counts, delayed EOF drain and cleanup: %u checks\n",checks);
     return 0;
 }

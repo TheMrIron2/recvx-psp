@@ -2,6 +2,7 @@
 #include <string.h>
 #include "psp/game_boot.h"
 #include "ps2/veronica/prog/main.h"
+#include "ps2/veronica/prog/fileview.h"
 #include "ps2/veronica/prog/ps2_dummy.h"
 #include "ps2/veronica/prog/njplus.h"
 #include "ps2/veronica/prog/padman.h"
@@ -34,6 +35,7 @@ PAD_INFO Ps2_pad;
 NJS_MATRIX crmat;
 NJS_MATRIX lcmat[12];
 S_WORK swork;
+FV_WORK fvwork;
 static NJS_PERIPHERAL peripheral;
 static unsigned int repeat_ticks[16];
 static int sound_mode;
@@ -81,7 +83,7 @@ void bhReleaseFreeMemory(void *memory)
         recvxGameBootUnsupported("invalid ADV stack release");
     sys->memp = memory;
 }
-void TypewriterKeepMemory(void) { sys->typ_exp = bhGetFreeMemory(800, 32); }
+void TypewriterKeepMemory(void) { sys->typ_exp = bhGetFreeMemory(sizeof(TYP_WORK), 32); }
 void syMallocStat(Uint32 *free_size, Uint32 *largest)
 { *free_size = *largest = (Uint32)(sys->endp - sys->memp); }
 void *syMalloc(Uint32 size) { return malloc(size); }

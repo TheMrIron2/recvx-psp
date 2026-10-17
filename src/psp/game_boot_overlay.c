@@ -8,6 +8,8 @@
 static NJS_TEXLIST *overlay_list;
 static Uint32 overlay_number;
 static int overlay_texture_selected;
+void recvxGameBootDrawSelectedTexture(NJS_TEXLIST **, Uint32 *);
+void recvxGameBootDrawTexturedOverlay(NJS_POINT2COL *, Float);
 
 void recvxGameBootScreenSaverPrepare(int mode, unsigned int alpha, float duration)
 {
@@ -76,7 +78,7 @@ void recvxGameBootOverlayPolygon2D(NJS_POINT2COL *polygon, Int count, Float prio
     unsigned int i;
     int gradient = 0;
     if (!polygon || !polygon->p || !polygon->col || count != 4 || polygon->num != 1 ||
-        !isfinite(priority) || (attributes != 0x60u && attributes != 0x80000060u))
+        !isfinite(priority) || (attributes != 0x60u && attributes != 0x40u && attributes != 0x80000060u))
         recvxGameBootUnsupported("unsupported original game overlay polygon");
     for (i = 0; i < 4; ++i)
         if (!isfinite(polygon->p[i].x) || !isfinite(polygon->p[i].y))
@@ -118,4 +120,39 @@ void recvxGameBootOverlayPolygon2D(NJS_POINT2COL *polygon, Int count, Float prio
                 .y = polygon->p[order[i]].y, .z = -priority, .col = polygon->col[order[i]].color};
         njDrawPolygon(vertices, 4, 1);
     }
+}
+
+void njDrawPolygon2D(NJS_POINT2COL *polygon, Int count, Float priority, Uint32 attributes)
+{
+    if (attributes & 0x80000000u) {
+        NJS_TEXLIST *list;
+        Uint32 number;
+        recvxGameBootDrawSelectedTexture(&list, &number);
+        recvxGameBootOverlaySetTexture(list);
+        recvxGameBootOverlaySetTextureNum(number);
+        if (!polygon || count != 4 || !polygon->p || !polygon->col || !polygon->tex ||
+            attributes != 0x80000060u || !isfinite(priority))
+            recvxGameBootUnsupported("invalid textured public 2D polygon");
+        recvxGameBootDrawTexturedOverlay(polygon, priority);
+        return;
+    }
+    /* The public Ninja API uses a vertex count; the older overlay bridge
+       receives a polygon count. FadePolyDisp also uses reversed winding. */
+    if (polygon && polygon->num == 4 && count == 4 && attributes == 0x60u &&
+        polygon->p && polygon->col) {
+        NJS_POINT2COL adjusted = *polygon;
+        NJS_POINT2 points[4];
+        NJS_COLOR colors[4];
+        static const unsigned int order[4] = {0, 3, 2, 1};
+        for (unsigned int i = 0; i < 4; ++i) {
+            points[i] = polygon->p[order[i]];
+            colors[i] = polygon->col[order[i]];
+        }
+        adjusted.p = points;
+        adjusted.col = colors;
+        adjusted.num = 1;
+        recvxGameBootOverlayPolygon2D(&adjusted, count, priority, attributes);
+        return;
+    }
+    recvxGameBootOverlayPolygon2D(polygon, count, priority, attributes);
 }

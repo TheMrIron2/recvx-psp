@@ -5,6 +5,8 @@
 #include <string.h>
 #include "psp/game_boot_render.h"
 #include "psp/game_boot_render_texture.h"
+#include "psp/game_boot_fog.h"
+#include "ps2/veronica/prog/ps2_NaFog.h"
 #include "psp/engine_original_fault.h"
 #include "psp/engine_original_matrix.h"
 #include "psp/engine_original_view.h"
@@ -12,6 +14,7 @@
 #include "ps2/veronica/prog/main.h"
 #include "ps2/veronica/prog/ps2_NinjaCnk.h"
 #include "ps2/veronica/prog/ps2_NaView.h"
+#include "ps2/veronica/prog/ps2_NaSystem.h"
 #include "ps2/veronica/prog/ps2_dummy.h"
 
 SYS_WORK *sys;
@@ -57,6 +60,7 @@ static void reset(void)
     memset(&state, 0, sizeof(state)); memset(&data, 0, sizeof(data));
     sys = &state; freemem = (unsigned char *)&data; sys->endp = freemem + sizeof(data);
     recvxGameBootRenderReset(); recvxEngineOriginalFaultReset();
+    recvxGameBootFogReset();
     recvxEngineOriginalMatrixReset(); recvxEngineOriginalViewReset();
     recvxEngineOriginalViewConfigureScreen(640, 480); njSetPerspective(0x4000); njClipZ(-1, -100);
     recvxEngineOriginalLightingReset(); njUnitMatrix(&camera); cam.mtx = &camera;
@@ -144,6 +148,18 @@ static void custom_clip_tests(void)
 int main(void)
 {
     const RecvxBootRenderFrame *f;
+    reset(); njGenerateFogTable3(NULL,-1,-100); njSetFogColor(0xff123456); njFogEnable();
+    f=draw(); draw();
+    CHECK(f->batch_count==1 && f->batches[0].fog_enabled && f->batches[0].fog_color==0x563412);
+    CHECK(f->batches[0].fog_near==1 && f->batches[0].fog_far==100 && f->batches[0].count==6);
+    njSetFogColor(0xffabcdef); draw();
+    njGenerateFogTable3(NULL,-2,-200); draw(); njFogDisable(); draw();
+    f=recvxGameBootRenderFrame();
+    CHECK(f->batch_count==4 && f->batches[0].fog_color==0x563412 && f->batches[1].fog_color==0xefcdab);
+    CHECK(f->batches[1].fog_near==1 && f->batches[2].fog_near==2 && f->batches[2].fog_far==200);
+    CHECK(!f->batches[3].fog_enabled && f->batches[3].fog_near==0 && f->batches[3].fog_far==0);
+    CHECK(f->vertices[0].color==0xffffffffu); /* Fog happens after texturing in GE. */
+    reset(); njFogEnable(); REJECT(draw(),"geometry fog range");
     reset(); f = draw();
     CHECK(f->vertex_count == 3 && f->batch_count == 1 && recvxGameBootRenderPending());
     CHECK(f->vertices[0].x == -1 && f->vertices[0].y == 1 && f->vertices[0].z == -4);
@@ -281,8 +297,29 @@ int main(void)
     CHECK(f->vertices[1].u==8 && f->vertices[1].v==8 && f->vertices[2].x==480);
     CHECK(f->vertices[0].color==0x80332211 && f->batches[0].sampler==7 && f->vertices[0].z==65534);
     CHECK(f->vertices[1].z==65534 && f->vertices[2].z==65534);
+    screen[0].z=0.2f; recvxGameBootRenderScreenTriangle(screen,1);
+    CHECK(recvxGameBootRenderFrame()->vertex_count==6);
+    recvxGameBootRenderHalfFogScreenTriangle(screen,0xff204060,1);
+    f=recvxGameBootRenderFrame();
+    CHECK(f->batch_count==3 && f->batches[1].kind==RECVX_RENDER_SCREEN_OFFSET &&
+        f->batches[2].kind==RECVX_RENDER_SCREEN_HALF_BASE);
+    CHECK(f->batches[1].fog_color==0x302010 && f->vertices[6].color==0x80302010 && f->vertices[9].color==0x80191108);
+    CHECK(f->batches[2].blend_source==8 && f->batches[2].blend_destination==10);
     screen[0].z=0; REJECT(recvxGameBootRenderScreenTriangle(screen,1),"screen sprite vertex");
     screen[0].z=1; screen[0].u=INFINITY; REJECT(recvxGameBootRenderScreenTriangle(screen,1),"screen sprite vertex");
+    reset(); sprite[0].z=4; sprite[0].u=0;
+    NJS_SCREEN item_screen={.dist=500,.w=352,.h=184,.cx=235,.cy=224};
+    recvxEngineOriginalViewSetScreen(&item_screen);
+    NJS_POINT2 item_clip[2]={{2,3},{10,8}};
+    njUserClipping(2,item_clip);
+    recvxGameBootRenderSpriteTriangle(sprite,0,1);
+    njUserClipping(0,NULL);
+    recvxGameBootRenderSpriteTriangle(sprite,0,1);
+    f=recvxGameBootRenderFrame();
+    CHECK(f->batch_count==2 && f->batches[0].scissor[0]==48 && f->batches[0].scissor[1]==54);
+    CHECK(f->batches[0].scissor[2]==264 && f->batches[1].scissor[2]==480 && f->batches[1].scissor[3]==272);
+    CHECK(fabsf(f->projection[8]-85.0f/320)<.0001f && fabsf(f->projection[9]+16.0f/240)<.0001f);
+    item_clip[1].x=-1; REJECT(njUserClipping(2,item_clip),"user clipping");
     reset(); sprite[0].z=4; sprite[0].u=0;
     recvxGameBootRenderTextureSelected(&texture); texture.palette[2]=0xff112233u;
     recvxGameBootRenderSpriteTriangle(sprite,1,1);

@@ -16,7 +16,7 @@ import mkiso
 from tools.prepare_psp_audio import converter
 from tools.psp_movie_mux import FRAME_TICKS,FIRST_PTS,mux,packets
 
-VERSION = 1
+VERSION = 2  # Native sceMpeg private-stream frame-size tables.
 
 
 def find_ffmpeg(explicit=None):
@@ -89,6 +89,23 @@ def cook(source,number,output,ffmpeg,executable):
         old = json.loads(metadata.read_text())
         if old.get('signature') == signature:
             print(f'{stem}: cached',flush=True); return old
+        previous = {**signature,'version':1}
+        if (old.get('signature') == previous and
+            hashlib.sha256(target.read_bytes()).hexdigest() == old.get('video_sha256') and
+            hashlib.sha256(audio_target.read_bytes()).hexdigest() == old.get('audio_sha256')):
+            # The encoding and soundtrack are unchanged. Add the missing native
+            # frame tables to verified v1 assets without encoding them again.
+            elementary = b''.join(p for c,p,_ in packets(target.read_bytes(),2048) if c == 0xe0)
+            video,frames = mux(elementary)
+            if frames != old.get('frames'): raise ValueError('cached movie frame count mismatch')
+            with tempfile.TemporaryDirectory(prefix=stem+'-remux-',dir=directory) as temp:
+                staged = Path(temp)/'video.pmf'; staged.write_bytes(video)
+                run([ffmpeg,'-hide_banner','-loglevel','error','-i',staged,'-map','0:v:0','-f','null','-'])
+                staged.replace(target)
+            old.update(signature=signature,video_bytes=len(video),video_sha256=hashlib.sha256(video).hexdigest())
+            metadata.write_text(json.dumps(old,indent=2)+'\n')
+            print(f'{stem}: added native frame tables for {frames} frames; soundtrack unchanged',flush=True)
+            return old
     with tempfile.TemporaryDirectory(prefix=stem+'-',dir=directory) as temp:
         temp = Path(temp); original = temp/(stem+'.PSS'); original.write_bytes(source)
         es = temp/'video.h264'

@@ -9,6 +9,8 @@ int recvxGameBootMoviePspOpen(const char *path);
 /* Caller owns a 64-byte-aligned 512*272*4-byte ABGR8888 buffer. Returns 1 for
    a real decoded frame, 0 after EOF drain, -1 on failure. PTS follows the converted stream
    CFR timeline (3003 ticks per actual decoded picture), in 90 kHz units. No buffer is retained by the API. */
+/* Internally supplies four firmware CSC destinations; extra pictures are
+   returned in order on later calls. Shares the SAS lock for firmware access. */
 int recvxGameBootMoviePspDecode(void *pixels, uint64_t *pts90k);
 void recvxGameBootMoviePspClose(void);
 int recvxGameBootMoviePspError(void);

@@ -85,7 +85,9 @@ static void defaults_and_color(void)
     njSetFogTable(destination);refSetTable(destination);CHECK(fpNaFogTblTop==refTableTop);
     njGenerateFogTable3(destination,-10,-1000);refGenerate(destination,-10,-1000);
     for(unsigned int i=0;i<128;++i)CHECK(destination[i]==-12345); /* Retail ignores destination. */
-    ulNaFogState=1;njFogDisable();CHECK(!ulNaFogState);
+    njFogEnable();refEnable();CHECK(ulNaFogState==refState && ulNaFogState==1);
+    njFogEnable();CHECK(ulNaFogState==1);
+    njFogDisable();CHECK(!ulNaFogState);
 }
 
 static void compare_tables_and_lookups(void)
@@ -97,7 +99,7 @@ static void compare_tables_and_lookups(void)
         refGenerate(NULL,ranges[range][0],ranges[range][1]);
         EQUAL(fNaFogNear,refNear);EQUAL(fNaFogFar,refFar);EQUAL(fNaFogDensity,refDensity);
         for(unsigned int i=0;i<128;++i)EQUAL(fNaFogTbl[i],refTable[i]);
-        ulNaFogState=1;refState=1;
+        njFogEnable();refEnable();
         /* Dense samples cover all exponent/mantissa bins and interpolation. */
         for(unsigned int i=1;i<4096;++i) {
             float depth=0.03125f*i*i;

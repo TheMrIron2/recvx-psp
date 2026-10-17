@@ -1,4 +1,4 @@
-"""Extract retail rectangular game overlays for the existing PSP GU queue."""
+"""Extract retail screen overlays and inventory texture/palette setup."""
 from pathlib import Path
 import sys
 from extract_original_boot_initializers import extract
@@ -39,6 +39,23 @@ def prepare(destination):
         # Alpha is packed into an unsigned word; unsigned shift preserves the PS2 bits.
         function = function.replace('((int)(255.0f * njSin(ten)) << 24)',
                                     '((unsigned int)(255.0f * njSin(ten)) << 24)')
+        output += [f'#line {line} "{path.as_posix()}"', function, '']
+    path = Path('src/ps2/veronica/prog/sub1.c')
+    source = path.read_text()
+    output += ['#include "psp/game_boot.h"', '#include "ps2/veronica/prog/sub1.h"',
+               '#include "ps2/veronica/prog/fileview.h"', '#include "ps2/veronica/prog/ps2_texture.h"',
+               '#include "ps2/veronica/prog/ps2_NaMem.h"', '#include "ps2/veronica/prog/padman.h"',
+               '#include "ps2/veronica/prog/ps2_dummy.h"', '#include "ps2/veronica/prog/event.h"',
+               '#include "ps2/veronica/prog/player.h"', '#include "ps2/veronica/prog/ps2_NaView.h"',
+               '#include "ps2/veronica/prog/ps2_NaFog.h"', '#include "ps2/veronica/prog/sdfunc.h"',
+               '#include "ps2/veronica/prog/ps2_NinjaCnk.h"',
+               'void recvxGameBootInventoryTaskPrepare(void);']
+    for name in ('PushPalletBuffer', 'PopPalletBuffer', 'SbsTextureInit', 'StatusMapFlagInit', 'ItemTaskCheck'):
+        line, function = extract(source, name)
+        if name == 'SbsTextureInit':
+            function = function.replace('{', '{\n    recvxGameBootInventoryTexturePrepare();', 1)
+        elif name == 'ItemTaskCheck':
+            function = function.replace('{', '{\n    recvxGameBootInventoryTaskPrepare();', 1)
         output += [f'#line {line} "{path.as_posix()}"', function, '']
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text('\n'.join(output))

@@ -50,6 +50,36 @@ class Movies(unittest.TestCase):
         for data in (b'',b'\0\0\1',b'\0\0\1\x65\xff',b'\0\0\1\x09\xf0'):
             with self.assertRaises(ValueError):list(access_units(data))
 
+    def test_native_frame_tables(self):
+        units = [b'\0\0\1\x09\xf0\0\0\1'+bytes([kind])+b'\x88'*size
+                 for kind,size in ((0x65,7000),(0x41,300),(0x41,5000),(0x65,4000),(0x41,10))]
+        data,count = mux(b''.join(units))
+        # Independently walk the packet lengths: BF is not a PES packet and
+        # does not have optional timestamp headers. Firmware consumes its
+        # byte counts to split E0 data into decoder access units.
+        tables=[];position=2048
+        while position<len(data):
+            self.assertEqual(data[position:position+3],b'\0\0\1')
+            kind=data[position+3]
+            if kind==0xb9:break
+            if kind==0xba:
+                position+=14+(data[position+13]&7);continue
+            size=int.from_bytes(data[position+4:position+6],'big')
+            payload=data[position+6:position+6+size]
+            if kind==0xbf:
+                self.assertEqual(payload[:2],b'\x01\xe0')
+                length,n=struct.unpack_from('>HH',payload,14)
+                self.assertEqual(length,2+4*n);self.assertEqual(len(payload),18+4*n)
+                records=[struct.unpack_from('>HH',payload,18+i*4) for i in range(n)]
+                self.assertEqual([f for f,_ in records],[0x80]*(n-1)+[0])
+                tables.append([s for _,s in records])
+            position+=6+size
+        self.assertEqual(tables,[[len(u) for u in units[:3]],[len(u) for u in units[3:]]])
+        self.assertEqual(sum(map(len,tables)),count)
+        self.assertEqual(b''.join(p for _,p,_ in packets(data,2048)),b''.join(units))
+        oversized=b'\0\0\1\x09\xf0\0\0\1\x65'+b'\x88'*65536
+        with self.assertRaisesRegex(ValueError,'frame-size'):mux(oversized)
+
     def test_original_pcm_wrapper(self):
         ads = b'SShd'+struct.pack('<IIIIIII',24,1,48000,2,512,0xffffffff,0xffffffff)+b'SSbd'+struct.pack('<I',2048)+bytes(2048)
         data = pes(0xe0,b'video',9000)+pes(0xbd,b'\xff\xa0\0\0'+ads[:50],9010)+pes(0xbd,b'\xff\xa0\0\0'+ads[50:],10000)+b'\0\0\1\xb9'

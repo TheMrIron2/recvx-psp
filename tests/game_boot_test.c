@@ -38,6 +38,8 @@
 #include "ps2/veronica/prog/ps2_NaMatrix.h"
 #include "ps2/veronica/prog/event.h"
 #include "ps2/veronica/prog/sub1.h"
+#include "ps2/veronica/prog/fileview.h"
+#include "ps2/veronica/prog/ps2_dummy.h"
 #include "ps2/veronica/prog/subpl.h"
 #include "ps2/veronica/prog/Motion.h"
 #include "ps2/veronica/prog/system.h"
@@ -1188,6 +1190,8 @@ static void inventory_resource_task(void)
 }
 
 static void inventory_transition_task(void) { bhSysCallMonitor(); }
+static void inventory_close_task(void) { ItemTaskCheck(); }
+static void inventory_ui_task(void) { StatusMain(); }
 
 static void test_inventory_resource(const char *directory, void *arena, size_t size)
 {
@@ -1328,8 +1332,10 @@ static void test_loaded_inventory_transition(void)
     recvxGameBootMovieShutdown();
     /* Run the real inventory monitor stages in isolation from the opening
        cutscene; no inventory drawing/dispatch replacement is installed. */
-    sys->tk_flg = 1; sys->ts_flg = 0; sys->cb_flg = 0;
+    sys->tk_flg = 1; sys->ts_flg = 0x200; sys->cb_flg = 0;
     sys->ef_flg = 0; sys->fade_an = 0;
+    swork.subscreenmode = swork.flgchk = swork.statusflg = swork.taskloop = 0;
+    fvwork.afsmode = 0;
     sys->mn_mode0 = 0; sys->mn_setct = 1; sys->mn_stack[0] = 5;
     bhSysTaskJumpTab[0] = inventory_transition_task;
     tick(&input); assert(sys->mn_md0 == 5 && sys->mn_md1 == 1);
@@ -1338,11 +1344,80 @@ static void test_loaded_inventory_transition(void)
     for (unsigned int i = 0; i < list->nbTexture; ++i) assert(!list->textures[i].texaddr);
     assert(!recvxGameBootRenderPending());
     size_t draws; recvxGameBootDraws(&draws); assert(!draws);
-    bhCopyMainmem2Texmem(list);
+    unsigned int palette[1024]; memcpy(palette, palbuf, sizeof(palette));
+    fvwork.tex_flg = 1;
+    tick(&input); assert(sys->mn_md1 == 4 && !recvxGameBootFault());
+    assert(swork.subtx_list.textures == swork.subtx && swork.subtx_list.nbTexture == 5);
+    assert(!fvwork.tex_flg && njGetPaletteMode() == 6);
+    assert(!memcmp(palbuf + 3072, palette, sizeof(palette)));
+    for (unsigned int i = 0; i < swork.subtx_list.nbTexture; ++i) {
+        const RecvxBootTexture *texture = recvxGameBootTextureGet(&swork.subtx_list, i);
+        assert(texture->source && texture->pixels && texture->width && texture->height);
+    }
+    tick(&input); assert(sys->mn_md0 == 0 && sys->mn_md1 == 0 && !recvxGameBootFault());
+    assert((sys->ts_flg & 0x80) && !(sys->ts_flg & 0x200) && (swork.subscreenmode & 1));
+    assert(swork.scr.w == 352 && swork.scr.h == 184 && swork.subp == sys->memp);
+    /* Exercise the actual inventory layout, font pages and PSP sprite queue,
+       with the real loaded player inventory and five authored UI textures. */
+    bhSysTaskJumpTab[0] = inventory_ui_task;
+    tick(&input);
+    assert(!recvxGameBootFault() && swork.subscreenmode == 2 && swork.pip == sys->itm);
+    for (unsigned int frame = 0; frame < 40; ++frame) {
+        tick(&input);
+        assert(!recvxGameBootFault());
+    }
+    bhSysTaskJumpTab[0] = inventory_close_task;
+    swork.statusflg |= 0x80000;
+    for (unsigned int phase = 1; phase <= 4; ++phase) {
+        tick(&input); assert(swork.taskloop == phase);
+    }
+    tick(&input);
+    assert(!(sys->ts_flg & 0x80) && (sys->ts_flg & 0x200) && !(swork.statusflg & 0x200));
+    assert(sys->memp == sys->sbs_sp && swork.scr.w == 640 && swork.scr.h == 480);
+    assert(!memcmp(palbuf, palette, sizeof(palette)) && njGetPaletteMode() == 2);
+    assert(sys->sp_flg == UINT32_MAX && !recvxGameBootFault());
     for (unsigned int i = 0; i < list->nbTexture; ++i)
         assert(texture_digest(recvxGameBootTextureGet(list, i)) == digests[i]);
     bhSysTaskJumpTab[0] = original;
-    puts("PASS: real room inventory backup/read/release/ClearOT transition reaches texture initialization with restorable room textures");
+    puts("PASS: original inventory entry loads five UI textures; original ItemTaskCheck close phases restore gameplay, room textures, palette and memory cursor");
+}
+#endif
+
+#if UINTPTR_MAX == UINT32_MAX
+static void camera_reset_event_task(void)
+{
+    assert(recvxEventCoreRunScenario(12)==0);
+    recvxGameBootEventCheck();
+}
+
+static void test_loaded_camera_reset(void)
+{
+    /* Real event dispatch and room cut/camera/light controllers with loaded
+       room assets. Byte 1 is padding, including when it is nonzero. */
+    static unsigned char script[]={12,0,0,0,15,0,0,0,16,0,0,0,91,255,0,0,0};
+    static unsigned char truncated[]={12,0,0,0,13,0,0,0,14,0,0,0,91,0,0};
+    RecvxInputState input={.analog_x=128,.analog_y=128};
+    RecvxLiveTaskProc original=bhSysTaskJumpTab[0];
+    recvxEventCoreReset();
+    assert(recvxEventCoreBindSection(script,sizeof(script))==0);
+    sys->st_flg|=1;sys->sp_flg|=0x40;
+    plp->gpx=plp->px+100;plp->gpy=plp->py+100;plp->gpz=plp->pz+100;
+    bhSysTaskJumpTab[0]=camera_reset_event_task;
+    tick(&input);
+    bhSysTaskJumpTab[0]=original;
+    assert(!(sys->st_flg&1)&&plp->gpx==plp->px&&plp->gpy==plp->py&&plp->gpz==plp->pz);
+    assert(bhScePtr==script+14&&recvxEventCoreInstructionCount()==2);
+    assert(cam.ncut>=0&&cam.ncut<rom->cut_n);
+    for(unsigned int j=0;j<16;++j)assert(isfinite((*cam.mtx)[j]));
+    assert((*cam.mtx)[15]==1);
+    recvxEventCoreReset();
+    assert(recvxEventCoreBindSection(truncated,sizeof(truncated))==0);
+    sys->st_flg|=1;float old_gpx=plp->gpx;
+    assert(recvxEventCoreRunScenario(12)==-1);
+    assert(recvxEventCoreGetFault()->code==RECVX_EVENT_FAULT_TRUNCATED);
+    assert(recvxEventCoreGetFault()->opcode==91&&(sys->st_flg&1)&&plp->gpx==old_gpx);
+    recvxEventCoreReset();
+    puts("PASS: opcode 91 dispatch restores room camera and lighting with real room assets; truncated reset rejected before mutation");
 }
 #endif
 
@@ -1619,6 +1694,20 @@ int main(int argc, char **argv)
     fprintf(stderr, "Movie presentations (hardware call model): %u\n", movie_presentations);
     test_loaded_player_restore();
     test_loaded_inventory_transition();
+    test_loaded_camera_reset();
+    /* Casing cleanup must cover the entire pool, preserve inactive entries,
+       and leave unrelated live effects and actor data intact. */
+    for (i = 0; i < 512; ++i) {
+        eff[i].id = i % 9;
+        eff[i].flg = 0x100u | (i & 1u);
+        eff[i].px = (float)i;
+    }
+    bhDeleteYakkyou();
+    for (i = 0; i < 512; ++i) {
+        unsigned int expected = ((i & 1u) && (i % 9 == 0 || i % 9 == 7)) ? 0 : 0x100u | (i & 1u);
+        assert(eff[i].flg == expected && eff[i].px == (float)i && eff[i].id == i % 9);
+    }
+    puts("PASS: casing cleanup selectively releases active IDs 0/7 across all 512 effect slots");
 #endif
     recvxGameBootTexturesShutdown();
     recvxGameBootMovieShutdown();

@@ -6,6 +6,7 @@
 #include <string.h>
 #include "psp/game_boot_render_texture.h"
 #include "ps2/veronica/prog/ps2_NaDraw.h"
+#include "ps2/veronica/prog/ps2_NaSprite.h"
 #include "ps2/veronica/prog/main.h"
 #include "ps2/veronica/prog/ps2_NinjaCnk.h"
 #include "ps2/veronica/prog/ps2_NaSystem.h"
@@ -93,6 +94,20 @@ static void texture_resolution(void)
     assert(recvxGameBootRenderStateGet()->polygon_blend_source == 11 &&
         recvxGameBootRenderStateGet()->polygon_blend_destination == 2);
     njColorBlendingMode(0, 8); njColorBlendingMode(1, 6);
+    NJS_TEXANIM animation={.sx=20,.sy=10,.cx=5,.cy=2,.u1=0,.v1=0,.u2=256,.v2=128,.texid=0};
+    NJS_SPRITE sprite={.p={100,50,0},.sx=2,.sy=3,.tlist=&list,.tanim=&animation};
+    njDrawSprite2D(&sprite,0,-4,NJD_SPRITE_ALPHA);
+    size_t queued_count;
+    const RecvxBootDraw *queued=recvxGameBootDraws(&queued_count);
+    assert(queued_count==1 && queued[0].color_gradient && queued[0].texture==texture);
+    assert(queued[0].points[0].x==90 && queued[0].points[0].y==44 && queued[0].points[2].x==130 && queued[0].points[2].y==74);
+    assert(queued[0].depth==4 && queued[0].vertex_color[0]==0xffffffffu);
+    sprite.ang=16384;
+    njDrawSprite2D(&sprite,0,-3,NJD_SPRITE_ALPHA|NJD_SPRITE_ANGLE|NJD_SPRITE_HFLIP);
+    queued=recvxGameBootDraws(&queued_count);
+    assert(queued_count==1 && fabsf(queued[0].points[0].x-106)<.001f && fabsf(queued[0].points[0].y-40)<.001f);
+    assert(queued[0].uv[0].x>queued[0].uv[1].x);
+    REJECT(njDrawSprite2D(&sprite,-1,-1,NJD_SPRITE_ALPHA),"inventory sprite");
     REJECT(recvxGameBootRenderTextureSelect(NULL, 3), "texture exceeds");
     REJECT(recvxGameBootRenderTextureSelect(NULL, 2), "texture descriptor");
     recvxGameBootTexturesShutdown();
@@ -246,9 +261,42 @@ static void sampler_bits(void)
     REJECT(recvxGameBootRenderTextureSampler(0, 0, NULL), "sampler output");
 }
 
+static void texture_collection(void)
+{
+    NJS_TEXNAME names[3]={{0}};
+    NJS_TEXLIST list={names,3}, hole={names+1,1};
+    size_t size, count;
+    unsigned char *data=texture_data(16,4,&size);
+    for (unsigned int i=0;i<3;++i) recvxGameBootTextureInstall(&list,i,data,size,0,500+i,0,0);
+    free(data);
+    njSetTexture(&list); njSetTextureNum(0);
+    const RecvxBootTexture *first=recvxGameBootTextureGet(&list,0), *last=recvxGameBootTextureGet(&list,2);
+    const unsigned char *first_pixels=first->pixels, *last_pixels=last->pixels;
+    uintptr_t first_handle=names[0].texaddr, last_handle=names[2].texaddr, released=names[1].texaddr;
+    njReleaseTexture(&hole); assert(!names[1].texaddr);
+    QUAD quad={.x2=16,.y2=8,.u2=1,.v2=1};
+    njSetQuadTexture(0,0xffffffffu); njDrawQuadTexture(&quad,1);
+    render_pending=1; unsigned int before=presents;
+    njGarbageTexture(NULL,0); assert(presents==before+1 && !render_pending);
+    recvxGameBootDraws(&count); assert(!count);
+    assert(names[0].texaddr==first_handle && names[2].texaddr==last_handle);
+    assert(first->pixels==first_pixels && last->pixels==last_pixels && first->pixels[0]==2 && last->pixels[0]==2);
+    assert(recvxGameBootRenderStateGet()->selected_texture==first);
+    data=texture_data(16,4,&size); recvxGameBootTextureInstall(&list,1,data,size,0,503,0,0); free(data);
+    assert(names[1].texaddr==released); /* Freed descriptor holes are reusable. */
+    assert(njCalcTexture(0)==1048576 && njCalcTexture(UINT32_MAX)==1048576);
+    bhGarbageTexture(NULL,UINT32_MAX); assert(presents==before+1);
+    NJS_TEXMEMLIST *descriptor=(NJS_TEXMEMLIST *)first_handle;
+    void *saved=descriptor->texinfo.texaddr; descriptor->texinfo.texaddr=NULL;
+    REJECT(njGarbageTexture(NULL,0),"garbage texture ownership");
+    descriptor->texinfo.texaddr=saved;
+    njReleaseTextureAll(); njGarbageTexture(NULL,256);
+    assert(!recvxGameBootRenderStateGet()->selected_texture && !Ps2_current_texmemlist);
+}
+
 int main(void)
 {
-    texture_resolution(); room_texture_backup(); original_render_controls(); sampler_bits(); queued_palette_changes();
-    puts("PASS: owned TIM2 materials, room texture arena save/restore with live palettes/pixels, repeated restore and slot reuse, wide tiles, released/missing descriptors, queued palette snapshots, original render controls and sampler bits");
+    texture_resolution(); room_texture_backup(); original_render_controls(); sampler_bits(); queued_palette_changes(); texture_collection();
+    puts("PASS: owned TIM2 materials, room texture arena save/restore with live palettes/pixels, repeated restore and slot reuse, wide tiles, released/missing descriptors, queued palette snapshots, texture collection preserves live handles and synchronizes queued users, retail capacity, render controls and sampler bits");
     return 0;
 }

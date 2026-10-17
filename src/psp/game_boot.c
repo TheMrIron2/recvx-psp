@@ -18,6 +18,7 @@
 #include "ps2/veronica/prog/sdfunc.h"
 #include "ps2/veronica/prog/ps2_texture.h"
 #include "psp/engine_original_fault.h"
+#include "psp/game_boot_save_storage.h"
 #include "psp/engine_original_memory.h"
 #include "psp/engine_original_matrix.h"
 
@@ -86,6 +87,7 @@ int recvxGameBootInit(const char *directory, void *arena, size_t size)
     recvxGameBootEffectControlReset();
     if (recvxAudioInit(directory) || recvxGameBootMovieInit(directory)) return -1;
     recvxGameBootSoundReset();
+    if (recvxGameBootSaveStorageInit(directory)) return -1;
     recvxGameBootFilesInit(directory);
     InitReadKeyEx(1);
     InitAdvSystem();

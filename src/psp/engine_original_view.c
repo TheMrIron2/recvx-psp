@@ -15,6 +15,7 @@ float cmmat[2][16];
 NJS_MATRIX NaViwViewMatrix;
 NJS_MATRIX NaViewScreenMatrix;
 NJS_SCREEN _nj_screen_;
+float fNaViwClipNear = -1, fNaViwClipFar = -65535;
 float fNaViwOffsetX = 2048.0f;
 float fNaViwOffsetY = 2048.0f;
 float fNaViwAspectW = 1.174000025f;
@@ -42,6 +43,8 @@ void recvxEngineOriginalViewReset(void)
     original_projection_distance = 0.0f;
     original_clip_near = -1.0f;
     original_clip_far = -65535.0f;
+    fNaViwClipNear = original_clip_near;
+    fNaViwClipFar = original_clip_far;
     original_clip_center_x = 320.0f;
     original_clip_center_y = 240.0f;
     original_clip_disp_width = 2047.0f;
@@ -77,6 +80,20 @@ void recvxEngineOriginalViewConfigureScreen(Float width, Float height)
     }
     _nj_screen_.w = width;
     _nj_screen_.h = height;
+}
+
+void recvxEngineOriginalViewSetScreen(const NJS_SCREEN *screen)
+{
+    if (!screen || !isfinite(screen->dist) || screen->dist <= 0 ||
+        !isfinite(screen->w) || screen->w <= 0 || !isfinite(screen->h) || screen->h <= 0 ||
+        !isfinite(screen->cx) || !isfinite(screen->cy)) {
+        recvxEngineOriginalFaultSet("original screen parameters are invalid");
+        return;
+    }
+    _nj_screen_ = *screen;
+    original_projection_distance = screen->dist;
+    fNaViwOffsetX = screen->cx + 1728.0f;
+    fNaViwOffsetY = screen->cy + 1808.0f;
 }
 
 void njSetAspect(Float width, Float height)
@@ -198,6 +215,8 @@ void njClipZ(Float near_plane, Float far_plane)
         far_plane = -65535.0f;
     original_clip_near = near_plane;
     original_clip_far = far_plane;
+    fNaViwClipNear = near_plane;
+    fNaViwClipFar = far_plane;
 }
 
 void _Make_ClipVolume(float width, float height)

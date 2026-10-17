@@ -90,6 +90,9 @@ static void fail(const char *stage, int code)
 {
     char reason[224];
     const char *native_stage=recvxGameBootMoviePspStage();
+    recvxGameBootLog("native movie failure: id=%d step=%s code=%08x stage=%s SAS=%08x call=%s",
+        movie.movie,stage,(unsigned int)code,native_stage?native_stage:"none",
+        (unsigned int)recvxAudioNativeError(),recvxAudioNativeErrorCall());
     snprintf(reason,sizeof(reason),"movie %d %s failed: code=%08x stage=%s",movie.movie,
         stage,(unsigned int)code,native_stage?native_stage:"none");
     PlayStopMovieEx(0);
