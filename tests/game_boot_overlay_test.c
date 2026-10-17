@@ -60,7 +60,7 @@ void njSetQuadTexture(int number, unsigned int color)
 void njDrawQuadTexture(QUAD *quad, float depth)
 {
     expect(draw_count < 32, "test capture capacity");
-    captured[draw_count++] = (RecvxBootDraw){.quad = *quad, .depth = depth,
+    captured[draw_count++] = (RecvxBootDraw){.quad = *quad, .depth = depth ? 1.0f/depth : 65535,
         .color = selected_color, .texture = &texture};
 }
 void njDrawPolygon(NJS_POLYGON_VTX *polygon, Int count, Int trans)
@@ -70,7 +70,7 @@ void njDrawPolygon(NJS_POLYGON_VTX *polygon, Int count, Int trans)
            polygon[1].y == polygon[3].y, "overlay translates retail winding into existing rectangle backend");
     expect(draw_count < 32, "test capture capacity");
     captured[draw_count++] = (RecvxBootDraw){.quad = {.x1 = polygon[0].x, .y1 = polygon[0].y,
-        .x2 = polygon[3].x, .y2 = polygon[3].y}, .depth = polygon[0].z, .color = polygon[0].col};
+        .x2 = polygon[3].x, .y2 = polygon[3].y}, .depth = polygon[0].z ? 1.0f/polygon[0].z : 65534, .color = polygon[0].col};
 }
 void recvxGameBootDrawGradientQuad(const NJS_POINT2 points[4], const NJS_COLOR colors[4], float depth)
 {
@@ -99,7 +99,7 @@ int main(void)
            "screen saver interpolates over all original fade ticks");
     bhControlScreenSaver(); bhDrawScreenSaver();
     expect(sys->ssv_md0 == 2 && sys->ssv_an == 128 && draw_count == 1 &&
-           captured[0].color == 0x80000000u && captured[0].depth == 1.25f &&
+           captured[0].color == 0x80000000u && captured[0].depth == .8f &&
            captured[0].quad.x1 == 0 && captured[0].quad.y1 == 0 &&
            captured[0].quad.x2 == 640 && captured[0].quad.y2 == 480,
            "screen saver finishes at exact alpha and submits original full-screen black rectangle");

@@ -129,6 +129,8 @@ void SetSoundModeEx(int mode, int flag) { (void)flag; sound_mode = mode; }
 int GetUseVibrationUnit(void) { return 0; }
 int CheckVibrationUnit(int port) { (void)port; return 0; }
 void SetUseVibrationUnit(int enabled) { (void)enabled; }
-void SetEventVibrationMode(int mode) { (void)mode; }
-void StartVibrationEx(int port, int vibration) { (void)port; (void)vibration; }
+/* Preserve the scenario mode even though stock PSP has no rumble unit. */
+int EventVibrationMode;
+void SetEventVibrationMode(int mode) { EventVibrationMode = mode; }
+void StartVibrationEx(int attribute, int vibration) { (void)attribute; (void)vibration; }
 void StopVibrationEx(void) { }

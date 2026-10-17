@@ -1,6 +1,8 @@
 #include <assert.h>
+#include <math.h>
 #include <setjmp.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "psp/game_boot.h"
 #include "psp/engine_original_matrix.h"
@@ -8,6 +10,8 @@
 #include "ps2/veronica/prog/player.h"
 #include "ps2/veronica/prog/playpch.h"
 #include "ps2/veronica/prog/Motion.h"
+#include "ps2/veronica/prog/ps2_NaMatrix.h"
+#include "psp/engine_original_fault.h"
 
 SYS_WORK *sys;
 BH_PWORK *plp;
@@ -54,6 +58,50 @@ static void expect_failure(const char *message)
 {
     if (!setjmp(failure)) { PlyPchMain(plp); assert(!"expected pitch validation fault"); }
     assert(fault && strcmp(fault, message) == 0);
+}
+
+static void arm_ik(void)
+{
+    setup();
+    NJS_CNK_OBJECT *objects=player.mlwP->objP;
+    for(unsigned int i=0;i<22;++i){
+        objects[i].ang[0]=100+(int)i;objects[i].ang[1]=200+(int)i;objects[i].ang[2]=300+(int)i;
+        njUnitMatrix(&player.mlwP->owP[i].mtx);
+    }
+    objects[8].pos[0]=objects[9].pos[0]=2;
+    NJS_MATRIX before,after;
+    njUnitMatrix(NULL);njTranslate(NULL,3,4,5);njGetMatrix(&before);
+    NJS_POINT3 target={2,0,0};
+    bhArmIkMdk(plp,6,&target,0);
+    assert(abs(objects[7].ang[2]-10922)<=3&&abs(objects[8].ang[1]-21845)<=3);
+    assert(objects[6].ang[0]==106&&objects[9].ang[1]==209&&objects[8].ang[2]==308);
+    njGetMatrix(&after);assert(!memcmp(before,after,sizeof(before))&&!recvxEngineOriginalFault());
+    /* The target is in world space: translating both pose and target must
+       produce the same arm solution. */
+    int angles[3];memcpy(angles,objects[7].ang,sizeof(angles));
+    player.mlwP->owP[6].mtx[12]=10;target.x=12;
+    bhArmIkMdk(plp,6,&target,0);assert(!memcmp(angles,objects[7].ang,sizeof(angles)));
+    player.mlwP->owP[6].mtx[12]=0;
+    const NJS_POINT3 limits[]={{100,0,0},{0,0,0},{0,2,0},{0,-2,0},{.0000001f,0,0}};
+    for(unsigned int i=0;i<sizeof(limits)/sizeof(limits[0]);++i){
+        target=limits[i];bhArmIkMdk(plp,6,&target,35498);
+        for(unsigned int a=0;a<3;++a)assert(abs(objects[7].ang[a])<=32768);
+        assert(objects[8].ang[1]>=0&&objects[8].ang[1]<=32768);
+        njGetMatrix(&after);assert(!memcmp(before,after,sizeof(before))&&!recvxEngineOriginalFault());
+    }
+    const char *messages[]={"joint chain","bone length","target","matrix","matrix"};
+    for(unsigned int variant=0;variant<5;++variant){
+        setup();objects=player.mlwP->objP;objects[8].pos[0]=objects[9].pos[0]=2;
+        njUnitMatrix(&player.mlwP->owP[6].mtx);target=(NJS_POINT3){2,0,0};
+        int base=variant==0?20:6;
+        if(variant==1)objects[8].pos[0]=0;
+        if(variant==2)target.x=NAN;
+        if(variant==3)player.mlwP->owP[6].mtx[0]=NAN;
+        if(variant==4)memset(player.mlwP->owP[6].mtx,0,sizeof(NJS_MATRIX));
+        NJS_CNK_OBJECT saved[4];memcpy(saved,objects+6,sizeof(saved));
+        if(!setjmp(failure)){bhArmIkMdk(plp,base,&target,0);assert(!"invalid arm IK accepted");}
+        assert(fault&&strstr(fault,messages[variant])&&!memcmp(saved,objects+6,sizeof(saved)));
+    }
 }
 
 int main(void)
@@ -109,6 +157,7 @@ int main(void)
     expect_failure("invalid original player pitch motion records");
     plp->wpnr_no = 23;
     expect_failure("invalid original player pitch work");
-    puts("original player pitch, arm motion, mirroring, interpolation and bounds pass");
+    arm_ik();
+    puts("original player pitch, arm motion, mirroring, interpolation, arm IK targets/poles/reach, matrix preservation and bounds pass");
     return 0;
 }

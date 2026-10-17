@@ -1,4 +1,9 @@
+#include <float.h>
+#include <math.h>
+#include <string.h>
 #include "psp/game_boot.h"
+#include "ps2/veronica/prog/ps2_NaMatrix.h"
+#include "psp/engine_original_fault.h"
 #include "ps2/veronica/prog/main.h"
 #include "ps2/veronica/prog/player.h"
 #include "ps2/veronica/prog/playpch.h"
@@ -28,6 +33,45 @@ static int motion_data(const void *pointer, size_t size, unsigned int alignment)
             contains(sys->plwmtp, 65536, pointer, size, alignment)) ||
         (arena(sys->plzmtp, 8192, 4) &&
             contains(sys->plzmtp, 8192, pointer, size, alignment));
+}
+
+void recvxGameBootArmIkPrepare(BH_PWORK *actor, int base, NJS_POINT3 *target)
+{
+    if (!sys || !plp || actor != plp || !target || ((uintptr_t)target & 3u))
+        recvxGameBootUnsupported("invalid original arm IK actor or target");
+    ML_WORK *model = actor->mlwP;
+    if (!contains(actor->mdl,sizeof(actor->mdl),model,sizeof(*model),4) ||
+        ((uintptr_t)model-(uintptr_t)actor->mdl)%sizeof(*model) ||
+        model->obj_num<4 || model->obj_num>128 || base<0 ||
+        (unsigned int)base>model->obj_num-4 ||
+        !arena(model->objP,model->obj_num*sizeof(*model->objP),4) ||
+        !arena(model->owP,model->obj_num*sizeof(*model->owP),4))
+        recvxGameBootUnsupported("invalid original arm IK joint chain");
+    const float *point=&target->x;
+    const float *matrix=model->owP[base].mtx;
+    for(unsigned int i=0;i<3;++i)
+        if(!isfinite(point[i]))recvxGameBootUnsupported("non-finite original arm IK target");
+    for(unsigned int i=0;i<16;++i)
+        if(!isfinite(matrix[i]))recvxGameBootUnsupported("non-finite original arm IK matrix");
+    NJS_CNK_OBJECT *joints=&model->objP[base];
+    for(unsigned int i=0;i<3;++i)
+        if(!isfinite(joints[1].pos[i]))recvxGameBootUnsupported("invalid original arm IK shoulder");
+    float upper=joints[2].pos[0],lower=joints[3].pos[0];
+    const float limit=sqrtf(FLT_MAX)/8;
+    if(!isfinite(upper)||!isfinite(lower)||fabsf(upper)<1e-6f||fabsf(lower)<1e-6f||
+        fabsf(upper)>limit||fabsf(lower)>limit)
+        recvxGameBootUnsupported("invalid original arm IK bone length");
+    NJS_MATRIX inverse;
+    memcpy(inverse,matrix,sizeof(inverse));
+    if(!njInvertMatrix(&inverse))recvxGameBootUnsupported("singular original arm IK matrix");
+    NJS_POINT3 local;
+    njCalcPoint(&inverse,target,&local);
+    if(recvxEngineOriginalFault())recvxGameBootUnsupported(recvxEngineOriginalFault());
+    for(unsigned int i=0;i<3;++i){
+        float distance=(&local.x)[i]-joints[1].pos[i];
+        if(!isfinite(distance)||fabsf(distance)>limit)
+            recvxGameBootUnsupported("invalid original arm IK local target");
+    }
 }
 
 /* Asset installation validates the original motion streams before relocation.

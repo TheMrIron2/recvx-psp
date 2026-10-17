@@ -19,6 +19,8 @@ unsigned int (*bhScenarioJmpT[256])(void) = {
     [252] = bhWhile, [253] = bhEwhile, [243] = bhEwhile2,
     [250] = bhFor, [251] = bhNext,
     [31] = bhMessageSet, [92] = bhMesDispEndSet,
+    [106] = bhEventSkipSet,
+    [158] = bhPuruPuruFlagSet, [159] = bhPuruPuruStart,
     [18] = bhCineSet, [19] = bhCamSet, [54] = bhFadeSet, [91] = bhInitCamSet,
     [145] = bhEffModeSet, [173] = bhEffTypeSet, [23] = bhSeOn, [24] = bhSeOff,
     [25] = bhVoiceOn, [26] = bhVoiceOff, [28] = bhBGSeOn, [29] = bhBGSeOff,

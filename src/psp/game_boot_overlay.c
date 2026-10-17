@@ -109,7 +109,7 @@ void recvxGameBootOverlayPolygon2D(NJS_POINT2COL *polygon, Int count, Float prio
                       .v2 = (polygon->tex[2].tex.v + 0.5f) / 256.0f};
         njSetTexture(overlay_list);
         njSetQuadTexture(overlay_number, polygon->col[0].color);
-        njDrawQuadTexture(&quad, -priority);
+        njDrawQuadTexture(&quad, 1.0f / -priority);
     } else if (gradient || !rectangle) {
         recvxGameBootDrawGradientQuad(polygon->p, polygon->col, -priority);
     } else {
@@ -117,7 +117,7 @@ void recvxGameBootOverlayPolygon2D(NJS_POINT2COL *polygon, Int count, Float prio
         NJS_POLYGON_VTX vertices[4];
         for (i = 0; i < 4; ++i)
             vertices[i] = (NJS_POLYGON_VTX){.x = polygon->p[order[i]].x,
-                .y = polygon->p[order[i]].y, .z = -priority, .col = polygon->col[order[i]].color};
+                .y = polygon->p[order[i]].y, .z = 1.0f / -priority, .col = polygon->col[order[i]].color};
         njDrawPolygon(vertices, 4, 1);
     }
 }

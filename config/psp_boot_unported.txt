@@ -301,7 +301,6 @@ bhCPM0_enedam
 bhCPM0_enedie
 bhCPM0_event
 bhCPM0_nothing
-bhArmIkMdk
 bhCheckExmAtari
 bhCheckKnifeAtari
 bhFixPositionXYZ

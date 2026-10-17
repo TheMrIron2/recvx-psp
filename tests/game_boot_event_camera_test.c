@@ -38,6 +38,10 @@ static struct {
     O_WORK poses[3];
 } data;
 static unsigned int checks,cut_calls,reset_step;
+static int vibration_mode, vibration_attribute, vibration_pattern;
+static unsigned int vibration_mode_calls, vibration_start_calls;
+void SetEventVibrationMode(int mode){vibration_mode=mode;++vibration_mode_calls;}
+void StartVibrationEx(int attribute,int pattern){vibration_attribute=attribute;vibration_pattern=pattern;++vibration_start_calls;}
 static jmp_buf stopped;
 static const char *fault;
 static int expecting_fault;
@@ -120,6 +124,39 @@ static void reset_command(void)
     CHECK(bhScePtr==command&&sys->st_flg==1&&!cut_calls);
     reset();bhScePtr=command;plp=NULL;
     REJECT(bhInitCamSet(),"player position");
+}
+static void skip_command(void)
+{
+    reset();unsigned char command[]={106,0,0xff};
+    for(unsigned int value=0;value<256;++value){
+        command[1]=(unsigned char)value;bhScePtr=command;
+        sys->gm_flg=value?0xf1234567u:0xb1234567u;
+        CHECK(bhEventSkipSet()==1&&bhScePtr==command+2);
+        CHECK(sys->gm_flg==(value?0xb1234567u:0xf1234567u));
+    }
+    SYS_WORK *saved=sys;sys=NULL;bhScePtr=command;
+    REJECT(bhEventSkipSet(),"screen event state");
+    CHECK(bhScePtr==command);sys=saved;
+}
+static void vibration_commands(void)
+{
+    reset();unsigned char command[]={158,0,0xff};
+    vibration_mode_calls=vibration_start_calls=0;
+    for(unsigned int value=0;value<256;++value){
+        command[1]=(unsigned char)value;bhScePtr=command;
+        CHECK(bhPuruPuruFlagSet()==1&&bhScePtr==command+2);
+        CHECK(vibration_mode==(value==0)&&vibration_mode_calls==value+1);
+        command[0]=159;bhScePtr=command;
+        CHECK(bhPuruPuruStart()==1&&bhScePtr==command+2);
+        CHECK(vibration_attribute==2&&vibration_pattern==(int)value&&vibration_start_calls==value+1);
+        command[0]=158;
+    }
+    sys=NULL;bhScePtr=command;
+    REJECT(bhPuruPuruFlagSet(),"screen event state");
+    CHECK(bhScePtr==command&&vibration_mode_calls==256);
+    command[0]=159;
+    REJECT(bhPuruPuruStart(),"screen event state");
+    CHECK(bhScePtr==command&&vibration_start_calls==256);
 }
 static void setter_and_locks(void)
 {
@@ -213,7 +250,7 @@ static void malformed(void)
 }
 int main(void)
 {
-    screen_commands();reset_command();setter_and_locks();spline_control();malformed();
+    screen_commands();reset_command();skip_command();vibration_commands();setter_and_locks();spline_control();malformed();
     printf("PASS: original screen commands, camera setters/visibility/lock targets, clip/background tables and spline transitions/self-loops: %u checks\n",checks);
     return 0;
 }

@@ -228,7 +228,7 @@ static void queued_palette_changes(void)
     njDrawQuadTexture(&quad,1);
     njSetPaletteBankNum(0,1);
     assert(snapshot_count==1&&snapshots[0].palette[2]==0xff000002u&&live->palette[2]==0xff000012u);
-    njDrawQuadTexture(&quad,2);njSetPaletteBankNum(0,2);njDrawQuadTexture(&quad,3);
+    njDrawQuadTexture(&quad,.5f);njSetPaletteBankNum(0,2);njDrawQuadTexture(&quad,1.0f/3);
     assert(snapshot_count==2&&snapshots[1].palette[2]==0xff000012u&&live->palette[2]==0xff000022u);
     const RecvxBootDraw *queued=recvxGameBootDraws(&count);
     assert(count==3&&queued[0].depth==3&&queued[0].texture==live&&
@@ -296,9 +296,38 @@ static void texture_collection(void)
     assert(!recvxGameBootRenderStateGet()->selected_texture && !Ps2_current_texmemlist);
 }
 
+static void mixed_ui_depths(void)
+{
+    NJS_TEXNAME name={0};NJS_TEXLIST list={.textures=&name,.nbTexture=1};
+    size_t bytes,count;unsigned char *data=texture_data(16,4,&bytes);
+    recvxGameBootRenderTextureReset();
+    recvxGameBootTextureInstall(&list,0,data,bytes,0,504,0,0);free(data);
+    njSetTexture(&list);
+    QUAD quad={.x2=640,.y2=480,.u2=1,.v2=1};
+    /* ADV's title background and menu pass reciprocal depth. Inventory and
+       public 2D polygons pass camera distance. Mix them in one queue. */
+    njSetQuadTexture(0,0xff000001u);njDrawQuadTexture(&quad,0);
+    njSetQuadTexture(0,0xff000002u);njDrawQuadTexture(&quad,.5f);
+    NJS_POINT2 points[4]={{0,0},{640,0},{640,480},{0,480}};
+    NJS_COLOR colors[4];for(unsigned int i=0;i<4;++i)colors[i].color=0xff000003u;
+    recvxGameBootDrawGradientQuad(points,colors,20);
+    for(unsigned int i=0;i<4;++i)colors[i].color=0xff000004u;
+    recvxGameBootDrawGradientQuad(points,colors,1);
+    NJS_POLYGON_VTX fade[4]={{.x=0,.y=0,.z=1.99f,.col=0xff000005u},
+        {.x=0,.y=480},{.x=640,.y=0},{.x=640,.y=480}};
+    njDrawPolygon(fade,4,1);
+    const RecvxBootDraw *queued=recvxGameBootDraws(&count);
+    assert(count==5&&queued[0].depth==65535&&queued[0].color==0xff000001u);
+    assert(queued[1].depth==20&&queued[1].color==0xff000003u);
+    assert(queued[2].depth==2&&queued[2].color==0xff000002u);
+    assert(queued[3].depth==1&&queued[3].color==0xff000004u);
+    assert(fabsf(queued[4].depth-1/1.99f)<.00001f&&queued[4].color==0xff000005u);
+    njReleaseTexture(&list);
+}
+
 int main(void)
 {
-    texture_resolution(); room_texture_backup(); original_render_controls(); sampler_bits(); queued_palette_changes(); texture_collection();
+    texture_resolution(); room_texture_backup(); original_render_controls(); sampler_bits(); queued_palette_changes(); texture_collection();mixed_ui_depths();
     puts("PASS: owned TIM2 materials, room texture arena save/restore with live palettes/pixels, repeated restore and slot reuse, wide tiles, released/missing descriptors, queued palette snapshots, texture collection preserves live handles and synchronizes queued users, retail capacity, render controls and sampler bits");
     return 0;
 }

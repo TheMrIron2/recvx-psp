@@ -12,9 +12,13 @@ logic. Entry backs up room textures; exit restores their pixels, live palettes,
 render settings and the original arena cursor. The PSP draw adapter supports
 rotated/flipped sprites, textured quads, border lines, per-batch scissoring and
 multiple ordering-table flushes without clearing the already drawn scene.
-The shared 2D queue draws larger depth values first, keeping backgrounds behind
+The shared 2D queue draws larger camera distances first, keeping backgrounds behind
 nearer panels, item icons, text and fades. Equal-depth submissions retain their
-original order. The native integration test captures an assembled inventory
+original order. Original `njDrawQuadTexture` and `njDrawPolygon` accept reciprocal
+depth, so their adapters convert it to camera distance before sorting; the
+negative-priority overlay bridge compensates when calling these APIs. Title
+backgrounds, menu plates and fades therefore use the same ordering as inventory
+sprites. The native integration test captures an assembled inventory
 frame at `/tmp/recvx-game-inventory.ppm`, including textured triangle sprites
 and per-vertex color, so visual checks exercise the actual menu composition.
 Pulse strips use native GE texture and blend passes for the authored base/offset
@@ -38,6 +42,12 @@ new image into place, then verify it again before changing live gameplay state.
 A missing or corrupt primary can recover from a valid backup. System settings
 and ranking-record persistence through the separate system-save screen still
 use the explicit no-card lifecycle; those are not game-save slots.
+
+Scenario opcodes 158 (`bhPuruPuruFlagSet`) and 159 (`bhPuruPuruStart`)
+execute the original two-byte handlers. Selector zero enables event vibration
+mode; every nonzero selector disables it. The sound service retains that mode,
+while pattern requests return without hardware output because stock PSP has no
+vibration unit. The interpreter rejects truncated operands before either call.
 
 ## Verification
 

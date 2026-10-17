@@ -23,6 +23,7 @@
 #include "ps2/veronica/prog/sdfunc.h"
 #include "ps2/veronica/prog/ps2_texture.h"
 #include "ps2/veronica/prog/player.h"
+#include "ps2/veronica/prog/playpch.h"
 #include "ps2/veronica/prog/dread.h"
 #include "ps2/veronica/prog/pwksub.h"
 #include "ps2/veronica/prog/message.h"
@@ -1247,7 +1248,7 @@ static void test_gameplay_screen_saver(const char *directory, void *arena, size_
         size_t count;
         bhSysCallScreenSaver();
         const RecvxBootDraw *draws = recvxGameBootDraws(&count);
-        assert(count == 1 && !draws[0].texture && draws[0].depth == 1.25f);
+        assert(count == 1 && !draws[0].texture && fabsf(draws[0].depth - .8f) < .00001f);
         assert((draws[0].color & 0xffffffu) == 0);
     }
     assert(sys->ssv_md0 == 2 && sys->ssv_an == 128);
@@ -1345,6 +1346,34 @@ static void test_loaded_player_restore(void)
     puts("PASS: actual loaded room-change player floor/shadow/texture/motion setup and aligned pitch allocation");
 }
 
+static void loaded_arm_ik_task(void)
+{
+    NJS_POINT3 offset={1.8f,-3,-3},target;
+    njCalcPoint(&plp->mlwP->owP[4].mtx,&offset,&target);
+    bhArmIkMdk(plp,6,&target,35498);
+}
+
+static void test_loaded_arm_ik(void)
+{
+    RecvxInputState input={.analog_x=128,.analog_y=128};
+    RecvxLiveTaskProc original=bhSysTaskJumpTab[0];
+    NJS_CNK_OBJECT *objects=plp->mlwP->objP;
+    int original_angles[4][3];
+    for(unsigned int i=0;i<4;++i)memcpy(original_angles[i],objects[6+i].ang,sizeof(original_angles[i]));
+    NJS_MATRIX before,after;njGetMatrix(&before);
+    sys->tk_flg=1;sys->ts_flg=0;
+    bhSysTaskJumpTab[0]=loaded_arm_ik_task;
+    tick(&input);
+    bhSysTaskJumpTab[0]=original;
+    njGetMatrix(&after);assert(!memcmp(before,after,sizeof(before)));
+    for(unsigned int i=0;i<3;++i)assert(abs(objects[7].ang[i])<=32768);
+    assert(objects[8].ang[1]>=0&&objects[8].ang[1]<=32768);
+    assert(!memcmp(original_angles[0],objects[6].ang,sizeof(original_angles[0])));
+    assert(!memcmp(original_angles[3],objects[9].ang,sizeof(original_angles[3])));
+    for(unsigned int i=0;i<4;++i)memcpy(objects[6+i].ang,original_angles[i],sizeof(original_angles[i]));
+    puts("PASS: original handgun arm IK with real loaded Claire joints and world-space hand target, bounded angles and preserved matrix stack");
+}
+
 static void test_loaded_inventory_transition(void)
 {
     RecvxInputState input = {.analog_x = 128, .analog_y = 128};
@@ -1414,6 +1443,64 @@ static void camera_reset_event_task(void)
 {
     assert(recvxEventCoreRunScenario(12)==0);
     recvxGameBootEventCheck();
+}
+
+static void test_event_skip_task(void)
+{
+    /* Task 0 executes the real dispatch table, yields, then resumes through
+       the disable selector and EVT_END. Both selectors consume two bytes. */
+    static unsigned char section[]={12,0,0,0,14,0,0,0,16,0,0,0,0,0,0,0,
+        106,0,254,106,255,255,0};
+    static unsigned char truncated[]={12,0,0,0,14,0,0,0,16,0,0,0,0,0,0,0,106};
+    EVT_WORK *previous=rom->evtp;
+    unsigned int flags=sys->gm_flg,enabled=sys->sp_flg;
+    recvxEventCoreReset();rom->evtp=(EVT_WORK *)section;
+    assert(!recvxEventCoreBindSection(section,sizeof(section))&&!Event_exec(0,0));
+    sys->sp_flg|=0x10;sys->gm_flg=0x81234567u;
+    assert(!bhEventScheduler2());
+    assert(sys->gm_flg==0xc1234567u&&recvxEventCoreTaskPc(0)==19&&bhEtask[0].status);
+    assert(!bhEventScheduler2());
+    assert(sys->gm_flg==0x81234567u&&recvxEventCoreTaskPc(0)==23&&!bhEtask[0].status);
+    assert(recvxEventCoreInstructionCount()==4);
+    recvxEventCoreReset();rom->evtp=(EVT_WORK *)truncated;
+    assert(!recvxEventCoreBindSection(truncated,sizeof(truncated))&&!Event_exec(0,0));
+    assert(bhEventScheduler2()==-1);
+    const RecvxEventCoreFault *fault=recvxEventCoreGetFault();
+    assert(fault->code==RECVX_EVENT_FAULT_TRUNCATED&&fault->opcode==106&&fault->task==0);
+    assert(recvxEventCoreTaskPc(0)==16&&sys->gm_flg==0x81234567u);
+    recvxEventCoreReset();rom->evtp=previous;sys->gm_flg=flags;sys->sp_flg=enabled;
+    puts("PASS: opcode 106 task 0 skip flag enable/yield/resume/disable/end, exact PCs, unrelated flags and truncated operand rejection");
+}
+
+static void test_vibration_event_task(void)
+{
+    extern int EventVibrationMode;
+    static unsigned char section[]={12,0,0,0,14,0,0,0,16,0,0,0,0,0,0,0,
+        158,0,159,255,254,158,255,159,0,255,0};
+    static unsigned char truncated[]={12,0,0,0,14,0,0,0,16,0,0,0,0,0,0,0,158};
+    EVT_WORK *previous=rom->evtp;
+    unsigned int enabled=sys->sp_flg,flags=sys->gm_flg;
+    int mode=EventVibrationMode;
+    recvxEventCoreReset();rom->evtp=(EVT_WORK *)section;
+    assert(!recvxEventCoreBindSection(section,sizeof(section))&&!Event_exec(0,0));
+    sys->sp_flg|=0x10;SetEventVibrationMode(0);
+    assert(!bhEventScheduler2());
+    assert(EventVibrationMode==1&&recvxEventCoreTaskPc(0)==21&&bhEtask[0].status);
+    assert(!bhEventScheduler2());
+    assert(EventVibrationMode==0&&recvxEventCoreTaskPc(0)==27&&!bhEtask[0].status);
+    assert(recvxEventCoreInstructionCount()==6&&sys->gm_flg==flags);
+    for(unsigned int opcode=158;opcode<=159;++opcode){
+        truncated[16]=(unsigned char)opcode;
+        recvxEventCoreReset();rom->evtp=(EVT_WORK *)truncated;
+        assert(!recvxEventCoreBindSection(truncated,sizeof(truncated))&&!Event_exec(0,0));
+        SetEventVibrationMode(7);
+        assert(bhEventScheduler2()==-1);
+        const RecvxEventCoreFault *fault=recvxEventCoreGetFault();
+        assert(fault->code==RECVX_EVENT_FAULT_TRUNCATED&&fault->opcode==opcode&&fault->task==0);
+        assert(recvxEventCoreTaskPc(0)==16&&EventVibrationMode==7&&sys->gm_flg==flags);
+    }
+    recvxEventCoreReset();rom->evtp=previous;sys->sp_flg=enabled;SetEventVibrationMode(mode);
+    puts("PASS: opcodes 158/159 task 0 vibration mode/start, yield/resume/end, exact PCs and truncated operand rejection");
 }
 
 static void test_loaded_camera_reset(void)
@@ -1719,8 +1806,11 @@ int main(int argc, char **argv)
     assert(presentations >= initial_presentations + extra_frames);
     fprintf(stderr, "Movie presentations (hardware call model): %u\n", movie_presentations);
     test_loaded_player_restore();
+    test_loaded_arm_ik();
     test_loaded_inventory_transition();
     test_loaded_camera_reset();
+    test_event_skip_task();
+    test_vibration_event_task();
     /* Casing cleanup must cover the entire pool, preserve inactive entries,
        and leave unrelated live effects and actor data intact. */
     for (i = 0; i < 512; ++i) {

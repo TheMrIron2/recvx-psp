@@ -424,12 +424,17 @@ void recvxGameBootDrawGradientQuad(const NJS_POINT2 points[4], const NJS_COLOR c
     memcpy(draw->points, points, sizeof(draw->points));
     for (unsigned int i = 0; i < 4; ++i) draw->vertex_color[i] = colors[i].color;
 }
+static float reciprocal_depth(float depth, float limit)
+{
+    if (!isfinite(depth)) recvxGameBootUnsupported("invalid reciprocal UI depth");
+    return depth ? fminf(1.0f / depth, limit) : limit;
+}
 void njDrawQuadTexture(QUAD *quad, float depth)
 {
     RecvxBootDraw *draw = next_draw();
     unsigned int slot = descriptor_slot(Ps2_current_texmemlist);
     (void)current_number;
-    *draw = (RecvxBootDraw){.quad = *quad, .depth = depth, .color = quad_color,
+    *draw = (RecvxBootDraw){.quad = *quad, .depth = reciprocal_depth(depth,65535), .color = quad_color,
                            .texture = &textures[slot], .filter = texture_filter};
 }
 
@@ -488,7 +493,7 @@ void njDrawPolygon(NJS_POLYGON_VTX *polygon, Int count, Int trans)
     draw = next_draw();
     *draw = (RecvxBootDraw){.quad = {.x1 = polygon[0].x, .y1 = polygon[0].y,
                                     .x2 = polygon[3].x, .y2 = polygon[3].y},
-                           .depth = polygon[0].z, .color = polygon[0].col};
+                           .depth = reciprocal_depth(polygon[0].z,65534), .color = polygon[0].col};
 }
 void recvxGameBootDrawDiscard(void) { draw_count = 0; }
 
