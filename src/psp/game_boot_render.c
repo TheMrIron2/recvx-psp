@@ -12,6 +12,7 @@
 #include "psp/engine_original_view.h"
 #include "ps2/veronica/prog/main.h"
 #include "ps2/veronica/prog/ps2_NinjaCnk.h"
+#include "ps2/veronica/prog/ps2_dummy.h"
 
 #define MAX_VERTICES 262144u
 #define MAX_BATCHES 16384u
@@ -33,6 +34,15 @@ void recvxGameBootRenderBeginFrame(void)
     vertex_count = batch_count = 0; shadow_active = 0;
 }
 void recvxGameBootRenderConsume(void) { recvxGameBootRenderBeginFrame(); }
+void Ps2ClearOT(void)
+{
+    /* Retail clears the ordering table and rewinds its primitive buffer.
+       PSP equivalents are the pending 2D/3D queues, not loaded textures or
+       render state. Present synchronizes GU before returning to the engine.
+       Discard 2D users before freeing shared frame-owned palette snapshots. */
+    if (recvxGameBootDrawDiscard) recvxGameBootDrawDiscard();
+    recvxGameBootRenderBeginFrame();
+}
 int recvxGameBootRenderPending(void) { return vertex_count != 0; }
 const RecvxBootTexture *recvxGameBootRenderSnapshotTexture(const RecvxBootTexture *texture)
 {

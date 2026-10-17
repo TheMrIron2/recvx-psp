@@ -6,6 +6,9 @@ Place `recvx.iso` (USA) at the root of the repository and run `make assets`, the
 
 FMVs are converted on the host to PSP H.264 video and native ADPCM audio. Copy the complete `build/psp/data` directory, including `data/movies`, alongside `build/psp/EBOOT.PBP`. See [movie preparation and playback](docs/psp-movie-assets.md) for details and validation limits.
 
+Boot asset preparation includes the complete SYSTEM archive, including the recorded attract demos started by the title screen's idle timer. Older data packages containing only SYSTEM entries 1, 2, 10 and 20 must be refreshed.
+It also packages ITEM1 for inventory resources and MRY for door resources; refresh `data/archives` when updating an older package.
+
 The original README continues below.
 
 # recvx-decomp

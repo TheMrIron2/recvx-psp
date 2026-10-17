@@ -662,6 +662,14 @@ game-boot-test: $(HOST_BOOT_TEST)
 	@mkdir -p build/host/boot-missing/data
 	ASAN_OPTIONS=detect_leaks=0 $(HOST_BOOT_TEST) build/host/boot-missing/data --missing-assets
 
+.PHONY: game-boot-files-test
+game-boot-files-test: build/host/game-boot-files-test
+	ASAN_OPTIONS=detect_leaks=0 $< build/psp/data
+
+build/host/game-boot-files-test: tests/game_boot_files_test.c src/psp/game_boot_files.c $(HOST_HEADERS) Makefile
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
+		-ffunction-sections -fdata-sections $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
+
 .PHONY: game-boot-audio-test
 game-boot-audio-test: build/host/game-boot-audio-test
 	ASAN_OPTIONS=detect_leaks=0 $< build/psp/data
@@ -790,6 +798,10 @@ HOST_I386_LOADER ?= /lib/ld-linux.so.2
 .PHONY: game-boot-abi-test
 game-boot-abi-test: $(HOST_BOOT_ABI_TEST)
 	$(HOST_BOOT_ABI_TEST) build/psp/data
+
+.PHONY: game-boot-title-idle-test
+game-boot-title-idle-test: $(HOST_BOOT_ABI_TEST)
+	$(HOST_BOOT_ABI_TEST) build/psp/data --title-idle
 
 build/host/game_boot_unported_i386.S: tools/generate_boot_faults.py config/psp_boot_unported.txt
 	python3 $< config/psp_boot_unported.txt $@ --host32
@@ -1030,6 +1042,18 @@ game-boot-overlay-test: build/host/game-boot-overlay-test
 
 game-boot-player-action-test: build/host/game-boot-player-action-test
 	ASAN_OPTIONS=detect_leaks=0 $<
+
+.PHONY: game-boot-player-restore-test
+game-boot-player-restore-test: build/host/game-boot-player-restore-test
+	ASAN_OPTIONS=detect_leaks=0 $<
+
+build/host/game_boot_player_restore_original.c: tools/extract_original_player_control.py tools/extract_original_boot_initializers.py tools/extract_original_boot_tables.py src/ps2/veronica/prog/player.c src/ps2/veronica/prog/playpch.c
+	python3 $< $@ --restore-test
+
+build/host/game-boot-player-restore-test: tests/game_boot_player_restore_test.c src/psp/game_boot_player.c build/host/game_boot_player_restore_original.c src/psp/engine_original_fault.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -Wno-error \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
+		-ffunction-sections -fdata-sections $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
 
 build/host/game-boot-light-test: tests/game_boot_light_test.c build/host/game_boot_light_original.c src/psp/game_boot_light.c src/psp/game_boot_world_control.c src/psp/engine_original_lighting_psp.c src/psp/engine_original_view.c src/psp/engine_original_math.c src/psp/engine_original_matrix_cpu.c src/psp/engine_original_fault.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
 	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_GAME_BOOT_HOST_TEST -Wno-error=unused-function \

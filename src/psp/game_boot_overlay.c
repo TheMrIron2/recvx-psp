@@ -9,6 +9,24 @@ static NJS_TEXLIST *overlay_list;
 static Uint32 overlay_number;
 static int overlay_texture_selected;
 
+void recvxGameBootScreenSaverPrepare(int mode, unsigned int alpha, float duration)
+{
+    if (!sys) recvxGameBootUnsupported("missing screen saver state");
+    if (mode == 0) return;
+    if (!isfinite(sys->ssv_an) || sys->ssv_an < 0 || sys->ssv_an > 255)
+        recvxGameBootUnsupported("invalid screen saver alpha");
+    if (mode == 1) {
+        if (alpha > 255 || !isfinite(duration) || duration < 1)
+            recvxGameBootUnsupported("invalid screen saver fade request");
+    } else if (mode == 2) {
+        if (!isfinite(sys->ssv_ap) || sys->ssv_ap < 0 || sys->ssv_ap > 255 ||
+            !isfinite(sys->ssv_ao) || sys->ssv_ao < 0 || sys->ssv_ao > 255 ||
+            !isfinite(sys->ssv_hkn) || sys->ssv_hkn < 1 ||
+            !isfinite(sys->ssv_ct) || sys->ssv_ct < 0 || sys->ssv_ct >= sys->ssv_hkn)
+            recvxGameBootUnsupported("invalid screen saver fade state");
+    }
+}
+
 void recvxGameBootOverlayPrepare(int thermometer)
 {
     if (!sys) recvxGameBootUnsupported("missing game overlay state");

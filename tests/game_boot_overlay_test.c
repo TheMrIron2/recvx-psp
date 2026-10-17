@@ -81,6 +81,49 @@ static void clear(void) { draw_count = 0; memset(captured, 0, sizeof(captured));
 int main(void)
 {
     sys = &state; texture.width = texture.height = 512;
+    sys->ssv_md0 = sys->ssv_md1 = 7; sys->ssv_tim = 99;
+    sys->ssv_ct = sys->ssv_hkn = sys->ssv_ao = sys->ssv_an = sys->ssv_ap = NAN;
+    bhInitScreenSaver();
+    expect(!sys->ssv_md0 && !sys->ssv_md1 && !sys->ssv_tim && !sys->ssv_ct &&
+           !sys->ssv_hkn && !sys->ssv_ao && !sys->ssv_an && !sys->ssv_ap,
+           "screen saver initialization resets modes, clock and alpha state");
+    bhSetScreenSaver(128, 300);
+    expect(sys->ssv_md0 == 1 && sys->ssv_hkn == 300 && sys->ssv_ap == 128,
+           "idle dimming retains original target and duration");
+    for (unsigned int i = 0; i < 299; ++i) bhControlScreenSaver();
+    expect(sys->ssv_md0 == 1 && sys->ssv_an > 127 && sys->ssv_an < 128,
+           "screen saver interpolates over all original fade ticks");
+    bhControlScreenSaver(); bhDrawScreenSaver();
+    expect(sys->ssv_md0 == 2 && sys->ssv_an == 128 && draw_count == 1 &&
+           captured[0].color == 0x80000000u && captured[0].depth == 1.25f &&
+           captured[0].quad.x1 == 0 && captured[0].quad.y1 == 0 &&
+           captured[0].quad.x2 == 640 && captured[0].quad.y2 == 480,
+           "screen saver finishes at exact alpha and submits original full-screen black rectangle");
+    clear(); bhSetScreenSaver(0, 2); bhControlScreenSaver();
+    expect(sys->ssv_an == 64, "restarted fade interpolates from current alpha");
+    bhControlScreenSaver(); expect(sys->ssv_an == 0 && sys->ssv_md0 == 2,
+           "screen saver fade can also return to transparent");
+    const float bad_duration[] = {0, -1, NAN, INFINITY};
+    for (volatile unsigned int i = 0; i < 4; ++i) {
+        clear();
+        if (!setjmp(fault_jump)) { bhSetScreenSaver(128, bad_duration[i]); expect(0, "bad fade duration must fault"); }
+        expect(fault && strstr(fault, "fade request") && !draw_count,
+               "invalid duration faults before changing fade state");
+    }
+    clear();
+    if (!setjmp(fault_jump)) { bhSetScreenSaver(256, 1); expect(0, "out-of-range fade target must fault"); }
+    expect(fault && strstr(fault, "fade request"), "screen saver target is bounded before alpha packing");
+    clear(); bhInitScreenSaver();
+    if (!setjmp(fault_jump)) { bhControlScreenSaver(); expect(0, "unprepared fade must fault"); }
+    expect(fault && strstr(fault, "fade state"), "control rejects zero denominator before division");
+    const float bad_alpha[] = {NAN, INFINITY, -1, 256};
+    for (volatile unsigned int i = 0; i < 4; ++i) {
+        clear(); sys->ssv_an = bad_alpha[i];
+        if (!setjmp(fault_jump)) { bhDrawScreenSaver(); expect(0, "bad saver alpha must fault"); }
+        expect(fault && strstr(fault, "saver alpha") && !draw_count,
+               "screen saver rejects invalid alpha before conversion or drawing");
+    }
+    clear(); bhInitScreenSaver();
     sys->fade_an = 127.75f; sys->fade_rn = 64.5f; sys->fade_gn = 32.25f; sys->fade_bn = 16.75f;
     bhDrawScreenFade();
     expect(draw_count == 1 && !captured[0].texture && captured[0].color == 0x7f402010u,
@@ -94,8 +137,8 @@ int main(void)
     bhDrawScreenFade(); expect(captured[0].color == 0, "transparent fade clears its previous alpha");
     const float invalid_fade[] = {NAN, INFINITY, -1, 256};
     float *fade_channels[] = {&sys->fade_an, &sys->fade_rn, &sys->fade_gn, &sys->fade_bn};
-    for (unsigned int c = 0; c < 4; ++c) {
-        for (unsigned int i = 0; i < 4; ++i) {
+    for (volatile unsigned int c = 0; c < 4; ++c) {
+        for (volatile unsigned int i = 0; i < 4; ++i) {
             clear(); *fade_channels[c] = invalid_fade[i];
             if (!setjmp(fault_jump)) { bhDrawScreenFade(); expect(0, "invalid fade channel must fault"); }
             expect(fault && strstr(fault, "fade color") && draw_count == 0,

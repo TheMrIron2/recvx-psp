@@ -16,6 +16,7 @@
 #include "ps2/veronica/prog/adv.h"
 #include "ps2/veronica/prog/padman.h"
 #include "ps2/veronica/prog/sdfunc.h"
+#include "ps2/veronica/prog/ps2_texture.h"
 #include "psp/engine_original_fault.h"
 #include "psp/engine_original_memory.h"
 #include "psp/engine_original_matrix.h"
@@ -71,6 +72,7 @@ int recvxGameBootInit(const char *directory, void *arena, size_t size)
     sys->memp = freemem; sys->endp = njpmemp;
     recvxGameBootCheckpointReset();
     recvxGameBootRenderReset();
+    Init_PS2_SAVE_TEX();
     recvxGameBootDrawSkinReset();
     recvxGameBootSkinReset();
     recvxGameBootMorphReset();

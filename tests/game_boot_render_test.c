@@ -12,6 +12,7 @@
 #include "ps2/veronica/prog/main.h"
 #include "ps2/veronica/prog/ps2_NinjaCnk.h"
 #include "ps2/veronica/prog/ps2_NaView.h"
+#include "ps2/veronica/prog/ps2_dummy.h"
 
 SYS_WORK *sys;
 unsigned char *freemem;
@@ -315,6 +316,23 @@ int main(void)
     recvxGameBootRenderConsume();
     CHECK(recvxGameBootRenderSnapshotTexture(&texture)->pixels==pixels);
     texture.palette[2] = 0xff123456u;
+    pending_overlay_view = recvxGameBootRenderSnapshotTexture(&texture);
+    recvxGameBootRenderSpriteTriangle(sprite,1,1);
+    const RecvxGameBootRenderState before_clear = *recvxGameBootRenderStateGet();
+    CHECK(recvxGameBootRenderPending());
+    Ps2ClearOT();
+    f = recvxGameBootRenderFrame();
+    CHECK(!recvxGameBootRenderPending() && !pending_overlay_view && !f->vertex_count && !f->batch_count);
+    CHECK(!memcmp(&before_clear,recvxGameBootRenderStateGet(),sizeof(before_clear)));
+    CHECK(texture.source && texture.pixels == pixels && texture.palette[2] == 0xff123456u);
+    /* Clear is repeatable, releases snapshot capacity, and permits fresh
+       geometry/shadow submissions without resetting the material state. */
+    Ps2ClearOT();
+    for(unsigned int i=0;i<256;++i)recvxGameBootRenderSnapshotTexture(&texture);
+    Ps2ClearOT();
+    recvxGameBootRenderShadowStart(); Ps2ClearOT(); recvxGameBootRenderShadowStart(); Ps2ClearOT();
+    recvxGameBootRenderSpriteTriangle(sprite,1,1);
+    f=recvxGameBootRenderFrame(); CHECK(f->vertex_count==3 && f->batch_count==1);
     pending_overlay_view = recvxGameBootRenderSnapshotTexture(&texture);
     recvxGameBootRenderReset(); CHECK(!recvxGameBootRenderPending() && !pending_overlay_view);
     custom_clip_tests();recvxGameBootRenderReset();

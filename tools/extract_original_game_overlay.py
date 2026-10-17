@@ -7,7 +7,7 @@ from extract_original_boot_initializers import extract
 def prepare(destination):
     path = Path('src/ps2/veronica/prog/screen.c')
     source = path.read_text()
-    output = ['/* Original screen fade, cinematic letterbox, and thermometer HUD. */',
+    output = ['/* Original screen fade, idle screen saver, cinematic letterbox, and thermometer HUD. */',
               '#include "ps2/veronica/prog/screen.h"',
               '#include "ps2/veronica/prog/main.h"',
               '#include "ps2/veronica/prog/ps2_NaDraw2D.h"',
@@ -15,12 +15,19 @@ def prepare(destination):
               '#include "ps2/veronica/prog/ps2_NaMath.h"',
               'void recvxGameBootOverlayPrepare(int mode);',
               'void recvxGameBootOverlayNumberPrepare(float x, float y, int number);',
+              'void recvxGameBootScreenSaverPrepare(int mode, unsigned int alpha, float duration);',
               'Sint32 recvxGameBootOverlaySetTexture(NJS_TEXLIST *);',
               'Sint32 recvxGameBootOverlaySetTextureNum(Uint32);',
               'void recvxGameBootOverlayPolygon2D(NJS_POINT2COL *, Int, Float, Uint32);']
-    for name in ('bhDrawScreenFade', 'bhDrawCinesco', 'bhDrawThermometer', 'bhDrawThermoNumber'):
+    for name in ('bhDrawScreenFade', 'bhDrawCinesco', 'bhDrawThermometer', 'bhDrawThermoNumber',
+                 'bhInitScreenSaver', 'bhSetScreenSaver', 'bhControlScreenSaver', 'bhDrawScreenSaver'):
         line, function = extract(source, name)
-        guard = ('recvxGameBootOverlayPrepare(2);' if name == 'bhDrawScreenFade' else
+        saver_modes = {'bhInitScreenSaver': 0, 'bhSetScreenSaver': 1,
+                       'bhControlScreenSaver': 2, 'bhDrawScreenSaver': 3}
+        guard = (('recvxGameBootScreenSaverPrepare(1, alpha, ct);' if name == 'bhSetScreenSaver'
+                  else f'recvxGameBootScreenSaverPrepare({saver_modes[name]}, 0, 0);')
+                 if name in saver_modes else
+                 'recvxGameBootOverlayPrepare(2);' if name == 'bhDrawScreenFade' else
                  'recvxGameBootOverlayPrepare(0);' if name == 'bhDrawCinesco' else
                  'recvxGameBootOverlayPrepare(1);' if name == 'bhDrawThermometer' else
                  'recvxGameBootOverlayNumberPrepare(px, py, num);')

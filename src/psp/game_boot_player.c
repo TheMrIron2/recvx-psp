@@ -1,4 +1,5 @@
 #include <string.h>
+#include <math.h>
 #include "psp/game_boot.h"
 #include "psp/player_asset.h"
 #include "ps2/veronica/prog/main.h"
@@ -35,6 +36,66 @@ void recvxGameBootPlayerControlPrepare(void)
         recvxGameBootUnsupported("invalid original player model or motion work");
     if ((plp->flg & 0x100000u) && ((EXP_WORK *)plp->exp0)->yrct <= 0)
         recvxGameBootUnsupported("invalid player turn timer");
+}
+
+void recvxGameBootPlayerRestorePrepare(int standing)
+{
+    if (!sys || !plp || sys->ply_id < 0 || sys->ply_id >= 4 ||
+        !player_work_span(plp->exp0, sizeof(EXP_WORK)))
+        recvxGameBootUnsupported("invalid player restore work");
+    ML_WORK *model = standing ? plp->mlwP : plp->mdl;
+    uintptr_t address = (uintptr_t)model, first = (uintptr_t)plp->mdl;
+    if (!model || address < first || address - first >= sizeof(plp->mdl) ||
+        (address - first) % sizeof(*model) || model->obj_num < 22 || model->obj_num > 128 ||
+        !player_work_span(model->objP, model->obj_num * sizeof(*model->objP)) ||
+        !player_work_span(model->owP, model->obj_num * sizeof(*model->owP)))
+        recvxGameBootUnsupported("invalid player restore model");
+    if (!standing) {
+        if ((sys->ply_id == 0 || sys->ply_id == 3) &&
+            !player_work_span(sys->obwp, 3u * sizeof(*sys->obwp)))
+            recvxGameBootUnsupported("invalid player restore equipment");
+        return;
+    }
+    EXP_WORK *expression = (EXP_WORK *)plp->exp0;
+    extern const unsigned short PlMtnAct[2][3][7];
+    int damage = plp->hp >= 120 ? !!(plp->stflg & 0x280000u) : (plp->hp >= 30 ? 1 : 2);
+    if (expression->wpntp < 0 || expression->wpntp >= 2 ||
+        !isfinite(plp->px) || !isfinite(plp->py) || !isfinite(plp->pz))
+        recvxGameBootUnsupported("invalid player standing selectors");
+    unsigned int motion = PlMtnAct[expression->wpntp][damage][0];
+    if (motion >= 512 || !player_work_span(plp->mnwPb, (motion + 1u) * sizeof(*plp->mnwPb)) ||
+        !plp->mnwPb[motion].frm_num || plp->mnwPb[motion].frm_num > 32767)
+        recvxGameBootUnsupported("invalid player standing motion");
+}
+
+void recvxGameBootRoomChangePlayerPrepare(void)
+{
+    /* The original entry selects the persistent player, regardless of plp's
+       previous value. Validate that actor before the function changes it. */
+    BH_PWORK *actor = &ply;
+    if (!sys || sys->ply_id < 0 || sys->ply_id >= 4 ||
+        !player_work_span(actor->exp0, sizeof(EXP_WORK)) ||
+        !player_work_span(actor->exp1, 124))
+        recvxGameBootUnsupported("invalid room-change player work");
+    ML_WORK *model = actor->mlwP;
+    uintptr_t address = (uintptr_t)model, first = (uintptr_t)actor->mdl;
+    if (!model || address < first || address - first >= sizeof(actor->mdl) ||
+        (address - first) % sizeof(*model) || model->obj_num < 22 || model->obj_num > 128 ||
+        !player_work_span(model->objP, model->obj_num * sizeof(*model->objP)) ||
+        !player_work_span(model->owP, model->obj_num * sizeof(*model->owP)) || !actor->txp[0])
+        recvxGameBootUnsupported("invalid room-change player model");
+    EXP_WORK *expression = (EXP_WORK *)actor->exp0;
+    if (expression->wpntp < 0 || expression->wpntp >= 2 ||
+        expression->dmlvl < 0 || expression->dmlvl >= 3 ||
+        !isfinite(actor->px) || !isfinite(actor->py) || !isfinite(actor->pz))
+        recvxGameBootUnsupported("invalid room-change player selectors");
+    extern const unsigned short PlMtnAct[2][3][7];
+    unsigned int motion = PlMtnAct[expression->wpntp][expression->dmlvl][0];
+    if (motion >= 512 || !player_work_span(actor->mnwP, (motion + 1u) * sizeof(*actor->mnwP)) ||
+        !actor->mnwP[motion].frm_num || actor->mnwP[motion].frm_num > 32767)
+        recvxGameBootUnsupported("invalid room-change player motion");
+    if (sys->ply_id == 0 && !player_work_span(sys->obwp, 3u * sizeof(*sys->obwp)))
+        recvxGameBootUnsupported("invalid room-change player equipment");
 }
 
 #if UINTPTR_MAX == UINT32_MAX

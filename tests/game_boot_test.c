@@ -41,6 +41,7 @@
 #include "ps2/veronica/prog/subpl.h"
 #include "ps2/veronica/prog/Motion.h"
 #include "ps2/veronica/prog/system.h"
+#include "ps2/veronica/prog/screen.h"
 #include "ps2/veronica/prog/cut.h"
 #include "psp/engine_original_view.h"
 #include "ps2/veronica/prog/effect.h"
@@ -1179,6 +1180,172 @@ static void test_subplayer_movement(const char *directory, void *arena, size_t a
     puts("PASS: original NPC movement/event dispatch, real motion blending/looping, bounded turning/speed, parked state and invalid/null selectors");
 }
 
+static void inventory_resource_task(void)
+{
+    sys->mn_stack[0] = 0x105; /* Original inventory texture-read stage: 5/1. */
+    sys->mn_setct = 1;
+    bhSysCallMonitor();
+}
+
+static void inventory_transition_task(void) { bhSysCallMonitor(); }
+
+static void test_inventory_resource(const char *directory, void *arena, size_t size)
+{
+    RecvxLiveTaskProc original = bhSysTaskJumpTab[0];
+    RecvxInputState input = {.analog_x = 128, .analog_y = 128};
+    assert(recvxGameBootInit(directory, arena, size) == 0);
+    bhSysTaskJumpTab[0] = inventory_resource_task;
+    tick(&input);
+    assert(sys->mn_md0 == 5 && sys->mn_md1 == 2 && sys->subtxp);
+    assert(!((uintptr_t)sys->subtxp & 63u) && GetReadFileStatus() == 0);
+    assert(recvxGameBootSourceRemaining(sys->subtxp) == (size_t)GetInsideFileSize(4, 145));
+    bhSysTaskJumpTab[0] = original;
+    puts("PASS: original inventory monitor loads ITEM1 entry 145 and advances past archive read");
+}
+
+static void test_gameplay_screen_saver(const char *directory, void *arena, size_t size)
+{
+    PDS_PERIPHERAL peripheral = {0};
+    assert(recvxGameBootInit(directory, arena, size) == 0);
+    recvxGameBootDrawDiscard();
+    sys->p1per = &peripheral;
+    bhInitScreenSaver();
+    for (unsigned int i = 0; i < 10799; ++i) bhSysCallScreenSaver();
+    assert(sys->ssv_tim == 10799 && sys->ssv_md0 == 0);
+    bhSysCallScreenSaver();
+    assert(sys->ssv_md0 == 1 && sys->ssv_hkn == 300 && sys->ssv_an == 0);
+    for (unsigned int i = 0; i < 300; ++i) {
+        size_t count;
+        bhSysCallScreenSaver();
+        const RecvxBootDraw *draws = recvxGameBootDraws(&count);
+        assert(count == 1 && !draws[0].texture && draws[0].depth == 1.25f);
+        assert((draws[0].color & 0xffffffu) == 0);
+    }
+    assert(sys->ssv_md0 == 2 && sys->ssv_an == 128);
+    peripheral.on = 0x800;
+    bhSysCallScreenSaver();
+    assert(sys->ssv_md0 == 0 && sys->ssv_tim == 0 && sys->ssv_an == 0);
+    peripheral.on = 0;
+    peripheral.x1 = 48;
+    bhSysCallScreenSaver(); assert(sys->ssv_tim == 1);
+    peripheral.x1 = 49;
+    bhSysCallScreenSaver(); assert(sys->ssv_tim == 0);
+    peripheral.x1 = 0;
+    sys->cb_flg = 4;
+    bhSysCallScreenSaver(); assert(sys->ssv_tim == 0);
+    sys->cb_flg = 0;
+    plp->stflg = 0x40000;
+    bhSysCallScreenSaver(); assert(sys->ssv_tim == 0);
+    plp->stflg = 0;
+    sys->p1per = NULL;
+    bhSysCallScreenSaver(); assert(sys->ssv_tim == 1);
+    bhSetScreenSaver(128, 300);
+    sys->p1per = &peripheral;
+    peripheral.y1 = -49;
+    bhSysCallScreenSaver();
+    assert(sys->ssv_md0 == 0 && sys->ssv_an == 0 && sys->ssv_tim == 0);
+    sys->p1per = NULL;
+    puts("PASS: original gameplay screen saver idle threshold, dimming draw queue, input wake, analog deadzone and cinematic/player suppression");
+}
+
+#if UINTPTR_MAX == UINT32_MAX
+static uint32_t texture_digest(const RecvxBootTexture *texture)
+{
+    uint32_t hash = 2166136261u;
+    const unsigned char *parts[] = {texture->source, texture->pixels,
+        (const unsigned char *)texture->palette};
+    const size_t sizes[] = {texture->source_size, texture->width * texture->height,
+        sizeof(texture->palette)};
+    for (unsigned int part = 0; part < 3; ++part)
+        for (size_t i = 0; i < sizes[part]; ++i) hash = (hash ^ parts[part][i]) * 16777619u;
+    return hash;
+}
+
+static void test_room_texture_save(void)
+{
+    NJS_TEXLIST *list = rom->mdl.texP;
+    uint32_t digests[256], indices[256];
+    assert(list && list->nbTexture <= 256);
+    for (unsigned int i = 0; i < list->nbTexture; ++i) {
+        digests[i] = texture_digest(recvxGameBootTextureGet(list, i));
+        indices[i] = ((NJS_TEXMEMLIST *)(uintptr_t)list->textures[i].texaddr)->globalIndex;
+    }
+    unsigned char *previous = sys->memp;
+    sys->memp = (unsigned char *)bhCopyTexmem2MainmemSub(list, (char *)previous);
+    assert(sys->memp > previous && sys->memp <= sys->endp);
+    njReleaseTexture(list);
+    bhCopyMainmem2Texmem(list);
+    for (unsigned int i = 0; i < list->nbTexture; ++i) {
+        assert(texture_digest(recvxGameBootTextureGet(list, i)) == digests[i]);
+        assert(((NJS_TEXMEMLIST *)(uintptr_t)list->textures[i].texaddr)->globalIndex == indices[i]);
+    }
+    fprintf(stderr, "PASS: all %u original room textures survive arena backup/release/restore (%u bytes)\n",
+        list->nbTexture, (unsigned int)(sys->memp - previous));
+    sys->memp = previous;
+}
+
+static void test_loaded_player_restore(void)
+{
+    static const short health[] = {-1, 29, 30, 119, 120, 160};
+    extern const unsigned short PlMtnAct[2][3][7];
+    assert(sys->ply_id == 0);
+    for (unsigned int i = 0; i < sizeof(health) / sizeof(health[0]); ++i) {
+        sys->ply_hp[0] = health[i]; sys->ply_stflg[0] = 0;
+        bhResetPlayer();
+        int damage = health[i] >= 120 ? 0 : health[i] >= 30 ? 1 : 2;
+        EXP_WORK *expression = (EXP_WORK *)plp->exp0;
+        assert(plp->hp == health[i] && expression->dmlvl == damage && plp->mlwP == plp->mdl);
+        assert(sys->obwp[2].id == 1211 && sys->obwp[2].lkono == 5);
+        assert(sys->obwp[2].mdl[0].objP == plp->mdl[4].objP);
+        bhStandPlayerMotion();
+        assert(plp->mtn_no == PlMtnAct[expression->wpntp][damage][0] && plp->frm_no == 0);
+        assert(plp->mnwP == plp->mnwPb && !plp->hokan_count && !plp->hokan_rate);
+        assert(plp->mode0 == 1 && !plp->mode1 && !plp->mode2 && !plp->mode3);
+        assert(!recvxEngineOriginalFault());
+    }
+    puts("PASS: actual loaded Claire reset/equipment and standing injury motions through original motion/model calculation");
+    unsigned char *previous = sys->memp;
+    plp = &ene[0];
+    bhInitRoomChangePlayer();
+    assert(plp == &ply && plp->mlwP->texP == plp->txp[0]);
+    assert(plp->mode0 == 1 && !plp->mode1 && !plp->mode2 && !plp->mode3);
+    assert(plp->frm_no == 65536 && !plp->hokan_count && !plp->hokan_rate);
+    assert(plp->exp2 >= previous && plp->exp2 + 1712 == sys->memp && !((uintptr_t)plp->exp2 & 31u));
+    assert(((EXP_WORK *)plp->exp0)->bpy == plp->py + 12.5f);
+    assert(((short *)plp->exp1)[34] == -1 && !plp->kdnp && !recvxEngineOriginalFault());
+    puts("PASS: actual loaded room-change player floor/shadow/texture/motion setup and aligned pitch allocation");
+}
+
+static void test_loaded_inventory_transition(void)
+{
+    RecvxInputState input = {.analog_x = 128, .analog_y = 128};
+    RecvxLiveTaskProc original = bhSysTaskJumpTab[0];
+    NJS_TEXLIST *list = rom->mdl.texP;
+    uint32_t digests[256];
+    assert(list && list->nbTexture <= 256);
+    for (unsigned int i = 0; i < list->nbTexture; ++i)
+        digests[i] = texture_digest(recvxGameBootTextureGet(list, i));
+    recvxGameBootMovieShutdown();
+    /* Run the real inventory monitor stages in isolation from the opening
+       cutscene; no inventory drawing/dispatch replacement is installed. */
+    sys->tk_flg = 1; sys->ts_flg = 0; sys->cb_flg = 0;
+    sys->ef_flg = 0; sys->fade_an = 0;
+    sys->mn_mode0 = 0; sys->mn_setct = 1; sys->mn_stack[0] = 5;
+    bhSysTaskJumpTab[0] = inventory_transition_task;
+    tick(&input); assert(sys->mn_md0 == 5 && sys->mn_md1 == 1);
+    tick(&input); assert(sys->mn_md1 == 2 && sys->subtxp);
+    tick(&input); assert(sys->mn_md1 == 3 && !recvxGameBootFault());
+    for (unsigned int i = 0; i < list->nbTexture; ++i) assert(!list->textures[i].texaddr);
+    assert(!recvxGameBootRenderPending());
+    size_t draws; recvxGameBootDraws(&draws); assert(!draws);
+    bhCopyMainmem2Texmem(list);
+    for (unsigned int i = 0; i < list->nbTexture; ++i)
+        assert(texture_digest(recvxGameBootTextureGet(list, i)) == digests[i]);
+    bhSysTaskJumpTab[0] = original;
+    puts("PASS: real room inventory backup/read/release/ClearOT transition reaches texture initialization with restorable room textures");
+}
+#endif
+
 int main(int argc, char **argv)
 {
     size_t arena_size = 12u * 1024u * 1024u;
@@ -1191,8 +1358,9 @@ int main(int argc, char **argv)
     RecvxInputState input = {.analog_x = 128, .analog_y = 128};
     unsigned int i, warning_seen = 0, logo_seen = 0, title_seen = 0;
     unsigned int extra_frames = 1200;
+    int title_idle = argc == 3 && !strcmp(argv[2], "--title-idle");
     assert((argc == 2 || argc == 3 || argc == 4) && arena != MAP_FAILED);
-    if (argc == 3) assert(!strcmp(argv[2], "--missing-assets"));
+    if (argc == 3) assert(title_idle || !strcmp(argv[2], "--missing-assets"));
     if (argc == 4) {
         assert(!strcmp(argv[2], "--frames") && argv[3][0]);
         extra_frames = 0;
@@ -1214,7 +1382,9 @@ int main(int argc, char **argv)
     test_subplayer_movement(argv[1], arena, arena_size);
     test_player_control(argv[1], arena, arena_size);
     test_checkpoint(argv[1], arena, arena_size);
-    if (argc != 3) {
+    if (argc != 3 || title_idle) test_inventory_resource(argv[1], arena, arena_size);
+    test_gameplay_screen_saver(argv[1], arena, arena_size);
+    if (argc != 3 || title_idle) {
         test_player_source_bounds(argv[1]);
         test_weapon_source_bounds(argv[1]);
         test_message_bounds(argv[1], arena, arena_size);
@@ -1225,7 +1395,7 @@ int main(int argc, char **argv)
     }
     assert(recvxGameBootInit(argv[1], arena, arena_size) == 0);
     assert(sys->tk_flg == 1);
-    if (argc == 3) {
+    if (argc == 3 && !title_idle) {
         tick(&input);
         assert(recvxGameBootTick(&input) == -1);
         assert(strstr(recvxGameBootFault(), "archives/SYSTEM/1.bin"));
@@ -1242,6 +1412,22 @@ int main(int argc, char **argv)
     }
     assert(warning_seen && logo_seen && title_seen && textured_frames > 300);
     assert(sys->sys_partid == 6 && AdvWork.PatId == 3);
+    if (title_idle) {
+        /* Exercise the real 900-tick timeout, opening dispatch and SYSTEM
+           demo read, rather than jumping directly into the file loader. */
+        assert(sizeof(void *) == 4);
+        for (i = 0; i < 1100 && !sys->pdm_pd; ++i) tick(&input);
+        assert(i < 1100 && (sys->ss_flg & 0x400000));
+        assert(sys->pdm_dp && sys->mn_md1 == 1);
+        assert(sys->pdm_pd == sys->pdm_dp +
+            ((uintptr_t)&sys->save_end - (uintptr_t)&sys->version));
+        assert(recvxGameBootSourceRemaining(sys->pdm_pd) >= 4);
+        assert(GetReadFileStatus() == 0 && !recvxGameBootFault());
+        recvxGameBootMovieShutdown(); recvxAudioShutdown();
+        munmap(arena, arena_size);
+        puts("PASS: original title idle timeout loads SYSTEM demo state and recorded controller input");
+        return 0;
+    }
     capture = 1; capture_path = "/tmp/recvx-game-title.ppm"; tick(&input);
     press(&input, RECVX_BUTTON_START);
     for (i = 0; i < 30 && AdvWork.Mode != 9; ++i) tick(&input);
@@ -1329,6 +1515,7 @@ int main(int argc, char **argv)
     assert(rom->cut_n == 3 && rom->ene_n == 2 && rom->obj_n == 16 && rom->itm_n == 8);
     assert(sys->txr_n == 21 && sys->txr_ct == sys->txr_n);
     assert(rom->mdl.texP->nbTexture == 32);
+    test_room_texture_save();
     for (i = 0; i < (unsigned int)sys->txr_n; ++i) {
         unsigned int j;
         for (j = 0; j < sys->txlp[i]->nbTexture; ++j) {
@@ -1430,6 +1617,8 @@ int main(int argc, char **argv)
     assert(game_frames > 1 && game_frames <= extra_frames + 1);
     assert(presentations >= initial_presentations + extra_frames);
     fprintf(stderr, "Movie presentations (hardware call model): %u\n", movie_presentations);
+    test_loaded_player_restore();
+    test_loaded_inventory_transition();
 #endif
     recvxGameBootTexturesShutdown();
     recvxGameBootMovieShutdown();

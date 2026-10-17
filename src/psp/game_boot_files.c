@@ -74,8 +74,13 @@ void recvxGameBootMessageCheck(int type, int index)
 
 static void inside_path(char *path, size_t size, unsigned int partition, unsigned int id)
 {
-    const char *archive = partition == 3 ? "ADV" : partition == 6 ? "SYSTEM" : NULL;
-    if (!archive) recvxGameBootUnsupported("asset archive partition is not packaged");
+    static const char *const archives[] = {"BGM1", "VOICE1", "MULTSPQ1", "ADV", "ITEM1", "MRY", "SYSTEM"};
+    if (partition >= sizeof(archives) / sizeof(archives[0])) {
+        read_status = -1;
+        snprintf(path, size, "asset archive partition is not packaged: partition=%u entry=%u", partition, id);
+        recvxGameBootUnsupported(path);
+    }
+    const char *archive = archives[partition];
     if (snprintf(path, size, "%s/archives/%s/%u.bin", data_directory, archive, id) >= (int)size)
         recvxGameBootUnsupported("asset path exceeds its buffer");
 }

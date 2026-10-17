@@ -179,6 +179,40 @@ int main(void)
     expect(!bhCheckWallAttrB89(floors), "original wall attribute permits listed camera cut");
     cam.ncut = 7;
     expect(bhCheckWallAttrB89(floors), "original wall attribute blocks other camera cuts");
-    printf("original game collision: %u checks passed\n", checks);
+    reset(); room.etc_n = 3;
+    ledges[0].prm3 = 255; ledges[0].attr = 0x20; ledges[1].attr = 0x40;
+    bhSetUseKaidanFlag(plp, ledges, 0);
+    expect(ply.kdnp == &ledges[0].flg && ply.kdnidx == 0 &&
+           ledges[0].attr == 0x400020 && ledges[1].attr == 0x400040,
+           "stair reservation marks the authored forward pair and stores actor link");
+    bhClrUseKaidanFlag(plp);
+    expect(ledges[0].attr == 0x20 && ledges[1].attr == 0x40 && ply.kdnp == &ledges[0].flg,
+           "stair release clears only occupancy bits and retains original actor link");
+    ledges[1].prm3 = 255; ledges[1].prm0 = 1;
+    bhSetUseKaidanFlag(plp, &ledges[1], 1); bhClrUseKaidanFlag(plp);
+    expect(ledges[0].attr == 0x20 && ledges[1].attr == 0x40,
+           "backward stair pair releases both original room records");
+    ledges[0].prm3 = 2;
+    bhSetUseKaidanFlag(plp, ledges, 0); bhClrUseKaidanFlag(plp);
+    expect(ledges[2].attr == 0, "explicit stair link uses authored partner index");
+    state.metc_n = 2; state.metcp[0].prm3 = 255;
+    bhSetUseKaidanFlag(&ene[0], state.metcp, room.etc_n); bhClrUseKaidanFlag(&ene[0]);
+    expect(!state.metcp[0].attr && !state.metcp[1].attr,
+           "dynamic stair pair uses indices after the room's static records");
+    ply.kdnp = NULL; bhClrUseKaidanFlag(plp);
+    expect(!ply.kdnp, "clearing an unused stair remains an original no-op");
+    ledges[0].prm3 = 255; ledges[0].prm0 = 1;
+    if (!setjmp(fault_jump)) { bhSetUseKaidanFlag(plp, ledges, 0); expect(0, "stair underflow must fault"); }
+    expect(fault && strstr(fault, "adjacent") && ledges[0].attr == 0x20 && !ply.kdnp,
+           "invalid backward partner faults before actor or occupancy mutation");
+    ply.kdnp = &ledges[2].flg; ply.kdnidx = 2; ledges[2].prm3 = 255;
+    ledges[2].attr = 0x400000;
+    if (!setjmp(fault_jump)) { bhClrUseKaidanFlag(plp); expect(0, "stair overflow must fault"); }
+    expect(fault && strstr(fault, "adjacent") && ledges[2].attr == 0x400000,
+           "invalid forward partner faults before clearing the first record");
+    ledges[2].prm3 = 3;
+    if (!setjmp(fault_jump)) { bhClrUseKaidanFlag(plp); expect(0, "stair link must fault"); }
+    expect(fault && strstr(fault, "linked"), "explicit stair partner is bounded by room count");
+    printf("original game collision and stair occupancy: %u checks passed\n", checks);
     return 0;
 }

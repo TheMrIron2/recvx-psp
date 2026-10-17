@@ -4,7 +4,6 @@ ControlTypewriter
 CreateSysSaveScreen
 ExecuteSysSaveScreen
 ItemTaskCheck
-Ps2ClearOT
 SbsTextureInit
 StatusMain
 StatusMapFlagInit
@@ -12,13 +11,9 @@ bhCheckWall
 bhControlDoor
 bhControlGameOver
 bhControlMap
-bhControlScreenSaver
 bhControlSpEvtComputer
-bhCopyMainmem2Texmem
-bhCopyTexmem2MainmemSub
 bhDeleteYakkyou
 bhDispTime
-bhDrawScreenSaver
 bhEff000
 bhEff002
 bhEff003
@@ -298,18 +293,13 @@ bhExitDoor
 bhExitMap
 bhInitDoor
 bhInitMap
-bhInitRoomChangePlayer
-bhInitScreenSaver
 bhKeepSpEvtComputer
 bhPopAllTexture
 bhPushAllTexture
 bhReadDoorData
 bhReleaseMainTexture
-bhResetPlayer
 bhSetDoor
 bhSetMap
-bhSetScreenSaver
-bhStandPlayerMotion
 # Gameplay-loop callbacks: keep real boundaries until their ports are ready.
 bhStartDoorDemo
 bhCheckEvtTimer
@@ -332,7 +322,6 @@ bhCPM0_nothing
 bhArmIkMdk
 bhCheckExmAtari
 bhCheckKnifeAtari
-bhClrUseKaidanFlag
 bhFixPositionXYZ
 bhSetEffect
 bhSetWaterSplash

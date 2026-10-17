@@ -11,9 +11,11 @@
 #include "ps2/veronica/prog/ps2_NaSystem.h"
 #include "ps2/veronica/prog/ps2_NaTextureFunction.h"
 #include "ps2/veronica/prog/ps2_dummy.h"
+#include "ps2/veronica/prog/ps2_texture.h"
 
 static SYS_WORK work;
 SYS_WORK *sys = &work;
+unsigned char *freemem;
 static jmp_buf fault;
 static const char *fault_name;
 static int expecting_fault;
@@ -21,8 +23,9 @@ unsigned int palbuf[4096];
 static RecvxBootTexture snapshots[8];
 static size_t snapshot_count;
 static int render_pending;
+static unsigned int presents;
 void recvxGameBootLog(const char *format, ...) { (void)format; }
-void recvxGameBootPresent(void) { assert(!"texture test must not submit draws"); }
+void recvxGameBootPresent(void) { ++presents; recvxGameBootDrawDiscard(); render_pending = 0; }
 int recvxGameBootRenderPending(void) { return render_pending; }
 const RecvxBootTexture *recvxGameBootRenderSnapshotTexture(const RecvxBootTexture *texture)
 {
@@ -97,6 +100,72 @@ static void texture_resolution(void)
     recvxGameBootRenderTextureList(NULL);
     REJECT(recvxGameBootRenderTextureSelect(NULL, 0), "texture exceeds");
     list.nbTexture = 257; REJECT(recvxGameBootRenderTextureList(&list), "render texture list");
+}
+
+static void room_texture_backup(void)
+{
+    static unsigned char arena[65536];
+    NJS_TEXNAME names[2] = {{0}}, menu_name = {0};
+    NJS_TEXLIST list = {names, 2}, menu = {&menu_name, 1}, wrong = {names, 1};
+    freemem = arena; sys->endp = arena + sizeof(arena); sys->memp = arena + 3;
+    Init_PS2_SAVE_TEX();
+    for (unsigned int i = 0; i < 2; ++i) {
+        size_t size;
+        unsigned char *data = texture_data(i ? 1024 : 16, i ? 5 : 4, &size);
+        recvxGameBootTextureInstall(&list, i, data, size, 0, 700 + i, 0x10 + i, 3 + i);
+        free(data);
+        RecvxBootTexture *texture = (RecvxBootTexture *)recvxGameBootTextureGet(&list, i);
+        texture->pixels[5] = 77 + i; texture->palette[2] = 0x12345678u + i;
+    }
+    char *end = bhCopyTexmem2MainmemSub(&list, (char *)sys->memp);
+    assert(end > (char *)sys->memp && end <= (char *)sys->endp && sys->memp == arena + 3);
+    REJECT(bhCopyTexmem2MainmemSub(&list, (char *)sys->endp - 1), "backup exceeds");
+    REJECT(bhCopyMainmem2Texmem(&wrong), "mismatched");
+    njReleaseTexture(&list);
+    size_t size;
+    unsigned char *data = texture_data(16, 4, &size);
+    recvxGameBootTextureInstall(&menu, 0, data, size, 0, 999, 0, 0); free(data);
+    const RecvxBootTexture *menu_texture = recvxGameBootTextureGet(&menu, 0);
+    unsigned int before = presents;
+    render_pending = 1;
+    bhCopyMainmem2Texmem(&list);
+    assert(presents == before + 1 && !render_pending);
+    assert(recvxGameBootTextureGet(&menu, 0) == menu_texture && menu_texture->pixels[0] == 2);
+    for (unsigned int i = 0; i < 2; ++i) {
+        const RecvxBootTexture *texture = recvxGameBootTextureGet(&list, i);
+        NJS_TEXMEMLIST *descriptor = (NJS_TEXMEMLIST *)(uintptr_t)names[i].texaddr;
+        assert(texture->pixels[5] == 77 + i && texture->palette[2] == 0x12345678u + i);
+        assert(descriptor->globalIndex == 700 + i && descriptor->bank == 3 + i);
+        assert(names[i].attr == 0x10 + i && !memcmp(texture->source, "TIM2", 4));
+    }
+    assert(recvxGameBootTextureGet(&list, 1)->tile_count == 2);
+    REJECT(bhCopyMainmem2Texmem(&list), "mismatched");
+    /* A restore without release must replace the live copies without leaking
+       slots, while repeated saves replace the retail single backup. */
+    for (unsigned int i = 0; i < 260; ++i) {
+        bhCopyTexmem2MainmemSub(&list, (char *)sys->memp);
+        bhCopyMainmem2Texmem(&list);
+    }
+    bhCopyTexmem2MainmemSub(&list, (char *)sys->memp);
+    unsigned char saved = sys->memp[0]; sys->memp[0] ^= 1;
+    REJECT(bhCopyMainmem2Texmem(&list), "backup record");
+    assert(recvxGameBootTextureGet(&list, 0)->pixels[5] == 77);
+    sys->memp[0] = saved;
+    /* Global eviction leaves old list handles behind; their slots may be
+       reused by unrelated artwork before this room is restored. */
+    njReleaseTextureAll();
+    data = texture_data(16, 4, &size);
+    recvxGameBootTextureInstall(&menu, 0, data, size, 0, 1000, 0, 0); free(data);
+    bhCopyMainmem2Texmem(&list);
+    assert(recvxGameBootTextureGet(&menu, 0)->pixels[0] == 2);
+    assert(recvxGameBootTextureGet(&list, 0)->pixels[5] == 77);
+    bhCopyTexmem2MainmemSub(&list, (char *)sys->memp);
+    recvxGameBootTexturesShutdown();
+    REJECT(bhCopyMainmem2Texmem(&list), "mismatched");
+    NJS_TEXLIST empty = {0};
+    assert(bhCopyTexmem2MainmemSub(&empty, (char *)sys->endp) == (char *)sys->endp);
+    bhCopyMainmem2Texmem(&empty);
+    Init_PS2_SAVE_TEX(); freemem = NULL; sys->endp = NULL;
 }
 
 static void original_render_controls(void)
@@ -179,7 +248,7 @@ static void sampler_bits(void)
 
 int main(void)
 {
-    texture_resolution(); original_render_controls(); sampler_bits(); queued_palette_changes();
-    puts("PASS: real owned TIM2 material resolution, wide texture tiles, released/missing descriptors, queued palette bank snapshots, original control/material/ambient state, blend mapping and authored clamp/mirror/filter bits");
+    texture_resolution(); room_texture_backup(); original_render_controls(); sampler_bits(); queued_palette_changes();
+    puts("PASS: owned TIM2 materials, room texture arena save/restore with live palettes/pixels, repeated restore and slot reuse, wide tiles, released/missing descriptors, queued palette snapshots, original render controls and sampler bits");
     return 0;
 }

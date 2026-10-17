@@ -73,6 +73,38 @@ static void table_prepare(const ATR_WORK *table, int count)
         recvxGameBootUnsupported("invalid original room collision table");
 }
 
+void recvxGameBootCollisionStairPrepare(BH_PWORK *actor, ATR_WORK *stair, int index, int setting)
+{
+    if (!sys || !rom || !actor || (actor != plp && !array_member(actor, ene, 128, sizeof(*ene))))
+        recvxGameBootUnsupported("invalid stair collision actor");
+    if (setting < 0) {
+        stair = (ATR_WORK *)actor->kdnp;
+        index = actor->kdnidx;
+    }
+    if (!stair) {
+        if (setting > 0) recvxGameBootUnsupported("missing stair collision record");
+        return;
+    }
+    if (sys->metc_n < 0 || sys->metc_n > 64)
+        recvxGameBootUnsupported("invalid dynamic stair collision count");
+    table_prepare(rom->etcp, rom->etc_n);
+    if (!array_member(stair, rom->etcp, rom->etc_n, sizeof(*stair)) &&
+        !array_member(stair, sys->metcp, sys->metc_n, sizeof(*stair)))
+        recvxGameBootUnsupported("invalid stair collision record");
+    if (stair->prm3 != 255) {
+        if (stair->prm3 >= rom->etc_n)
+            recvxGameBootUnsupported("invalid linked stair collision index");
+        return;
+    }
+    int room_count = rom->etc_n;
+    if (index < 0 || (index >= room_count && index - room_count >= sys->metc_n))
+        recvxGameBootUnsupported("invalid stair collision index");
+    int local = index < room_count ? index : index - room_count;
+    int count = index < room_count ? room_count : sys->metc_n;
+    if (stair->prm0 == 0 ? local >= count - 1 : local == 0)
+        recvxGameBootUnsupported("invalid adjacent stair collision index");
+}
+
 void recvxGameBootCollisionFloorsPrepare(BH_PWORK *actor, int floor_query)
 {
     if (!sys || !rom || !plp || sys->metc_n < 0 || sys->metc_n > 64 ||

@@ -19,9 +19,12 @@ def prepare(iso_path, output):
                  mkiso.dump_dir_records(iso, mkiso.LAYER0_PVD_LOCATION, 0).files}
         if 'SLUS_201.84' not in files:
             raise ValueError('boot assets require the USA SLUS_201.84 disc')
-        for name, partition, entries in [('SYSTEM', 6, [1, 2, 10, 20]),
+        # Title idle starts a recorded demo (SYSTEM entries 4..9), and its
+        # saved state can select other players/weapons. Keep the complete
+        # archive rather than the opening-room-only resource selection.
+        for name, partition, entries in [('SYSTEM', 6, None),
                                         ('BGM1', 0, None), ('VOICE1', 1, None), ('MULTSPQ1', 2, None),
-                                        ('ADV', 3, None)]:
+                                        ('ADV', 3, None), ('ITEM1', 4, None), ('MRY', 5, None)]:
             source = files[name + '.AFS']
             archive = read_afs_index(iso, source.lba, source.size)
             for entry in range(len(archive.entries)) if entries is None else entries:

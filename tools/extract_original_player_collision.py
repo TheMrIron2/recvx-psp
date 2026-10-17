@@ -32,6 +32,7 @@ def prepare(destination):
               '#include "ps2/veronica/prog/ps2_NaMatrix.h"',
               'void recvxGameBootCollisionActorsPrepare(BH_PWORK *actor, int player_contact);',
               'void recvxGameBootCollisionFloorsPrepare(BH_PWORK *actor, int floor_query);',
+              'void recvxGameBootCollisionStairPrepare(BH_PWORK *, ATR_WORK *, int, int);',
               'uintptr_t recvxGameBootCollisionActorAddress(const void *actor);']
     guards = {
         'bhCheckEnemies': 'recvxGameBootCollisionActorsPrepare(pp, 0);',
@@ -43,6 +44,8 @@ def prepare(destination):
         'bhCheckFloorEffect': 'recvxGameBootCollisionFloorsPrepare(NULL, 2);',
         'bhCheckFloorEnemy': 'recvxGameBootCollisionFloorsPrepare(NULL, 2);',
         'bhCheckWallAttrB89': '',
+        'bhSetUseKaidanFlag': 'recvxGameBootCollisionStairPrepare(pp, exp, idx, 1);',
+        'bhClrUseKaidanFlag': 'recvxGameBootCollisionStairPrepare(pp, NULL, 0, -1);',
     }
     for name, guard in guards.items():
         line, function = extract(source, name)
