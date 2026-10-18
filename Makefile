@@ -136,6 +136,8 @@ BOOT_EVENT_SCREEN_SOURCE := $(BUILD_DIR)/game_boot_event_screen_original.c
 BOOT_EVENT_SCREEN_OBJECT := $(BUILD_DIR)/game_boot_event_screen_original.o
 BOOT_EVENT_CAMERA_SOURCE := $(BUILD_DIR)/game_boot_event_camera_original.c
 BOOT_EVENT_CAMERA_OBJECT := $(BUILD_DIR)/game_boot_event_camera_original.o
+BOOT_EVENT_REMAINING_SOURCE := $(BUILD_DIR)/game_boot_event_remaining_original.c
+BOOT_EVENT_REMAINING_OBJECT := $(BUILD_DIR)/game_boot_event_remaining_original.o
 BOOT_EVENT_ACTOR_SOURCE := $(BUILD_DIR)/game_boot_event_actor_original.c
 BOOT_EVENT_ACTOR_OBJECT := $(BUILD_DIR)/game_boot_event_actor_original.o
 BOOT_ITEM_VIEW_SOURCE := $(BUILD_DIR)/game_boot_item_view_original.c
@@ -157,7 +159,7 @@ BOOT_SAVE_CONTROLLERS_OBJECT := $(BUILD_DIR)/game_boot_save_controllers_original
 # Newlib reads these from its CRT, linked after our intermediate GC pass.
 BOOT_RUNTIME_ROOTS := -u sce_newlib_attribute -u sce_newlib_heap_kb_size -u sce_newlib_heap_threshold_kb_size
 LIBS += -lpspmpeg -lpsprtc
-SOURCES := src/psp/game_main.c src/psp/game_boot_map.c src/psp/game_boot_file_view.c src/psp/game_boot_save_storage.c src/ps2/veronica/prog/item.c src/psp/game_boot_inventory_control.c src/psp/game_boot_terminal_gameover.c src/psp/game_boot_door.c src/psp/game_boot_actor_wall.c src/psp/game_boot_item_view.c src/psp/game_boot_sys_save.c src/psp/game_boot_save_controllers.c src/psp/game_boot_movie.c src/psp/game_boot_movie_psp.c src/psp/game_boot_event_movie.c src/psp/game_boot_event_actor.c src/psp/game_boot.c \
+SOURCES := src/psp/game_main.c src/psp/game_boot_map.c src/psp/game_boot_file_view.c src/psp/game_boot_save_storage.c src/ps2/veronica/prog/item.c src/psp/game_boot_inventory_control.c src/psp/game_boot_terminal_gameover.c src/psp/game_boot_door.c src/psp/game_boot_actor_wall.c src/psp/game_boot_item_view.c src/psp/game_boot_sys_save.c src/psp/game_boot_save_controllers.c src/psp/game_boot_movie.c src/psp/game_boot_movie_psp.c src/psp/game_boot_event_movie.c src/psp/game_boot_event_remaining.c src/psp/game_boot_event_actor.c src/psp/game_boot.c \
 	src/psp/game_boot_files.c src/psp/game_boot_services.c src/psp/game_boot_sound.c src/psp/game_boot_audio.c src/psp/game_boot_movie_audio.c src/psp/game_boot_audio_psp.c \
 	src/psp/game_boot_draw.c src/psp/game_boot_draw_control.c src/psp/game_boot_draw_skin.c src/psp/game_boot_effect_draw.c src/psp/game_boot_skin.c src/psp/game_boot_morph.c src/psp/game_boot_effect_sprites.c src/psp/game_boot_effect_shadow.c src/psp/game_boot_fog.c src/psp/game_boot_effect_lines.c src/psp/game_boot_effect_thl.c src/psp/game_boot_effect_2d.c src/psp/game_boot_thunder.c src/psp/game_boot_render.c src/psp/game_boot_chunk.c src/psp/game_boot_render_texture.c src/psp/game_boot_texture.c src/psp/game_boot_gu.c src/psp/game_boot_cut.c src/psp/game_boot_checkpoint.c src/psp/engine_original_view.c src/psp/engine_original_lighting_psp.c \
 	src/psp/engine_original_memory.c src/psp/engine_original_fault.c \
@@ -174,7 +176,7 @@ SOURCES := src/psp/game_main.c src/psp/game_boot_map.c src/psp/game_boot_file_vi
 	src/psp/engine_original_effect.c src/psp/game_boot_mask.c src/psp/game_boot_mask_anim.c src/psp/game_boot_event.c src/psp/game_boot_event_control.c src/psp/game_boot_event_inventory.c src/psp/game_boot_event_conditions.c src/psp/game_boot_event_effect.c src/psp/game_boot_event_screen.c src/psp/game_boot_event_camera.c src/psp/game_boot_event_sound.c src/psp/game_boot_message_control.c src/psp/game_boot_effect_control.c src/psp/event_core.c src/ps2/veronica/prog/Motion.c \
 	src/psp/engine_original_effect_init.c src/ps2/veronica/prog/binfunc.c \
 	src/ps2/veronica/prog/camera.c src/psp/engine_original_matrix_cpu.c \
-	$(BOOT_PLAYER_HEAD_OBJECT) $(BOOT_WORLD_CONTROL_OBJECT) $(BOOT_VISIBILITY_OBJECT) $(BOOT_LIGHT_OBJECT) $(BOOT_OVERLAY_OBJECT) $(BOOT_PLAYER_ACTION_OBJECT) $(BOOT_DRAW_CONTROL_OBJECT) $(BOOT_DRAW_SKIN_OBJECT) $(BOOT_EFFECT_DRAW_OBJECT) $(BOOT_EFFECT_SPRITES_OBJECT) $(BOOT_EFFECT_SHADOW_OBJECT) $(BOOT_EFFECT_LINES_OBJECT) $(BOOT_EFFECT_THL_OBJECT) $(BOOT_EFFECT_2D_OBJECT) $(BOOT_EFFECT_VIGNETTE_OBJECT) $(BOOT_MESSAGE_CONTROL_OBJECT) $(BOOT_EVENT_SOUND_OBJECT) $(BOOT_EVENT_SCREEN_OBJECT) $(BOOT_EVENT_CAMERA_OBJECT) $(BOOT_EVENT_ACTOR_OBJECT) $(BOOT_ITEM_VIEW_OBJECT) $(BOOT_ACTOR_WALL_OBJECT) $(BOOT_DOOR_CONTROL_OBJECT) $(BOOT_TERMINAL_GAMEOVER_OBJECT) $(BOOT_INVENTORY_CONTROL_OBJECT) $(BOOT_MAP_CONTROL_OBJECT) $(BOOT_FILE_VIEW_OBJECT) $(BOOT_SAVE_CONTROLLERS_OBJECT) $(BOOT_INITIALIZERS_OBJECT) $(BOOT_SEQUENCE_OBJECT) $(BOOT_PLAYER_CONTROL_OBJECT) $(BOOT_CUT_CONTROL_OBJECT) $(BOOT_PLAYER_PITCH_OBJECT) $(BOOT_PLAYER_COLLISION_OBJECT) $(BOOT_WALL_OBJECT) $(BOOT_WALL_GEOMETRY_OBJECT)
+	$(BOOT_PLAYER_HEAD_OBJECT) $(BOOT_WORLD_CONTROL_OBJECT) $(BOOT_VISIBILITY_OBJECT) $(BOOT_LIGHT_OBJECT) $(BOOT_OVERLAY_OBJECT) $(BOOT_PLAYER_ACTION_OBJECT) $(BOOT_DRAW_CONTROL_OBJECT) $(BOOT_DRAW_SKIN_OBJECT) $(BOOT_EFFECT_DRAW_OBJECT) $(BOOT_EFFECT_SPRITES_OBJECT) $(BOOT_EFFECT_SHADOW_OBJECT) $(BOOT_EFFECT_LINES_OBJECT) $(BOOT_EFFECT_THL_OBJECT) $(BOOT_EFFECT_2D_OBJECT) $(BOOT_EFFECT_VIGNETTE_OBJECT) $(BOOT_MESSAGE_CONTROL_OBJECT) $(BOOT_EVENT_SOUND_OBJECT) $(BOOT_EVENT_SCREEN_OBJECT) $(BOOT_EVENT_CAMERA_OBJECT) $(BOOT_EVENT_ACTOR_OBJECT) $(BOOT_EVENT_REMAINING_OBJECT) $(BUILD_DIR)/game_boot_event_services_original.o $(BOOT_ITEM_VIEW_OBJECT) $(BOOT_ACTOR_WALL_OBJECT) $(BOOT_DOOR_CONTROL_OBJECT) $(BOOT_TERMINAL_GAMEOVER_OBJECT) $(BOOT_INVENTORY_CONTROL_OBJECT) $(BOOT_MAP_CONTROL_OBJECT) $(BOOT_FILE_VIEW_OBJECT) $(BOOT_SAVE_CONTROLLERS_OBJECT) $(BOOT_INITIALIZERS_OBJECT) $(BOOT_SEQUENCE_OBJECT) $(BOOT_PLAYER_CONTROL_OBJECT) $(BOOT_CUT_CONTROL_OBJECT) $(BOOT_PLAYER_PITCH_OBJECT) $(BOOT_PLAYER_COLLISION_OBJECT) $(BOOT_WALL_OBJECT) $(BOOT_WALL_GEOMETRY_OBJECT)
 else ifeq ($(BUILD_PROFILE),engine-event-test)
 BUILD_DIR := build/psp-engine-event-test
 TARGET := $(BUILD_DIR)/recvx-event-test
@@ -644,7 +646,7 @@ HOST_FLAGS := -std=c11 -O1 -g -Wall -Wextra -Werror -Iinclude -Iinclude/ps2/vero
 HOST_EVENT_FLAGS := $(HOST_FLAGS) -fsigned-char -D__PSP__ -DRECVX_EVENT_CORE_HOST_TEST -DRECVX_EVENT_CORE_TEST -idirafter include/recvx-decomp-katana/KATANA/Include
 HOST_ORIGINAL_ENGINE_FLAGS := $(HOST_FLAGS) -fsigned-char -D__PSP__ -idirafter include/recvx-decomp-katana/KATANA/Include
 HOST_BOOT_TEST := build/host/game-boot-test
-HOST_BOOT_SOURCES := src/psp/game_boot_map.c src/psp/game_boot_file_view.c src/psp/game_boot_save_storage.c build/host/game_boot_file_view_original.c src/ps2/veronica/prog/item.c build/host/game_boot_map_control_original.c src/psp/game_boot_inventory_control.c build/host/game_boot_inventory_control_original.c src/psp/game_boot_terminal_gameover.c build/host/game_boot_terminal_gameover_original.c src/psp/game_boot_door.c build/host/game_boot_door_control_original.c src/psp/game_boot_actor_wall.c build/host/game_boot_actor_wall_original.c src/psp/game_boot_item_view.c build/host/game_boot_item_view_original.c build/host/psp_debug_font.c build/host/game_boot_save_controllers_original.c src/psp/game_boot_sys_save.c src/psp/game_boot_save_controllers.c src/psp/game_boot_movie.c src/psp/game_boot_event_actor.c src/psp/game_boot_event_movie.c tests/game_boot_movie_native_host.c src/psp/game_boot.c src/psp/game_boot_files.c \
+HOST_BOOT_SOURCES := src/psp/game_boot_map.c src/psp/game_boot_file_view.c src/psp/game_boot_save_storage.c build/host/game_boot_file_view_original.c src/ps2/veronica/prog/item.c build/host/game_boot_map_control_original.c src/psp/game_boot_inventory_control.c build/host/game_boot_inventory_control_original.c src/psp/game_boot_terminal_gameover.c build/host/game_boot_terminal_gameover_original.c src/psp/game_boot_door.c build/host/game_boot_door_control_original.c src/psp/game_boot_actor_wall.c build/host/game_boot_actor_wall_original.c src/psp/game_boot_item_view.c build/host/game_boot_item_view_original.c build/host/psp_debug_font.c build/host/game_boot_save_controllers_original.c src/psp/game_boot_sys_save.c src/psp/game_boot_save_controllers.c src/psp/game_boot_movie.c src/psp/game_boot_event_remaining.c src/psp/game_boot_event_actor.c src/psp/game_boot_event_movie.c tests/game_boot_movie_native_host.c src/psp/game_boot.c src/psp/game_boot_files.c \
 	src/psp/game_boot_sound.c src/psp/game_boot_audio.c src/psp/game_boot_movie_audio.c src/psp/game_boot_audio_psp.c \
 	build/host/game_boot_sequence.c \
 	build/host/game_boot_wall_original.c \
@@ -659,7 +661,7 @@ HOST_BOOT_SOURCES := src/psp/game_boot_map.c src/psp/game_boot_file_view.c src/p
 	build/host/game_boot_draw_skin_original.c \
 	build/host/game_boot_effect_draw_original.c \
 	build/host/game_boot_effect_sprites_original.c \
-	build/host/game_boot_effect_shadow_original.c build/host/game_boot_effect_lines_original.c build/host/game_boot_effect_thl_original.c build/host/game_boot_effect_2d_original.c build/host/game_boot_effect_vignette_original.c build/host/game_boot_message_control_original.c build/host/game_boot_event_sound_original.c build/host/game_boot_event_screen_original.c build/host/game_boot_event_camera_original.c build/host/game_boot_event_actor_original.c \
+	build/host/game_boot_effect_shadow_original.c build/host/game_boot_effect_lines_original.c build/host/game_boot_effect_thl_original.c build/host/game_boot_effect_2d_original.c build/host/game_boot_effect_vignette_original.c build/host/game_boot_message_control_original.c build/host/game_boot_event_sound_original.c build/host/game_boot_event_screen_original.c build/host/game_boot_event_camera_original.c build/host/game_boot_event_actor_original.c build/host/game_boot_event_remaining_original.c build/host/game_boot_event_services_original.c \
 	build/host/game_boot_player_control.c \
 	build/host/game_boot_player_pitch_original.c build/host/game_boot_player_collision_original.c \
 	build/host/game_boot_cut_control.c src/psp/game_boot_cut.c src/psp/game_boot_checkpoint.c src/psp/engine_original_view.c src/psp/engine_original_lighting_psp.c \
@@ -1150,7 +1152,7 @@ game-boot-gu-test: build/host/game-boot-gu-test
 
 GAME_BOOT_RENDER_TEST_SOURCES := tests/game_boot_render_test.c src/psp/game_boot_fog.c src/psp/game_boot_render.c src/psp/game_boot_chunk.c src/psp/game_boot_render_texture.c src/psp/engine_original_lighting_psp.c src/psp/engine_original_view.c src/psp/engine_original_matrix_cpu.c src/psp/engine_original_math.c src/psp/engine_original_fault.c
 build/host/game-boot-render-test: $(GAME_BOOT_RENDER_TEST_SOURCES) $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
-	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_GAME_BOOT_HOST_TEST -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
 		-ffunction-sections -fdata-sections $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
 
 build/host/game-boot-chunk-test: tests/game_boot_chunk_test.c src/psp/game_boot_chunk.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
@@ -1452,12 +1454,12 @@ build/host/game_boot_actor_wall_original.c: tools/extract_original_actor_wall.py
 	@mkdir -p $(@D)
 	python3 $< $@
 
-$(BOOT_DOOR_CONTROL_SOURCE): tools/extract_original_door_control.py tools/extract_original_boot_initializers.py src/ps2/veronica/prog/door.c
+$(BOOT_DOOR_CONTROL_SOURCE): tools/extract_original_door_control.py tools/extract_original_boot_initializers.py src/ps2/veronica/prog/door.c src/ps2/veronica/prog/room.c
 	@mkdir -p $(@D)
 	python3 $< $@
 $(BOOT_DOOR_CONTROL_OBJECT): $(BOOT_DOOR_CONTROL_SOURCE) Makefile
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
-build/host/game_boot_door_control_original.c: tools/extract_original_door_control.py tools/extract_original_boot_initializers.py src/ps2/veronica/prog/door.c
+build/host/game_boot_door_control_original.c: tools/extract_original_door_control.py tools/extract_original_boot_initializers.py src/ps2/veronica/prog/door.c src/ps2/veronica/prog/room.c
 	@mkdir -p $(@D)
 	python3 $< $@
 
@@ -1566,3 +1568,19 @@ game-boot-gu-raster-test: build/psp-tests/gu-depth.prx
 	cat build/psp-tests/gu-depth.log
 	! rg '^FAIL:' build/psp-tests/gu-depth.log
 	rg '^PASS: PSP GU translucent screen depth, opaque occlusion, per-texel alpha and Ninja winding' build/psp-tests/gu-depth.log
+
+$(BOOT_EVENT_REMAINING_SOURCE): tools/extract_original_event_remaining.py tools/extract_original_boot_initializers.py tools/extract_original_event_commands.py include/psp/game_boot_event_remaining.inc src/ps2/veronica/prog/event.c
+	python3 $< $@
+$(BOOT_EVENT_REMAINING_OBJECT): $(BOOT_EVENT_REMAINING_SOURCE) Makefile
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+build/host/game_boot_event_remaining_original.c: tools/extract_original_event_remaining.py tools/extract_original_boot_initializers.py tools/extract_original_event_commands.py include/psp/game_boot_event_remaining.inc src/ps2/veronica/prog/event.c
+	python3 $< $@
+
+$(BUILD_DIR)/game_boot_event_services_original.c build/host/game_boot_event_services_original.c: tools/extract_original_event_services.py $(wildcard src/ps2/veronica/prog/*.c)
+	python3 $< $@
+$(BUILD_DIR)/game_boot_event_services_original.o: $(BUILD_DIR)/game_boot_event_services_original.c Makefile
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+.PHONY: game-boot-opcode-check
+game-boot-opcode-check:
+	python3 tools/check_game_boot_opcodes.py

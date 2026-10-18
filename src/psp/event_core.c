@@ -530,6 +530,39 @@ static int validate_core_instruction(unsigned int opcode)
 {
     size_t extent = 1;
 
+#ifdef RECVX_GAME_BOOT
+    int remaining_extent=-1;
+    switch(opcode){
+#define RECVX_EVENT_REMAINING(number,handler,bytes) case number:remaining_extent=bytes;break;
+#include "psp/game_boot_event_remaining.inc"
+#undef RECVX_EVENT_REMAINING
+    default:break;
+    }
+    if(remaining_extent>=0){
+        if(remaining_extent==0){
+            if(!has_task_bytes(bhScePtr,2)){
+                set_fault(RECVX_EVENT_FAULT_TRUNCATED,(uint8_t)opcode,bhScePtr);return -1;
+            }
+            unsigned int sub=bhScePtr[1];
+            if(opcode==102)remaining_extent=sub==1?2:sub==20?4:-1;
+            else switch(sub){
+            case 0:case 52:case 128:case 130:case 139:case 142:remaining_extent=2;break;
+            case 7:case 140:remaining_extent=8;break;
+            case 12:case 13:case 132:case 141:case 145:remaining_extent=6;break;
+            case 131:case 137:case 143:case 150:remaining_extent=4;break;
+            case 129:remaining_extent=12;break;
+            default:remaining_extent=-1;break;
+            }
+            if(remaining_extent<0){set_fault(RECVX_EVENT_FAULT_UNSUPPORTED,(uint8_t)opcode,bhScePtr);return -1;}
+        }
+        if(!has_task_bytes(bhScePtr,(size_t)remaining_extent)){
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED,(uint8_t)opcode,bhScePtr);return -1;
+        }
+        if(!sys){set_fault(RECVX_EVENT_FAULT_BAD_TASK,(uint8_t)opcode,bhScePtr);return -1;}
+        return 0;
+    }
+#endif
+
     if (opcode == 0) {
         extent = 1;
     } else if (opcode == 1) {
@@ -837,6 +870,16 @@ static int validate_core_instruction(unsigned int opcode)
             (opcode == 83 && (sys->itwp == NULL || bhScePtr[2] >= 39936u / sizeof(O_WRK)))) {
             set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
             return -1;
+        }
+        return 0;
+    } else if (opcode == 52) {
+        if(!has_task_bytes(bhScePtr,12)){
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED,(uint8_t)opcode,bhScePtr);return -1;
+        }
+        if(!sys||!plp||!sys->obwp||bhScePtr[2]>=39936u/sizeof(O_WRK)||
+           (bhScePtr[4]==0&&(!plp->mlwP||!plp->mlwP->owP||plp->mlwP->obj_num>512||
+                            bhScePtr[3]>=plp->mlwP->obj_num))){
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND,(uint8_t)opcode,bhScePtr);return -1;
         }
         return 0;
     } else if (opcode == 59) {

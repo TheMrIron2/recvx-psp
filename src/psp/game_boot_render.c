@@ -7,6 +7,7 @@
 #include "psp/game_boot_chunk.h"
 #include "psp/game_boot_render_texture.h"
 #include "psp/game_boot_fog.h"
+#include "psp/game_boot_vector.h"
 #include "psp/engine_original_fault.h"
 #include "psp/engine_original_lighting.h"
 #include "psp/engine_original_matrix.h"
@@ -24,6 +25,8 @@ static RecvxBootRenderVertex *vertices;
 static RecvxBootRenderBatch *batches;
 static size_t vertex_capacity, batch_capacity, vertex_count, batch_count;
 static int shadow_active;
+static RecvxBootRenderStats render_stats;
+RecvxBootRenderStats recvxGameBootRenderStats(void){return render_stats;}
 static int user_scissor[4] = {0,0,480,272};
 
 void njUserClipping(Int mode, NJS_POINT2 *points)
@@ -87,6 +90,7 @@ void recvxGameBootRenderReset(void)
     /* A fault may leave 2D overlays pointing into the same palette views.
        Discard those draws before freeing their frame-owned snapshots. */
     if (recvxGameBootDrawDiscard) recvxGameBootDrawDiscard();
+    memset(&render_stats,0,sizeof(render_stats));
     free(vertices); free(batches); vertices = NULL; batches = NULL;
     vertex_capacity = batch_capacity = 0;
     memset(&frame, 0, sizeof(frame));
@@ -318,10 +322,27 @@ static unsigned int byte(float value)
     return (unsigned int)(fminf(1, fmaxf(0, value)) * 255.0f + 0.5f);
 }
 
+typedef struct VertexCache {
+    unsigned int draw,index,material,color;
+    NJS_POINT3 position;
+    NJS_VECTOR normal;
+    int normal_ready,normal_valid;
+} VertexCache;
+/* Bounded scratch space, invalidated per draw: animated/replaced streams never
+   share results. Flat-shaded faces deliberately bypass the color cache. */
+static VertexCache vertex_cache[256];
+static unsigned int draw_serial;
+
 typedef struct DrawContext {
     NJS_MATRIX matrix, normals;
     int sprite, textured, trans, half_fog;
     int custom_clip;
+    unsigned int draw,material_serial;
+    RecvxGameChunkMaterial material;
+    int material_valid,lights_prepared;
+    NJS_VECTOR light_direction;
+    int light_direction_valid;
+    NJS_POINT3 light_positions[8];
     float clip_planes[6][4];
     unsigned int fog_color;
     const RecvxGameBootRenderState *state;
@@ -403,7 +424,53 @@ static unsigned int clip_triangle(const RecvxBootRenderVertex input[3],const flo
     return emitted;
 }
 
-static unsigned int shade(const DrawContext *context, const RecvxGameChunkMaterial *material,
+static void prepare_lights(DrawContext *context)
+{
+    if(context->lights_prepared)return;
+    int simple=context->state->current_draw_mode>=2;
+    int multi=context->state->current_draw_mode&1;
+    const RecvxEngineOriginalLightingState *lighting=context->lighting;
+    const RecvxEngineOriginalLightValue *lights=simple?lighting->simple:lighting->easy;
+    if(multi){
+        int count=simple?lighting->simple_count:lighting->easy_count;
+        if(count<0||count>7)recvxGameBootUnsupported("invalid original model light count");
+        for(int i=1;i<=count;++i)if(lights[i].enabled){
+            if(i==1){
+                NJS_VECTOR direction=lights[0].direction;
+                njCalcVector(cam.mtx,&direction,&context->light_direction);checked_math();
+            }else{
+                NJS_POINT3 point=lights[i].position;
+                njCalcPoint(cam.mtx,&point,&context->light_positions[i]);checked_math();
+                if(!isfinite(lights[i].near_range)||!isfinite(lights[i].far_range)||lights[i].near_range<0||lights[i].far_range<0)
+                    recvxGameBootUnsupported("invalid original model point light range");
+            }
+        }
+    }else context->light_direction=simple?lighting->simple_direction:lighting->easy_direction;
+    context->light_direction.x=-context->light_direction.x;
+    context->light_direction.y=-context->light_direction.y;
+    context->light_direction.z=-context->light_direction.z;
+    context->light_direction_valid=normalize(&context->light_direction);
+    context->lights_prepared=1;
+}
+
+/* Retail textured color table: Easy uses an overbright ramp; Simple single
+   uses power 17; Simple multi excludes ambient from the overbright ramp.
+   ps2_Vu1Strip.c scales specular by 31 and diffuse by 128. */
+static int specular_enabled(const DrawContext *context,const RecvxGameChunkMaterial *material,unsigned int attributes)
+{
+    return !context->sprite&&material->texture!=UINT_MAX&&!(attributes&3u)&&
+        !(context->state->control_flags&0x10u)&&
+        ((context->state->current_draw_mode&1u)||(material->specular&0xffffffu));
+}
+static float specular_weight(float illumination,int powered)
+{
+    float x=fmaxf(0,fminf(1,powered?illumination:illumination-1));
+    if(!powered)return x;
+    float x2=x*x,x4=x2*x2,x8=x4*x4,x16=x8*x8;
+    return x16*x;
+}
+
+static unsigned int shade(DrawContext *context, const RecvxGameChunkMaterial *material,
                            const RecvxGameChunkVertex *vertex, const NJS_POINT3 *position,
                            const NJS_VECTOR *normal, unsigned int attributes)
 {
@@ -415,7 +482,8 @@ static unsigned int shade(const DrawContext *context, const RecvxGameChunkMateri
     float diffuse[3] = {channel(material->diffuse, 16), channel(material->diffuse, 8), channel(material->diffuse, 0)};
     if (material->texture != UINT_MAX && !simple)
         diffuse[0] = diffuse[1] = diffuse[2] = 1; /* Retail Easy textured path uses NaCnkDefaultOne. */
-    float illumination[3] = {0, 0, 0};
+    float illumination[3] = {0, 0, 0},ambient_value[3]={0,0,0};
+    int specular=specular_enabled(context,material,attributes);
     float alpha = channel(material->diffuse, 24) * channel(vertex->color, 24);
     if (context->state->control_flags & 0x10u) {
         diffuse[0] = context->state->constant_material.r;
@@ -425,8 +493,9 @@ static unsigned int shade(const DrawContext *context, const RecvxGameChunkMateri
     }
     if (attributes & 1u) illumination[0] = illumination[1] = illumination[2] = 1;
     else {
+        prepare_lights(context);
         if (!(attributes & 4u)) for (unsigned int c = 0; c < 3; ++c)
-            illumination[c] = multi ? ambient[c] * channel(material->ambient, 16 - 8*c) :
+            ambient_value[c] = illumination[c] = multi ? ambient[c] * channel(material->ambient, 16 - 8*c) :
                 (simple ? lighting->simple_ambient : lighting->easy_ambient);
         if (multi) {
             int count = simple ? lighting->simple_count : lighting->easy_count;
@@ -435,12 +504,9 @@ static unsigned int shade(const DrawContext *context, const RecvxGameChunkMateri
                 NJS_VECTOR direction;
                 float attenuation = 1;
                 if (i == 1) {
-                    NJS_VECTOR source = lights[0].direction;
-                    njCalcVector(cam.mtx, &source, &direction);
-                    direction.x = -direction.x; direction.y = -direction.y; direction.z = -direction.z;
+                    direction=context->light_direction;
                 } else {
-                    NJS_POINT3 source = lights[i].position, point;
-                    njCalcPoint(cam.mtx, &source, &point);
+                    NJS_POINT3 point=context->light_positions[i];
                     direction = (NJS_VECTOR){point.x-position->x, point.y-position->y, point.z-position->z};
                     float near = lights[i].near_range, far = lights[i].far_range;
                     float distance_squared = dot(&direction, &direction);
@@ -450,7 +516,7 @@ static unsigned int shade(const DrawContext *context, const RecvxGameChunkMateri
                         distance_squared <= near*near ? 1 : near*near / distance_squared;
                 }
                 checked_math();
-                if (normalize(&direction)) {
+                if (i==1?context->light_direction_valid:normalize(&direction)) {
                     float intensity = fmaxf(0, dot(normal, &direction)) * attenuation;
                     illumination[0] += lights[i].color.x * intensity;
                     illumination[1] += lights[i].color.y * intensity;
@@ -458,9 +524,8 @@ static unsigned int shade(const DrawContext *context, const RecvxGameChunkMateri
                 }
             }
         } else {
-            NJS_VECTOR direction = simple ? lighting->simple_direction : lighting->easy_direction;
-            direction.x = -direction.x; direction.y = -direction.y; direction.z = -direction.z;
-            if (normalize(&direction)) {
+            NJS_VECTOR direction=context->light_direction;
+            if(context->light_direction_valid){
                 float intensity = fmaxf(0, dot(normal, &direction)) *
                     (simple ? lighting->simple_intensity : lighting->easy_intensity);
                 NJS_POINT3 color = simple ? lighting->simple_color : lighting->easy_color;
@@ -471,9 +536,31 @@ static unsigned int shade(const DrawContext *context, const RecvxGameChunkMateri
         }
     }
     unsigned int result = byte(alpha) << 24;
-    for (unsigned int c = 0; c < 3; ++c)
-        result |= byte(diffuse[c] * channel(vertex->color, 16 - 8*c) * illumination[c]) << (16 - 8*c);
+    for (unsigned int c = 0; c < 3; ++c){
+        float value=diffuse[c]*illumination[c];
+        if(specular){
+            float incident=illumination[c]-(simple&&multi?ambient_value[c]:0);
+            float highlight=specular_weight(incident,simple&&!multi);
+            float tint=multi?1:channel(material->specular,16-8*c);
+            value=diffuse[c]*fmaxf(0,fminf(1,illumination[c]))+highlight*tint*(31.0f/128.0f);
+            /* Preserve PS2 overbright modulation without another geometry pass.
+               GE doubles RGB after texturing; alpha remains at its full scale. */
+            value*=0.5f;
+        }
+        result |= byte(value*channel(vertex->color,16-8*c)) << (16-8*c);
+    }
     return result;
+}
+
+static VertexCache *cached_vertex(DrawContext *context,const RecvxGameChunkVertex *input)
+{
+    VertexCache *cache=&vertex_cache[input->source_index&255u];
+    if(cache->draw!=context->draw||cache->index!=input->source_index){
+        *cache=(VertexCache){.draw=context->draw,.index=input->source_index};
+        recvxFaceTransform(context->matrix,&input->x,&cache->position.x);
+        ++render_stats.position_transforms;
+    }else ++render_stats.cache_hits;
+    return cache;
 }
 
 static int emit(void *user, const RecvxGameChunkMaterial *material, const RecvxGameChunkVertex input[3])
@@ -481,12 +568,14 @@ static int emit(void *user, const RecvxGameChunkMaterial *material, const RecvxG
     DrawContext *context = user;
     RecvxBootRenderVertex output[3];
     NJS_POINT3 positions[3]; NJS_VECTOR face;
+    ++render_stats.triangles;
+    if(!context->sprite&&(!context->material_valid||memcmp(&context->material,material,sizeof(*material)))){
+        context->material=*material;context->material_valid=1;++context->material_serial;
+    }
     unsigned int attributes = context->sprite ? (0x13u | (context->trans ? 8u : 0)) :
         recvxGameBootRenderStripAttributes(material->flags);
     const RecvxBootTexture *texture = NULL;
     RecvxGameBootSampler sampler = {0};
-    if (!(attributes & 3u) && (material->specular & 0xffffffu))
-        recvxGameBootUnsupported("unported original specular chunk lighting");
     if (attributes & 0x40u) recvxGameBootUnsupported("unported original environment-mapped chunk material");
     if (context->sprite && context->textured) {
         texture = context->state->selected_texture;
@@ -502,7 +591,8 @@ static int emit(void *user, const RecvxGameChunkMaterial *material, const RecvxG
     }
     for (unsigned int i = 0; i < 3; ++i) {
         NJS_POINT3 local = {input[i].x, input[i].y, input[i].z};
-        njCalcPoint(&context->matrix, &local, &positions[i]);
+        if(context->sprite)njCalcPoint(&context->matrix, &local, &positions[i]);
+        else positions[i]=cached_vertex(context,&input[i])->position;
     }
     checked_math();
     NJS_VECTOR a = {positions[1].x-positions[0].x, positions[1].y-positions[0].y, positions[1].z-positions[0].z};
@@ -511,13 +601,30 @@ static int emit(void *user, const RecvxGameChunkMaterial *material, const RecvxG
     if (!normalize(&face)) return 0; /* Zero-area triangles cannot cover a sample. */
     for (unsigned int i = 0; i < 3; ++i) {
         NJS_VECTOR normal = {input[i].nx, input[i].ny, input[i].nz}, transformed;
-        njCalcVector(&context->normals, &normal, &transformed);
-        checked_math();
-        if ((attributes & 0x20u) || !normalize(&transformed)) transformed = face;
-        output[i] = (RecvxBootRenderVertex){input[i].u, input[i].v,
-            context->sprite ? input[i].color : shade(context, material, &input[i], &positions[i], &transformed, attributes),
+        unsigned int color;
+        if(context->sprite)color=input[i].color;
+        else{
+            VertexCache *cache=cached_vertex(context,&input[i]);
+            int flat=attributes&0x20u;
+            if(!flat&&cache->material==context->material_serial){color=cache->color;}
+            else{
+                transformed=face;
+                if(!(attributes&1u)&&!flat){
+                    if(!cache->normal_ready){
+                        recvxSkinDirection(context->normals,&normal.x,&cache->normal.x);
+                        ++render_stats.normal_transforms;
+                        cache->normal_valid=normalize(&cache->normal);cache->normal_ready=1;
+                    }
+                    if(cache->normal_valid)transformed=cache->normal;
+                }
+                color=shade(context,material,&input[i],&positions[i],&transformed,attributes);
+                ++render_stats.shaded_vertices;
+                if(!flat&&((attributes&1u)||cache->normal_valid)){cache->color=color;cache->material=context->material_serial;}
+            }
+        }
+        output[i] = (RecvxBootRenderVertex){input[i].u, input[i].v, color,
             positions[i].x, -positions[i].y, -positions[i].z};
-        unsigned int color = output[i].color;
+        color = output[i].color;
         output[i].color = (color & 0xff00ff00u) | ((color >> 16) & 255u) | ((color & 255u) << 16);
         if (context->half_fog && fabsf(output[i].z) >= 0x1p39f)
             recvxGameBootUnsupported("authored sprite fog depth exceeds PSP constant range");
@@ -525,6 +632,7 @@ static int emit(void *user, const RecvxGameChunkMaterial *material, const RecvxG
             recvxGameBootUnsupported("non-finite original model transform");
     }
     unsigned int flags = sampler.clamp_u | (sampler.clamp_v << 1) | (!!sampler.filter << 2);
+    if(specular_enabled(context,material,attributes))flags|=RECVX_RENDER_COLOR_DOUBLE;
     int source = context->sprite ? context->state->polygon_blend_source : context->state->control_flags & 0x8000u ? context->state->blend_source : material->blend_source;
     int destination = context->sprite ? context->state->polygon_blend_destination : context->state->control_flags & 0x8000u ? context->state->blend_destination : material->blend_destination;
     RecvxBootRenderVertex clipped[21];
@@ -607,6 +715,10 @@ int njCnkDrawModelLocal(NJS_CNK_MODEL *model)
         }
     }
     normal_matrix(&context.normals, &context.matrix); checked_math();
+    recvxFaceVectorPrepare();
+    context.draw=++draw_serial;
+    if(!context.draw){memset(vertex_cache,0,sizeof(vertex_cache));context.draw=++draw_serial;}
+    ++render_stats.models;
     context.custom_clip=recvxEngineOriginalViewClipVolumePlanes(context.clip_planes);checked_math();
     if (recvxGameBootChunkParse(model, emit, &context)) recvxGameBootUnsupported(recvxGameBootChunkFault());
     return 1;

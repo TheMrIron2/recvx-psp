@@ -15,10 +15,12 @@ def prepare(destination):
             '#include "psp/engine_event_core.h"',
             '#include "psp/game_boot_event_actor.h"',
             '#include <stdio.h>']
-    for name,opcode in [('bhFrameCheck',56),('bhMotionPauseSet',43),('bhSubCtr',103),('bhMaskSet',60),('bhMaskStart',62),('bhFaceRep',154)]:
+    for name,opcode in [('bhObjLinkSetPly',52),('bhFrameCheck',56),('bhMotionPauseSet',43),('bhSubCtr',103),('bhMaskSet',60),('bhMaskStart',62),('bhFaceRep',154)]:
         line,function=extract(source,name)
         opening=function.index('{')+1
         function=function[:opening]+f'\n    recvxGameBootEventActorPrepare({opcode}, bhScePtr);'+function[opening:]
+        if name == 'bhObjLinkSetPly':
+            function=function.replace('*(unsigned short*)bhScePtr','((unsigned int)bhScePtr[0] | ((unsigned int)bhScePtr[1] << 8))')
         if name == 'bhFrameCheck':
             function=function.replace('int v4, v5;', 'int v4, v5 = 0;')
             # Script commands can begin at odd addresses on the PSP.

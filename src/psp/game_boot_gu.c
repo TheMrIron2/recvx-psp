@@ -11,6 +11,16 @@
 #define SHADOW_OFFSET (5u * 512u * 272u * 2u)
 static void *scene_buffer;
 static int frame_drawn;
+static RecvxBootGuStats gu_stats;
+RecvxBootGuStats recvxGameBootGuStats(void){return gu_stats;}
+static unsigned int microseconds(void)
+{
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+    return sceKernelGetSystemTimeLow();
+#else
+    return 0;
+#endif
+}
 static unsigned int display_list[262144] __attribute__((aligned(16)));
 typedef struct { float u, v; unsigned int color; float x, y, z; } Vertex;
 
@@ -19,6 +29,7 @@ static unsigned int abgr(unsigned int argb)
 
 int recvxGameBootDisplayInit(void)
 {
+    gu_stats=(RecvxBootGuStats){0};
     scene_buffer = NULL;
     frame_drawn = 0;
     sceGuInit();
@@ -142,10 +153,12 @@ static void models(const RecvxBootRenderFrame *frame)
     sceGuEnable(GU_DEPTH_TEST); sceGuDepthMask(GU_FALSE);
     sceGuDisable(GU_LIGHTING);
     sceGuEnable(GU_ALPHA_TEST); sceGuAlphaFunc(GU_GREATER, 0, 255);
+    const RecvxBootTexture *bound_texture=NULL;
     for (size_t i = 0; i < frame->batch_count; ++i) {
         const RecvxBootRenderBatch *batch = &frame->batches[i];
         if (batch->kind >= RECVX_RENDER_SHADOW_START) {
             shadow(frame, batch);
+            bound_texture=NULL; /* Shadow passes replace texture format/state. */
             continue;
         }
         sceGuScissor(batch->scissor[0], batch->scissor[1], batch->scissor[2], batch->scissor[3]);
@@ -175,14 +188,21 @@ static void models(const RecvxBootRenderFrame *frame)
             if (batch->kind == RECVX_RENDER_SCREEN_OFFSET) {
                 sceGuTexEnvColor(batch->fog_color);
                 sceGuTexFunc(GU_TFX_BLEND,GU_TCC_RGBA);
-            } else sceGuTexFunc(GU_TFX_MODULATE,GU_TCC_RGBA);
-            sceGuEnable(GU_TEXTURE_2D); sceGuTexMode(GU_PSM_T8, 0, 0, 1);
-            sceGuClutMode(GU_PSM_8888, 0, 255, 0); sceGuClutLoad(32, texture->palette);
-            sceGuTexImage(0, texture->width, texture->height, texture->tile_width, texture->pixels);
+            } else {
+                /* GE TEXFUNC bit 16 doubles RGB after modulation, independently
+                   of alpha. sceGuTexFunc passes this bit through to TEXFUNC. */
+                sceGuTexFunc(GU_TFX_MODULATE | (batch->sampler&RECVX_RENDER_COLOR_DOUBLE?0x10000:0),GU_TCC_RGBA);
+            }
+            sceGuEnable(GU_TEXTURE_2D);
+            if(bound_texture!=texture){
+                sceGuTexMode(GU_PSM_T8,0,0,1);
+                sceGuClutMode(GU_PSM_8888,0,255,0);sceGuClutLoad(32,texture->palette);
+                sceGuTexImage(0,texture->width,texture->height,texture->tile_width,texture->pixels);
+                sceGuTexFlush();bound_texture=texture;
+            }
             sceGuTexScale(1, 1); sceGuTexOffset(0, 0);
             sceGuTexWrap(batch->sampler & 1 ? GU_CLAMP : GU_REPEAT, batch->sampler & 2 ? GU_CLAMP : GU_REPEAT);
             sceGuTexFilter(batch->sampler & 4 ? GU_LINEAR : GU_NEAREST, batch->sampler & 4 ? GU_LINEAR : GU_NEAREST);
-            sceGuTexFlush();
         } else sceGuDisable(GU_TEXTURE_2D);
         if (screen_space) {
             /* Retail Ps2DrawOTag uses alpha-fail FB_ONLY: translucent pixels
@@ -240,6 +260,7 @@ static void movie_frame(const uint32_t *pixels)
 
 void recvxGameBootPresent(void)
 {
+    unsigned int started=microseconds();
     size_t count, i;
     const RecvxBootDraw *draws = recvxGameBootDraws(&count);
     const RecvxBootRenderFrame *frame = recvxGameBootRenderFrame();
@@ -294,7 +315,11 @@ void recvxGameBootPresent(void)
             }
         }
     }
-    sceGuFinish(); sceGuSync(0, 0);
+    sceGuFinish();
+    unsigned int submitted=microseconds();
+    sceGuSync(0,0);
+    gu_stats.build_us+=submitted-started;
+    gu_stats.wait_us+=microseconds()-submitted;
     recvxGameBootMovieFrameConsumed();
     recvxGameBootRenderConsume();
 }

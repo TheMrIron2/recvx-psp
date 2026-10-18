@@ -4,6 +4,7 @@
 #include "psp/game_boot.h"
 #include "psp/game_boot_audio.h"
 #include "ps2/veronica/prog/door.h"
+#include "ps2/veronica/prog/main.h"
 
 _door_wrk DoorWrk;
 
@@ -37,4 +38,10 @@ void CallDoorSe(unsigned int sound)
     const char *fault = recvxAudioFault();
     if (fault) recvxGameBootUnsupported(fault);
     if (recvxAudioNativeError()) recvxGameBootUnsupported("native door sound service failed");
+}
+
+void recvxGameBootDoorStartPrepare(void)
+{
+    if(!sys||sys->ddmd<0||sys->ddmd>1)
+        recvxGameBootUnsupported("invalid original door start state");
 }

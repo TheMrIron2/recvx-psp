@@ -16,6 +16,8 @@ typedef enum RecvxBootRenderKind {
     RECVX_RENDER_SHADOW_COMPOSITE, RECVX_RENDER_SHADOW_END
 } RecvxBootRenderKind;
 
+/* Sampler bits 0/1 clamp U/V, bit 2 filters, bit 3 doubles textured RGB. */
+#define RECVX_RENDER_COLOR_DOUBLE 8u
 typedef struct RecvxBootRenderBatch {
     unsigned int first, count, attributes, sampler;
     int blend_source, blend_destination;
@@ -34,6 +36,13 @@ typedef struct RecvxBootRenderFrame {
     float projection[16];
 } RecvxBootRenderFrame;
 
+typedef struct RecvxBootRenderStats {
+    unsigned int models,triangles,position_transforms,normal_transforms,shaded_vertices,cache_hits;
+} RecvxBootRenderStats;
+/* Cumulative counters; presentation/ordering-table flushes do not reset them. */
+RecvxBootRenderStats recvxGameBootRenderStats(void);
+typedef struct RecvxBootGuStats { unsigned int build_us,wait_us; } RecvxBootGuStats;
+RecvxBootGuStats recvxGameBootGuStats(void);
 /* Submit one unlit, double-sided local-space sprite triangle. */
 void recvxGameBootRenderSpriteTriangle(const RecvxGameChunkVertex input[3], int textured, int trans);
 void recvxGameBootRenderHalfFogTriangle(const RecvxGameChunkVertex input[3], unsigned int offset_argb, int trans);

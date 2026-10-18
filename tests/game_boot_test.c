@@ -1,3 +1,4 @@
+#include "ps2/veronica/prog/MdlPut.h"
 #define _GNU_SOURCE
 #define u_long recvx_host_u_long
 #include <assert.h>
@@ -11,6 +12,13 @@
 #undef u_long
 #include "psp/game_boot.h"
 #include "psp/game_boot_render.h"
+#include "psp/game_boot_effect_callbacks.h"
+#include "ps2/veronica/prog/effsub1.h"
+#include "ps2/veronica/prog/effsub2.h"
+#include "ps2/veronica/prog/effsub3.h"
+#include "ps2/veronica/prog/effsub6.h"
+#include "ps2/veronica/prog/hitchkl.h"
+#include "ps2/veronica/prog/hitchk.h"
 #include "psp/game_boot_audio.h"
 #include "psp/game_boot_movie.h"
 #include "psp/game_boot_movie_audio.h"
@@ -853,6 +861,46 @@ static void effect_control_task(void)
     assert(0);
 }
 
+static int callback_fault_case;
+static void callback_fault_task(void)
+{
+    bhInitSystem();memset(eff,0,sizeof(eff));
+    O_WRK *e=&eff[0];e->flg=1;e->id=302;
+    eff[1].flg=eff[2].flg=2;
+    e->exp0=(unsigned char *)&eff[1];e->exp1=(unsigned char *)&eff[2];
+    switch(callback_fault_case){
+    case 0:e->type=20;bhEff302(e);break;
+    case 1:e->exp0=NULL;bhEff302(e);break;
+    case 2:e->exp1=e->exp0;bhEff302(e);break;
+    case 3:e->mode0=2;bhEff302(e);break;
+    case 4:bhEff302(e);((E02_WORK *)e->exp0)->stg_stt=7;bhEff302(e);break;
+    case 5:bhEff302(e);((E02_WORK *)e->exp0)->stg_buf[0]=NULL;bhEff302(e);break;
+    case 6:((E17_WORK *)e->exp0)->srt_vtx[2]=16;bhEff300(e);break;
+    case 7:e->type=3;bhEff_E02_SandParticle(e);break;
+    case 8:e->mdlver=2;bhEff_E02_SandDust(e);break;
+    case 9:e->mode0=1;e->type=1;e->exp0=(unsigned char *)1;bhEff002(e);break;
+    case 10:bhEff302(e);sys->ef_fncn=512;bhEff302(e);break;
+    case 11:e->type=7;bhEff301(e);break;
+    case 12:e->flr_no=1;sys->yk_ct=0;e->lkwkp=NULL;bhEff000(e);break;
+    }
+    assert(0);
+}
+static void test_effect_callback_faults(const char *directory,void *arena,size_t arena_size)
+{
+    static const char *messages[]={"mode/type","auxiliary context","overlapping","mode/type","counts","buffers","vertex index","sand particle state","sand dust animation","UV table/frame","render queue is full","blood pool effect state","links an invalid actor"};
+    RecvxLiveTaskProc saved=bhSysTaskJumpTab[0];
+    RecvxInputState input={.analog_x=128,.analog_y=128};bhSysTaskJumpTab[0]=callback_fault_task;
+    for(callback_fault_case=0;callback_fault_case<13;++callback_fault_case){
+        assert(!recvxGameBootInit(directory,arena,arena_size));
+        assert(recvxGameBootTick(&input)==-1&&recvxGameBootFault());
+        if(!strstr(recvxGameBootFault(),messages[callback_fault_case]))
+            fprintf(stderr,"callback guard %d: %s\n",callback_fault_case,recvxGameBootFault());
+        assert(strstr(recvxGameBootFault(),messages[callback_fault_case]));
+    }
+    bhSysTaskJumpTab[0]=saved;
+    puts("PASS: 13 effect callback fault paths reject invalid modes/types, auxiliary contexts, overlaps, stage/buffer/vertex indices, UV pointers, parents and full queues");
+}
+
 static void test_effect_control(const char *directory, void *arena, size_t arena_size)
 {
     const char *faults[] = {NULL, "effect links an invalid actor", "effect links an invalid actor joint",
@@ -1353,6 +1401,37 @@ static void loaded_arm_ik_task(void)
     bhArmIkMdk(plp,6,&target,35498);
 }
 
+static void test_loaded_player_interactions(void)
+{
+    SYS_WORK *saved=malloc(sizeof(*sys));assert(saved);*saved=*sys;
+    BH_PWORK player=*plp;
+    ATR_WORK *old_records=rom->etcp;int old_count=rom->etc_n;
+    ATR_WORK *record=(ATR_WORK *)(((uintptr_t)sys->memp+3u)&~(uintptr_t)3u);
+    assert((unsigned char *)(record+1)<sys->endp);
+    memset(record,0,sizeof(*record));
+    record->flg=1;record->flr_no=plp->flr_no;
+    record->px=plp->px-1000;record->pz=plp->pz-1000;record->w=record->d=2000;
+    record->prm0=2;record->prm1=7;record->prm2=3;record->prm3=9;
+    rom->etcp=record;rom->etc_n=1;sys->metc_n=0;
+    sys->cb_flg=0;sys->gm_flg&=~9u;
+    bhCheckExmAtari(plp);
+    assert((sys->cb_flg&0x101)==0x101&&(plp->stflg&0x80000000u)&&
+        sys->door.stg_no==2&&sys->door.rom_no==7&&sys->door.pos_no==3&&sys->door.dor_tp==9);
+    *plp=player;sys->cb_flg=0;sys->st_flg&=~0x80u;
+    record->type=3;record->attr=1;record->prm0=0;record->prm2=0;
+    sys->pad_ps=0x200;
+    bhCheckExmAtari(plp);
+    assert((sys->cb_flg&8)&&(sys->st_flg&0x84)==0x84&&sys->pad_psb==0x200&&!sys->pad_ps);
+    *plp=player;sys->cb_flg=0;
+    O_WRK item=sys->itwp[0];sys->itwp[0].flg=1;sys->itwp[0].id=34;
+    record->type=4;record->attr=0;record->prm0=0;
+    bhCheckExmAtari(plp);
+    assert(sys->sb_id==34&&(sys->cb_flg&0x10));
+    sys->itwp[0]=item;*plp=player;*sys=*saved;free(saved);
+    rom->etcp=old_records;rom->etc_n=old_count;
+    puts("PASS: real loaded Claire expression/work and arena interaction records start door, examine and item transitions through original bhCheckExmAtari");
+}
+
 static void test_loaded_arm_ik(void)
 {
     RecvxInputState input={.analog_x=128,.analog_y=128};
@@ -1602,6 +1681,212 @@ static void test_camera_pause_task(void)
     puts("PASS: opcode 41 task 0/script 0 pause/yield/held camera/resume/end with exact PCs and truncated operand rejection");
 }
 
+static void test_remaining_opcode_boundaries(void)
+{
+    static const struct { unsigned int opcode,extent; } cases[]={
+#define RECVX_EVENT_REMAINING(number,handler,bytes) {number,bytes},
+#include "psp/game_boot_event_remaining.inc"
+#undef RECVX_EVENT_REMAINING
+    };
+    static const unsigned int player_sub[]={0,7,12,13,52,128,129,130,131,132,137,139,140,141,142,143,145,150};
+    static const unsigned int player_size[]={2,8,6,6,2,2,12,2,4,6,4,2,8,6,2,4,6,4};
+    unsigned char section[64]={12,0,0,0,14,0,0,0,16,0,0,0};
+    EVT_WORK *previous=rom->evtp;
+    unsigned int checks=0;
+    for(unsigned int i=0;i<sizeof(cases)/sizeof(cases[0]);++i){
+        assert(bhScenarioJmpT[cases[i].opcode]);
+        unsigned int variants=cases[i].opcode==100?18:cases[i].opcode==102?2:1;
+        for(unsigned int v=0;v<variants;++v){
+            unsigned int extent=cases[i].extent;
+            if(cases[i].opcode==100)extent=player_size[v];
+            if(cases[i].opcode==102)extent=v?4:2;
+            for(unsigned int length=1;length<extent;++length){
+                memset(section+16,0,sizeof(section)-16);section[16]=cases[i].opcode;
+                if(cases[i].opcode==100)section[17]=player_sub[v];
+                if(cases[i].opcode==102)section[17]=v?20:1;
+                recvxEventCoreReset();rom->evtp=(EVT_WORK *)section;
+                assert(!recvxEventCoreBindSection(section,16+length)&&!Event_exec(0,0));
+                assert(bhEventScheduler2()==-1);
+                const RecvxEventCoreFault *fault=recvxEventCoreGetFault();
+                assert(fault->code==RECVX_EVENT_FAULT_TRUNCATED&&fault->opcode==cases[i].opcode);
+                assert(recvxEventCoreTaskPc(0)==16);++checks;
+            }
+        }
+    }
+    unsigned int assigned=0;
+    for(unsigned int opcode=0;opcode<256;++opcode){
+        int reserved=(opcode>=213&&opcode<=242)||(opcode>=245&&opcode<=247);
+        assert(!!bhScenarioJmpT[opcode]==!reserved);
+        if(!reserved)++assigned;
+    }
+    assert(assigned==223);
+    recvxEventCoreReset();rom->evtp=previous;
+    printf("PASS: all 223 assigned opcodes dispatched; 33 reserved slots rejected; %u truncation boundaries across 130 new handlers and nested player/object commands\n",checks);
+}
+
+static void test_effect_collision_services(void)
+{
+    ATR_WORK wall={0},water={0};
+    ATR_WORK *old_walls=rom->walp,*old_floors=rom->flrp;
+    int old_wall_count=rom->wal_n,old_floor_count=rom->flr_n;
+    int old_dynamic_walls=sys->mwal_n,old_dynamic_floors=sys->mflr_n;
+    wall.flg=1;wall.type=0;wall.px=wall.py=wall.pz=-1;wall.w=wall.h=wall.d=2;
+    rom->walp=&wall;rom->wal_n=1;sys->mwal_n=0;
+    NJS_POINT3 start={0,0,5},end={0,0,-5},normal,center={0,0,0};
+    assert(bhCollisionCheckLine2(&start,&end,0x4400,-1)==&wall&&end.z==1);
+    bhGetHitCollisionNormal(&normal);assert(normal.x==0&&normal.y==0&&normal.z==1);
+    start=(NJS_POINT3){5,0,5};end=(NJS_POINT3){5,0,-5};
+    assert(!bhCollisionCheckLine2(&start,&end,0x4400,-1));
+    assert(bhCheckWallType(&center,0,0.2f,0)==&wall);
+    water=wall;water.type=3;water.prm0=1;rom->flrp=&water;rom->flr_n=1;sys->mflr_n=0;
+    assert(bhCheckWater(&center)==&water);
+    center.y=3;assert(!bhCheckWater(&center));
+    rom->walp=old_walls;rom->wal_n=old_wall_count;rom->flrp=old_floors;rom->flr_n=old_floor_count;
+    sys->mwal_n=old_dynamic_walls;sys->mflr_n=old_dynamic_floors;
+    puts("PASS: effect wall sweep clips to the box face and preserves its normal; misses, wall overlap and water volume boundaries");
+}
+
+static void test_effect_callback_lifetimes(void)
+{
+    O_WRK *saved=malloc(sizeof(eff));SYS_WORK *saved_sys=malloc(sizeof(*sys));
+    assert(saved&&saved_sys);memcpy(saved,eff,sizeof(eff));*saved_sys=*sys;
+    NJS_POINT3 position={0,20,0},direction={1,1,0};
+    for(int type=0;type<19;++type){
+        memset(eff,0,sizeof(eff));
+        assert(bhSetEffParticle(NULL,0,&position,&direction,0xff808080u,type));
+        unsigned int emitted=0;
+        for(int frame=0;frame<64;++frame){
+            sys->ef_fncn=0;
+            for(int i=0;i<512;++i)if(eff[i].flg&1u){
+                assert(eff[i].id==302);bhEff302(&eff[i]);
+            }
+            emitted+=sys->ef_fncn;
+        }
+        assert(emitted);
+        for(int i=0;i<512;++i)assert(!eff[i].flg);
+    }
+    memset(eff,0,sizeof(eff));
+    O_WRK *sand=&eff[0];sand->flg=1;sand->id=254;sand->type=1;
+    sand->px=3;sand->py=20;sand->pz=4;sand->sx=sand->sy=sand->sz=1;
+    sand->sxb=sand->syb=sand->szb=1;
+    bhEff_E02_SandParticle(sand);assert(sand->mode0==1&&sand->func&&sand->exp0);
+    P_WRK *particles=(P_WRK *)sand->exp0;
+    assert(particles->num==16&&particles->flg==2);
+    float previous_y=particles->pos[0].y;
+    particles->vec[0].y=1;sys->ef_fncn=0;bhEff_E02_SandParticle(sand);
+    assert(particles->pos[0].y==previous_y+1&&fabsf(particles->vec[0].y-0.6f)<1e-6f&&sys->ef_fncn==1);
+    sand->ct0=0;bhEff_E02_SandParticle(sand);assert(!sand->flg&&!particles->flg);
+    for(int variant=0;variant<2;++variant)for(int type=0;type<3;++type){
+        memset(eff,0,sizeof(eff));O_WRK *dust=&eff[0];
+        dust->flg=1;dust->type=type;dust->mdlver=variant;dust->sx=dust->sy=1;
+        int frames=0;while(dust->flg&&frames++<24){sys->ef_trsn=0;bhEff_E02_SandDust(dust);}
+        assert(!dust->flg&&frames>1&&frames<24);
+    }
+    memset(eff,0,sizeof(eff));O_WRK *emitter=&eff[0];emitter->flg=1;
+    bhEff_E02_SandParticle2(emitter);assert(emitter->mode0==1&&emitter->ct0>=120&&emitter->ct0<=150);
+    emitter->ct0=0;bhEff_E02_SandParticle2(emitter);assert(!emitter->mode0);
+    for(int type=0;type<=10;++type){
+        memset(eff,0,sizeof(eff));O_WRK *flash=&eff[0];flash->flg=1;flash->type=type;
+        flash->sxb=flash->syb=1;flash->mdlver=0;
+        bhEff002(flash);assert(flash->mode0==1&&flash->exp0);
+        int frames=0;while(flash->flg&&frames++<80){sys->ef_trsn=0;bhEff002(flash);}
+        assert(!flash->flg&&frames<80);
+    }
+    memset(eff,0,sizeof(eff));BP_WORK pool={0};pool.bld_spd=0.1f;
+    int made=bhSetBloodPoolLnk(NULL,&position,0,&pool,0);assert(made==1);
+    O_WRK *blood=&eff[0];bhEff300(blood);assert(blood->mode0==1&&blood->pn==16);
+    for(int frame=0;frame<260;++frame){sys->ef_trsn=0;bhEff300(blood);}
+    assert(blood->mode0==2&&sys->ef_trsn==1);
+    for(int type=0;type<7;++type){
+        memset(eff,0,sizeof(eff));O_WRK *pool_effect=&eff[0];
+        pool_effect->flg=1;pool_effect->type=type;pool_effect->px=10000;pool_effect->py=10000;pool_effect->pz=10000;
+        sys->gm_flg&=~0x2000000u;sys->ef_trsn=sys->ef_trs2dn=0;bhEff301(pool_effect);
+        assert(!pool_effect->flg||pool_effect->mode0);
+        sys->gm_flg|=0x2000000u;bhEff301(pool_effect);assert(!pool_effect->flg);
+    }
+    for(int kind=0;kind<2;++kind){
+        memset(eff,0,sizeof(eff));O_WRK *casing=&eff[0];
+        casing->flg=0x81;casing->lkwkp=(unsigned char *)plp;casing->lkono=0;casing->type=0;
+        casing->loy=100;casing->flr_no=1;sys->yk_ct=0;sys->ef_poln=0;
+        if(kind)bhEff007(casing);else bhEff000(casing);
+        assert(casing->mode0&&!(casing->flg&0x80u)&&isfinite(casing->py));
+    }
+    memcpy(eff,saved,sizeof(eff));*sys=*saved_sys;free(saved);free(saved_sys);
+    puts("PASS: all 19 staged-particle presets release actor and auxiliary slots; sand gravity, six dust animations and emitter timing; 11 muzzle-flash lifetimes; blood mesh/pool and both casing initializations");
+}
+
+static void test_remaining_effect_services(void)
+{
+    O_WRK *saved=malloc(sizeof(eff));assert(saved);memcpy(saved,eff,sizeof(eff));
+    unsigned char *saved_snapshot=sys->ef_psp;
+    memset(eff,0,sizeof(eff));
+    POINT point={0};point.px=1;point.py=2;point.pz=3;
+    int first=bhSetEffect(20,&point,NULL,0);
+    int second=bhSetEffectEvt(21,&point,7,100,200);
+    assert(first==0&&second==1&&eff[0].id==20&&eff[1].id==21&&eff[1].type==7);
+    assert(eff[0].px==1&&eff[0].py==2&&eff[0].pz==3&&eff[1].ax==100&&eff[1].ay==200);
+    assert(eff[0].mtx==(NJS_MATRIX *)eff[0].mtxbuf&&eff[0].tvp==eff[0].tv&&eff[0].pn==4);
+    assert(bhPushEffectWork()==1&&sys->ef_psp);
+    eff[0].px=91;eff[1].flg=0;
+    bhPopEffectWork();assert(eff[0].px==1&&eff[1].flg==1&&eff[1].id==21);
+    memcpy(eff,saved,sizeof(eff));free(saved);sys->ef_psp=saved_snapshot;
+    puts("PASS: shared original effect allocation, default quad/model state, event effect parameters and arena snapshot/restore");
+}
+
+static void test_remaining_opcode_state(void)
+{
+    SYS_WORK *saved_sys=malloc(sizeof(*sys));assert(saved_sys);*saved_sys=*sys;
+    BH_PWORK saved_player=*plp;CAM_WORK saved_camera=cam;
+    unsigned int saved_background=rom->bak_col;
+    unsigned char *saved_pc=bhScePtr;
+    unsigned char commands[]={8,19,3,0,9,5,0xf4,1,40,0,58,1,76,255,17,34,51,0,
+        141,7,171,255,51,34,17,5,174,0,206,0,244};
+    bhScePtr=commands;
+    assert(bhScenarioJmpT[8]()==1&&sys->ef_slow==3&&bhScePtr==commands+4);
+    assert(bhScenarioJmpT[9]()==1&&plp->hp==500&&bhScePtr==commands+8);
+    assert(bhScenarioJmpT[40]()==1&&(sys->ts_flg&0x200)&&bhScePtr==commands+10);
+    assert(bhScenarioJmpT[58]()==1&&(plp->flg&4)&&bhScePtr==commands+12);
+    assert(bhScenarioJmpT[76]()==1&&sys->fog_col==0xff112233u&&bhScePtr==commands+18);
+    assert(bhScenarioJmpT[141]()==1&&sys->com_num==7&&bhScePtr==commands+20);
+    assert(bhScenarioJmpT[171]()==1&&rom->bak_col==0xff332211u&&sys->bcl_ct==5&&bhScePtr==commands+26);
+    sys->ply_stflg[0]|=0x200000;
+    assert(bhScenarioJmpT[174]()==1&&!(sys->ply_stflg[0]&0x200000)&&bhScePtr==commands+28);
+    assert(bhScenarioJmpT[206]()==1&&(sys->gm_flg&0x1000000)&&cam.pe_pers==11832&&bhScePtr==commands+30);
+    assert(bhScenarioJmpT[244]()==1&&bhScePtr==commands+31);
+    *sys=*saved_sys;free(saved_sys);*plp=saved_player;cam=saved_camera;
+    rom->bak_col=saved_background;bhScePtr=saved_pc;
+    puts("PASS: original remaining opcode state changes, packed odd-address operands, exact instruction lengths and one-byte COM_NEXT");
+}
+
+static void test_player_link_task(void)
+{
+    static unsigned char section[]={12,0,0,0,14,0,0,0,16,0,0,0,0,0,0,0,
+        254,52,255,0,0,0,5,100,0,200,0,44,1,254,
+        52,255,0,255,1,0,0,0,0,0,0,0,255,0};
+    EVT_WORK *previous=rom->evtp;unsigned int enabled=sys->sp_flg;
+    assert(sys->obwp&&rom->obj_n>0&&plp->mlwP&&plp->mlwP->obj_num);
+    O_WRK *object=&sys->obwp[0],saved=*object;
+    NJS_MATRIX parent;memcpy(parent,plp->mlwP->owP[0].mtx,sizeof(parent));
+    memset(object,0,sizeof(*object));object->flg=0x20000001u;
+    object->mtx=(NJS_MATRIX *)object->mtxbuf;object->mlwP=object->mdl;
+    recvxEventCoreReset();rom->evtp=(EVT_WORK *)section;
+    assert(!recvxEventCoreBindSection(section,sizeof(section))&&!Event_exec(0,0));sys->sp_flg|=0x10;
+    assert(!bhEventScheduler2()&&recvxEventCoreTaskPc(0)==17);
+    assert(!bhEventScheduler2()&&recvxEventCoreTaskPc(0)==30);
+    assert(object->lkwkp==(unsigned char *)plp&&object->lkono==0&&object->flg==0x20000081u);
+    assert(object->lox==-1&&object->loy==2&&object->loz==-3);
+    NJS_POINT3 offset={-1,2,-3},expected;
+    njCalcPoint(&parent,&offset,&expected);bhCalcModel((BH_PWORK *)object);
+    assert(fabsf((*object->mtx)[12]-expected.x)<0.001f&&fabsf((*object->mtx)[13]-expected.y)<0.001f&&fabsf((*object->mtx)[14]-expected.z)<0.001f);
+    plp->mlwP->owP[0].mtx[12]+=10;bhCalcLinkModel(plp);
+    assert(fabsf((*object->mtx)[12]-(expected.x+10))<0.001f);
+    memcpy(plp->mlwP->owP[0].mtx,parent,sizeof(parent));bhCalcLinkModel(plp);
+    assert(!bhEventScheduler2()&&!bhEtask[0].status&&recvxEventCoreTaskPc(0)==44);
+    assert(object->flg==0x20000001u&&object->lkono==255&&object->lkwkp==(unsigned char *)plp);
+    *object=saved;recvxEventCoreReset();rom->evtp=previous;sys->sp_flg=enabled;
+    puts("PASS: opcode 52 real player joint link, signed offsets, following pose movement, odd-address task 0 yield/resume/disable/end");
+}
+
 static void test_loaded_camera_reset(void)
 {
     /* Real event dispatch and room cut/camera/light controllers with loaded
@@ -1666,6 +1951,7 @@ int main(int argc, char **argv)
     test_player_initialization(argv[1], arena, arena_size);
     test_facial_deformation();
     test_effect_control(argv[1], arena, arena_size);
+    test_effect_callback_faults(argv[1],arena,arena_size);
     test_subplayer_movement(argv[1], arena, arena_size);
     test_player_control(argv[1], arena, arena_size);
     test_checkpoint(argv[1], arena, arena_size);
@@ -1906,9 +2192,16 @@ int main(int argc, char **argv)
     fprintf(stderr, "Movie presentations (hardware call model): %u\n", movie_presentations);
     test_loaded_player_restore();
     test_loaded_arm_ik();
+    test_loaded_player_interactions();
     test_loaded_inventory_transition();
     test_loaded_camera_reset();
     test_camera_pause_task();
+    test_player_link_task();
+    test_remaining_opcode_boundaries();
+    test_remaining_opcode_state();
+    test_remaining_effect_services();
+    test_effect_collision_services();
+    test_effect_callback_lifetimes();
     test_event_skip_task();
     test_vibration_event_task();
     test_frame_check_task();

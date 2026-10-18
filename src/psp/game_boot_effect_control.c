@@ -63,3 +63,69 @@ unsigned int bhGetGidx(O_WRK *effect)
         recvxGameBootUnsupported("effect texture has no owned surface");
     return ((NJS_TEXMEMLIST *)(uintptr_t)list->textures[index].texaddr)->globalIndex;
 }
+
+/* Original effect contexts are auxiliary slots in the same bounded pool. */
+#include "psp/game_boot_effect_callbacks.h"
+#include "ps2/veronica/prog/effsub3.h"
+#include "ps2/veronica/prog/effsub6.h"
+static void context(const void *pointer,size_t bytes)
+{
+    if(bytes>sizeof(O_WRK)||!actor_array(pointer,eff,sizeof(*eff),512)||
+        !(((const O_WRK *)pointer)->flg&2u))
+        recvxGameBootUnsupported("invalid effect auxiliary context");
+}
+void recvxGameBootEffectCallbackPrepare(unsigned int kind,O_WRK *e)
+{
+    if(!sys||!rom||!actor_array(e,eff,sizeof(*eff),512))
+        recvxGameBootUnsupported("invalid effect callback actor");
+    switch(kind){
+    case 0:case 7:
+        if(kind==0&&(sys->yk_ct==e->flr_no||e->py < -100))break;
+        if(e->mode0>(kind==0?5:2))recvxGameBootUnsupported("invalid casing effect mode");
+        if(!e->mode0){O_WRK linked=*e;linked.flg|=0x80;recvxGameBootEffectValidate(&linked);}
+        if(kind==7&&!e->mode0&&e->mdlver){
+            if(!sys->obwp||!sys->obwp->mlwP||sys->obwp->mlwP->obj_num<3||!sys->obwp->mlwP->objP)
+                recvxGameBootUnsupported("invalid casing weapon model");
+        }
+        break;
+    case 2:
+        if(e->mode0>1||e->type>10||e->ct0<0||e->ct0>64||
+            (e->mode0&&!e->exp0))recvxGameBootUnsupported("invalid muzzle effect state");
+        break;
+    case 300:{
+        if(e->mode0>2)recvxGameBootUnsupported("invalid blood mesh effect mode");
+        context(e->exp0,sizeof(E17_WORK));
+        E17_WORK *w=(E17_WORK *)e->exp0;
+        for(int i=0;i<5;++i)if(w->srt_vtx[i]<0||w->srt_vtx[i]>=16)
+            recvxGameBootUnsupported("invalid blood mesh vertex index");
+        if(e->lkwkp){O_WRK linked=*e;linked.flg|=0x80;recvxGameBootEffectValidate(&linked);}
+        break;}
+    case 301:
+        if(e->type>=7||e->mode0>25||(e->mode0&&(e->ct2<0||e->ct2>=9)))recvxGameBootUnsupported("invalid blood pool effect state");break;
+    case 302:{
+        if(e->mode0>1||e->type>=20)recvxGameBootUnsupported("invalid staged particle mode/type");
+        context(e->exp0,sizeof(E02_WORK));context(e->exp1,sizeof(E02_WRK));
+        if(e->exp0==e->exp1||e->exp0==(unsigned char *)e||e->exp1==(unsigned char *)e)
+            recvxGameBootUnsupported("overlapping staged particle contexts");
+        if(e->mode0){
+            E02_WORK *w=(E02_WORK *)e->exp0;E02_WRK *v=(E02_WRK *)e->exp1;
+            if(w->stg_stt<0||w->stg_stt>6||w->stg_num<0||w->stg_num>6-w->stg_stt||
+                w->vtx_num!=16*w->stg_num||w->stg_erase<=0)
+                recvxGameBootUnsupported("invalid staged particle counts");
+            for(int i=0;i<6;++i)if(w->stg_buf[i]!=&v->vtx_pos[i*16]||w->stg_spd[i]!=&w->vtx_spd[i*16])
+                recvxGameBootUnsupported("invalid staged particle buffers");
+        }
+        break;}
+    case 253:{
+        static const unsigned int frames[6]={12,15,16,15,15,11};
+        if(e->mode0>1||e->type>=3||e->mdlver>=2||(e->mode0&&(e->ct1<0||(unsigned int)e->ct1>=frames[e->mdlver*3+e->type])))
+            recvxGameBootUnsupported("invalid sand dust animation");break;}
+    case 254:case 1000:
+        if(e->type>=3||e->mode0>1)recvxGameBootUnsupported("invalid sand particle state");
+        if(e->mode0||kind==1000){context(e->exp0,sizeof(P_WRK));
+            P_WRK *p=(P_WRK *)e->exp0;if(p->num<0||p->num>16)
+                recvxGameBootUnsupported("invalid sand particle count");}
+        break;
+    case 255:if(e->mode0>1)recvxGameBootUnsupported("invalid sand emitter mode");break;
+    }
+}

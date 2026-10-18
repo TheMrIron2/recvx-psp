@@ -68,6 +68,95 @@ static void floor_record(ATR_WORK *p, unsigned int type)
     p->w = p->h = p->d = 2;
 }
 
+static int message_type,message_id,wall_blocked,wall_queries;
+static float floor_y;
+static ATR_WORK blocking_wall;
+void bhSetMessage(int kind,int id){message_type=kind;message_id=id;}
+int bhCheckFloorNum(float y){floor_y=y;return 3;}
+ATR_WORK *bhCheckWallType(NJS_POINT3 *p,unsigned int flags,float radius,float height)
+{(void)p;(void)flags;(void)radius;(void)height;++wall_queries;return wall_blocked?&blocking_wall:NULL;}
+static ATR_WORK *interaction(unsigned int type)
+{
+    reset();message_type=message_id=-1;wall_blocked=wall_queries=0;memset(&blocking_wall,0,sizeof(blocking_wall));
+    room.etc_n=1;ledges->flg=1;ledges->type=type;
+    ledges->px=ledges->pz=-10;ledges->w=ledges->d=20;
+    state.obwp=state.itwp=(O_WRK *)(arena.bytes+2048);
+    ply.ah=2;
+    return ledges;
+}
+static void test_interactions(void)
+{
+    ATR_WORK *r=interaction(0);r->attr=0x40;r->prm0=2;r->prm1=7;r->prm2=3;r->prm3=9;
+    state.cb_flg=0x200000;bhCheckExmAtari(plp);
+    expect(state.cb_flg==0x200101&&(state.st_flg&4)&&ply.stflg==0x80000000u&&
+        state.door.flg==0x40&&state.door.stg_no==2&&state.door.rom_no==7&&state.door.pos_no==3&&state.door.dor_tp==9,
+        "door interaction copies destination and preserves unrelated control flags");
+    for(int mask=1;mask<=8;mask<<=3){r=interaction(0);state.gm_flg=mask;bhCheckExmAtari(plp);
+        expect((state.cb_flg&0x100)&&!(state.cb_flg&1)&&!ply.stflg,"door transition obeys game lock flags");}
+    for(int quadrant=0;quadrant<4;++quadrant){
+        static const unsigned int blocked[4]={0x1000,0x800,0x400,0x2000};
+        r=interaction(0);ply.ay=quadrant*16384;r->attr=blocked[quadrant];bhCheckExmAtari(plp);
+        expect(!(state.cb_flg&0x101)&&!ply.stflg,"door facing restriction blocks its authored quadrant");
+    }
+    r=interaction(0);r->flr_no=1;state.cb_flg=0x300;bhCheckExmAtari(plp);
+    expect(state.cb_flg==0x200,"wrong-floor scan clears only proximity bit");
+    for(int down=0;down<2;++down)for(int ladder=0;ladder<2;++ladder){
+        r=interaction(1);r->attr=ladder;r->prm0=down;r->prm2=2;ply.py=10;
+        bhCheckExmAtari(plp);
+        expect(ply.mode0==1&&ply.mode2==(ladder?20:14)+down&&ply.mode3==0&&
+            (ply.stflg&0x80010010u)==0x80010010u&&state.pl_htp==r&&(r->attr&0x400000),
+            "stairs reserve collision record and select original up/down or ladder mode");
+        if(down)expect(ply.flr_no==3&&floor_y==6,"descending stairs calculate destination floor");
+    }
+    r=interaction(1);r->attr=0x400000;bhCheckExmAtari(plp);
+    expect(!ply.stflg&&!state.pl_htp,"occupied stairs cannot start another traversal");
+    r=interaction(2);bhCheckExmAtari(plp);
+    expect(ply.mode2==16&&(ply.stflg&0x20)&&state.pl_htp==r&&wall_queries==1,"ledge ascent uses quantized direction and wall clearance");
+    r=interaction(2);wall_blocked=1;bhCheckExmAtari(plp);
+    expect(!ply.stflg&&!state.pl_htp,"solid wall prevents ledge ascent");
+    blocking_wall.attr=4;bhCheckExmAtari(plp);
+    expect(ply.mode2==16,"passable collision attribute permits ledge ascent");
+    interaction(0);room.etc_n=0;ply.stflg=0x20000;bhCheckExmAtari(plp);
+    expect(ply.mode2==17&&(ply.stflg&0x20)&&wall_queries==1,"ledge descent starts when no step suppresses it");
+    r=interaction(2);r->prm0=1;ply.stflg=0x20000;bhCheckExmAtari(plp);
+    expect(ply.mode2==0&&wall_queries==0,"downward step record suppresses automatic ledge descent");
+    r=interaction(3);r->attr=9;r->prm0=4;r->prm2=2;
+    state.pad_on=1;state.pad_ps=2;state.pad_old=3;cam.flg=0x20;bhCheckExmAtari(plp);
+    expect(state.fixcno==4&&state.fixkno==2&&state.exm_attr==9&&state.pad_onb==1&&state.pad_psb==2&&state.pad_oldb==3&&!state.pad_ps&&
+        (state.gm_flg&0x11000)==0x11000&&(state.st_flg&0x84)==0x84&&(state.cb_flg&8)&&(state.ef_flg&0x10),
+        "examine point saves pad state and starts fixed-camera interaction");
+    r=interaction(3);r->attr=0x8000;r->prm1=17;state.pad_ps=0x200;bhCheckExmAtari(plp);
+    expect(message_type==0&&message_id==17&&state.pad_psb==0x200&&!state.pad_ps&&(state.cb_flg&0x20)&&(state.st_flg&0x2004)==0x2004,
+        "message examine point calls message service and preserves action input backup");
+    state.st_flg=0x80;message_id=-1;bhCheckExmAtari(plp);
+    expect(message_id==-1,"active examination prevents restarting its message");
+    r=interaction(4);state.itwp->flg=1;state.itwp->id=34;bhCheckExmAtari(plp);
+    expect(state.sb_id==34&&(state.cb_flg&0x10)&&!ply.stflg,"item prompt selects live item ID");
+    r=interaction(4);r->attr=1;state.itwp->flg=1;state.itwp->id=9;bhCheckExmAtari(plp);
+    expect(state.sb_id==9&&ply.mode2==19&&(ply.stflg&0x10000),"animated item pickup selects original player mode");
+    r=interaction(4);r->attr=6;r->prm0=255;bhCheckExmAtari(plp);
+    expect((state.cb_flg&0xc0000)==0xc0000,"object sentinel and special interaction flags avoid object dereference");
+    r=interaction(4);r->attr=10;state.obwp->flg=1;state.obwp->mode0=5;state.obwp->mode3=7;bhCheckExmAtari(plp);
+    expect((state.cb_flg&0x100000)&&state.obwp->type==100&&!state.obwp->mode0&&!state.obwp->mode3&&
+        (ply.stflg&0x18000)==0x18000,"object interaction resets object controller and marks player handoff");
+    r=interaction(0);room.etc_n=0;state.metc_n=1;state.metcp[0]=*r;state.metcp[0].prm1=12;bhCheckExmAtari(plp);
+    expect(state.etc_idx==0&&state.door.rom_no==12,"dynamic interaction record follows static record namespace");
+    r=interaction(0);r->type=5;state.cb_flg=0x100;
+    if(!setjmp(fault_jump)){bhCheckExmAtari(plp);expect(0,"bad interaction type must fault");}
+    expect(fault&&strstr(fault,"record")&&state.cb_flg==0x100,"invalid probe index faults before player/control mutation");
+    r=interaction(0);r->type=255;r->flg=0;bhCheckExmAtari(plp);
+    expect(!fault,"inactive interaction record ignores unused type field");
+    r=interaction(4);r->prm0=255;
+    if(!setjmp(fault_jump)){bhCheckExmAtari(plp);expect(0,"bad item slot must fault");}
+    expect(fault&&strstr(fault,"slot"),"item sentinel cannot index outside item work pool");
+    interaction(0);ply.exp0=NULL;
+    if(!setjmp(fault_jump)){bhCheckExmAtari(plp);expect(0,"missing expression must fault");}
+    expect(fault&&strstr(fault,"expression"),"interaction requires owned expression work");
+    interaction(0);((EXP_WORK *)ply.exp0)->arn=NAN;
+    if(!setjmp(fault_jump)){bhCheckExmAtari(plp);expect(0,"nonfinite probe must fault");}
+    expect(fault&&strstr(fault,"dimensions"),"nonfinite interaction probe faults");
+}
+
 int main(void)
 {
     reset(); enemy(0, 1, 0, 0);
@@ -213,6 +302,7 @@ int main(void)
     ledges[2].prm3 = 3;
     if (!setjmp(fault_jump)) { bhClrUseKaidanFlag(plp); expect(0, "stair link must fault"); }
     expect(fault && strstr(fault, "linked"), "explicit stair partner is bounded by room count");
+    test_interactions();
     printf("original game collision and stair occupancy: %u checks passed\n", checks);
     return 0;
 }

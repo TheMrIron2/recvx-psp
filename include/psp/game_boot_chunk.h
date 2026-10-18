@@ -6,6 +6,7 @@
 typedef struct RecvxGameChunkVertex {
     float x, y, z, nx, ny, nz, u, v;
     unsigned int color; /* ARGB; source vertex color, white for normal-only chunks. */
+    unsigned int source_index; /* Model-local index; UV seams retain this identity. */
 } RecvxGameChunkVertex;
 
 typedef struct RecvxGameChunkMaterial {

@@ -94,6 +94,42 @@ unchanged. The camera guard accepts the authored pause state; the original
 controller preserves position, keyframe and timer while paused and resumes
 from that saved state. Truncated commands are rejected before changing mode.
 
+## 3D performance
+
+Model rendering uses a bounded 256-entry cache for transformed positions,
+normalized normals and smooth vertex lighting. The cache expires for every
+model draw, so skinning, morphs, model matrices and lights cannot reuse stale
+results. UV coordinates remain per strip corner, material changes invalidate
+cached colors, and flat shading / zero-normal face fallbacks retain per-face
+lighting. Cache misses use the existing PSP VFPU transform helpers. Camera
+space light positions and directions are prepared once per model.
+
+The GU retains texture/palette bindings across batches sharing the same
+immutable texture view. Palette snapshots and shadow texture-state changes
+force a fresh bind. The main loop counts render time toward the original
+30 Hz cap instead of adding two vblanks after every render.
+
+Every 120 presented frames, `boot.log` records a `perf` line with average
+`frame_us`, `tick_us`, `gu_build_us`, `gu_wait_us` and geometry-work counts.
+`frame_us` includes presentation waits; `tick_us` includes game logic and GU
+submission/wait. High `gu_wait_us` points toward GPU pressure; high tick time
+with low GU wait points toward CPU work. These are hardware measurements when
+running on PSP, and do not infer FPS from host tests.
+
+For a repeatable CPU stress check, run
+`ASAN_OPTIONS=detect_leaks=0 RECVX_RENDER_BENCHMARK=1 build/host/game-boot-render-test`
+after `make game-boot-render-test`. A 24-corner strip emits 66 vertices but now
+transforms and shades only its three unique vertices. In the same host
+sanitizer build, 1,320,000 submitted vertices took 0.797 s before and 0.412 s
+after this pass. This synthetic result is not a real-PSP frame-rate claim.
+
+Opcode 52 (`bhObjLinkSetPly`) preserves the original 12-byte player-to-object
+link command, including ignored byte-1 padding, joint selection, signed
+hundredth-unit offsets and the link-enable bit. Nonzero disable selectors
+still store the parent/offset fields without requiring a live joint. Enabled
+links validate the player pose and follow it through the original model/link
+controllers. Offset halfwords are read bytewise for PSP alignment safety.
+
 ## Verification
 
 Focused sanitizer targets cover ranking/typewriter, system-save cancellation,
@@ -116,3 +152,94 @@ restoration. Host GU and codec tests inspect calls and data; they are not a PSP
 rasterizer or a complete playthrough. The rebuilt EBOOT still needs real PSP
 verification of these newly added UI, map and save/load paths. Door asset
 initialization and many enemy/effect handlers remain separate explicit stops.
+
+The full-game scenario table now maps all 223 assigned original opcodes. The
+remaining 130 handlers are extracted by `extract_original_event_remaining.py`,
+with packed halfword reads adapted for odd-address PSP script data. The 33
+original `dm0` slots remain unsupported. `check_game_boot_opcodes.py` compares
+each slot and handler name against the original table and rejects duplicates.
+
+The batch includes player/object subcontrollers, actor links and motion pauses,
+facial controls, inventory transfers, floor/wall/position changes, light/fog
+interpolation, timers, queued voices and effects. Shared original services now
+cover effect allocation/snapshots/cleanup, blood and sand spawning, muzzle
+flashes/casings/lighter effects, door setup, stair motion, alpha-fade setup,
+main texture release and extra-game inventory initialization. PSP adapters check
+actor/work mappings, weapon IDs, joint poses, room resource indices and script
+lengths before the relevant reads. Particle sprites use GU billboard triangles;
+object emitters use native SAS MIDI slots with positional gain/pan and script
+ramps. Compressed sound remains decoded by PSP hardware.
+
+Native validation checks 223 populated slots, 33 rejected reserved slots, every
+truncated length of the 130 new instruction layouts (including all 18 player
+and two object subcommands), and representative state changes with exact PCs.
+The opening-game harness also runs 1,201 frames. Focused tests cover particle
+billboard geometry/matrix preservation and persistent object sound registration,
+slot reuse, replacement, deletion, full capacity and scripted gain/pan ramps.
+
+Dispatch coverage is not completion of every game subsystem. Existing explicit
+boundaries in `config/psp_boot_unported.txt` still apply to unported effect and
+actor callbacks; spawning an effect does not implement its future update.
+These checks are host/native validation, not a complete playthrough or a
+replacement for testing the new EBOOT on real PSP hardware.
+
+The next callback batch ports `bhEff000`, `bhEff002`, `bhEff007`, `bhEff300`,
+`bhEff301`, `bhEff302`, `bhEff_E02_SandDust`, `bhEff_E02_SandParticle`, and
+`bhEff_E02_SandParticle2`. These are original casing, muzzle-flash, blood mesh,
+blood-pool, staged-particle and sand updates, extracted with their supporting
+wall/water queries, segment collision tests and collision-plane normal tracking.
+The original effect tables already reference these functions; their explicit
+unported entries have been removed.
+
+The auxiliary effect contexts remain owned slots in the original 512-slot pool.
+Checks reject overlapping or invalid contexts, invalid modes/types, stage and
+vertex indices, UV animation pointers/frames and full render queues. Sand's
+untextured particle draw callback now submits GU triangles with fixed projected
+pixel size, preserving the original depth scaling and view aspect. Existing
+textured particle billboards retain their world-space size behavior.
+
+Validation covers all 19 staged-particle presets through auxiliary-slot release,
+all six sand dust animations, sand gravity and emitter timing, 11 muzzle-flash
+variants through completion, blood mesh/pool updates, both casing initializations,
+13 malformed callback states, wall clipping/normal and water-volume queries.
+The native opening-game regression still runs 1,201 frames; the focused GU sprite
+fixture passes 176 checks. These checks do not establish visual parity for every
+new effect on hardware. Other effect, enemy and player callbacks remain explicit
+boundaries in `config/psp_boot_unported.txt`.
+
+`bhCheckExmAtari` now runs the original five examination probes for doors,
+stairs/ladders, ledges, examine/message points and item/object interactions.
+It preserves facing and floor restrictions, stair occupancy, wall-clearance
+checks, door destinations, player/controller handoffs and input backups.
+The collision extractor uses checked item/object lookup at each original access;
+entry checks validate the expression work, static/dynamic record spans, probe
+types and finite dimensions. The existing original message, stair, floor and
+wall services supply its dependencies.
+
+The sanitized collision fixture passes 72 checks, including the new interaction
+branches and invalid work/record/slot rejection. The 32-bit native harness also
+checks door, examination and item transitions with loaded Claire and real arena
+work, and passes its 1,201-frame opening-game regression. Door demo and specialized
+player-action callbacks that follow these transitions retain their own explicit
+boundaries until ported.
+
+The `unported original specular chunk lighting` boundary is now implemented.
+Textured strips follow the retail color-function tables in `ps2_NinjaCnk.c`
+and `ps2_Vu1Strip.c`: Easy lighting uses the overbright ramp, Simple single
+lighting uses the retail fixed power of 17, and Simple multi lighting excludes
+ambient from its specular ramp. Multi-light paths retain the retail white
+specular tint; single-light paths use the material tint. Untextured strips use
+the retail diffuse/ambient path. Ignore-light, ignore-specular, ignore-ambient
+and constant-material overrides retain their respective paths.
+
+Lit textured RGB is packed at half scale and the PSP GE doubles RGB after
+texture modulation, keeping highlights on darker texels without another draw
+pass or changing alpha. The sampler bit is captured per batch and explicitly
+cleared for subsequent ordinary textured batches. TEXFUNC's RGB-doubling bit
+is also documented in the [PPSSPP GPU state implementation](https://github.com/hrydgard/ppsspp/blob/master/GPU/GPUState.h);
+the installed PSPSDK `sceGuTexFunc` implementation was checked to preserve it.
+
+Validation passes 443 sanitized renderer checks, the typed GU adapter checks
+(including doubled/ordinary modulation on the same texture without alpha-state
+leakage), and the 1,201-frame native game regression. Visual parity of the newly
+unblocked scene still needs real PSP testing.

@@ -103,7 +103,7 @@ static int vertex(const VertexSource *source, unsigned int index, float u, float
     *out = (RecvxGameChunkVertex){
         .x = f32(p), .y = f32(p + 4), .z = f32(p + 8),
         .nx = f32(p + source->normal), .ny = f32(p + source->normal + 4),
-        .nz = f32(p + source->normal + 8), .u = u, .v = v, .color = 0xffffffffu};
+        .nz = f32(p + source->normal + 8), .u = u, .v = v, .color = 0xffffffffu, .source_index=index};
     return 0;
 }
 

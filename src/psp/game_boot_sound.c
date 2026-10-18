@@ -20,6 +20,9 @@ typedef struct EventSoundControl {
 static EventSoundControl event_control[12][16];
 static int bgm_volume=-45;
 static void event_control_tick(void);
+static void object_sound_reset(void);
+static void object_sound_tick(void);
+static void object_pool_stop(void);
 static int max_event_slot = 4, max_object_slot = 1;
 static void original_spatial(const NJS_POINT3 *position, int room_fx, int *volume, int *pan);
 extern char ThreeDVolTbl[510], PanTbl360[68], PanTbl360Vol[68];
@@ -36,6 +39,7 @@ static void check(void)
 void recvxGameBootSoundReset(void)
 {
     memset(event_control,0,sizeof(event_control));bgm_volume=-45;
+    object_sound_reset();
     room_case = init_script = system_slot = weapon_slot = request_kind = 0;
     current_bgm = pending_bgm = -1; memset(foot_slot, 0, sizeof(foot_slot));
     max_event_slot = 4; max_object_slot = 1;
@@ -45,6 +49,7 @@ void recvxGameBootSoundTick(void)
 {
     recvxAudioService();
     event_control_tick();
+    object_sound_tick();
     recvxAudioLock(); recvxAudioAdvanceFades(); recvxAudioUnlock();
     check();
 }
@@ -77,6 +82,7 @@ int GetRoomSoundCaseNo(void) { int result = room_case; room_case = 0; return res
 void InitGameSoundSystem(void)
 {
     current_bgm = pending_bgm = -1;
+    object_sound_reset();
     for (int i = 0; i < 8; ++i) recvxAudioStopMidi(i);
     recvxGameBootLog("game sound initialized: native SAS ADPCM");
 }
@@ -127,7 +133,7 @@ void ContinuePlayVoice(void) { recvxAudioPause(1, 0); }
 void RequestAllStopSoundEx(int streams, int sounds, int frames)
 {
     if (streams) { StopBgm(frames); StopVoice(frames); }
-    if (sounds) recvxAudioStopSounds(frames);
+    if (sounds) { object_sound_reset(); recvxAudioStopSounds(frames); }
 }
 static void se(int slot, int sound, int volume, int pan)
 { recvxAudioPlaySe(slot, sound, volume, pan); check(); }
@@ -169,6 +175,7 @@ static void original_spatial(const NJS_POINT3 *position, int room_fx, int *volum
 }
 int CustomMidiSlotDef(int objects, int events)
 {
+    object_pool_stop();
     if (objects < 0 || events < 0 || objects > 3 || events > 5 || objects + events > 5) {
         max_object_slot = 1; max_event_slot = 4; return 1;
     }
@@ -349,4 +356,70 @@ void CallYakkyouSe(NJS_POINT3 *position,int sound)
     int volume,pan;
     if(request_kind==2&&recvxAudioBankBusy())return;
     spatial(position,3,&volume,&pan);se(10,(sound&255)|0x100,volume,pan);
+}
+
+/* Persistent object emitters share the original configurable MIDI pool. */
+typedef struct ObjectEmitter { NJS_POINT3 position; int sound, priority; } ObjectEmitter;
+static ObjectEmitter object_emitter[16];
+static unsigned char object_order[16];
+static int object_count, object_owner[3]={-1,-1,-1}, object_sound[3];
+static void object_sound_reset(void)
+{
+    object_count=0;
+    for(int i=0;i<3;++i)object_owner[i]=-1;
+}
+void RegistObjectSe(int object,NJS_POINT3 *position,int sound,int priority)
+{
+    int volume,pan;
+    if(object<0||object>=16)recvxGameBootUnsupported("object sound ID out of range");
+    original_spatial(position,0,&volume,&pan);
+    object_emitter[object]=(ObjectEmitter){*position,(sound&0xffff00ff)|0x200,priority};
+    for(int i=0;i<object_count;++i)if(object_order[i]==object)return;
+    object_order[object_count++]=(unsigned char)object;
+}
+void FreeObjectSe(int object)
+{
+    if(object<0||object>=16)recvxGameBootUnsupported("object sound ID out of range");
+    for(int i=0;i<object_count;++i)if(object_order[i]==object){
+        memmove(object_order+i,object_order+i+1,(size_t)(--object_count-i));break;
+    }
+    for(int i=0;i<3;++i)if(object_owner[i]==object){recvxAudioStopMidi(3+i);recvxAudioSoundControl(1,3+i,0,0,0);object_owner[i]=-1;}
+    check();
+}
+static void object_sound_tick(void)
+{
+    if(init_script)return;
+    /* The PS2 manager assigns emitters in registration order and retains slots. */
+    int selected[3]={-1,-1,-1}, count=object_count<max_object_slot?object_count:max_object_slot;
+    for(int i=0;i<count;++i){
+        int object=object_order[i],slot=-1;
+        for(int j=0;j<max_object_slot;++j)if(object_owner[j]==object){slot=j;break;}
+        if(slot>=0)selected[slot]=object;
+    }
+    for(int j=0;j<3;++j)if(object_owner[j]>=0&&selected[j]<0){
+        recvxAudioStopMidi(3+j);recvxAudioSoundControl(1,3+j,0,0,0);object_owner[j]=-1;
+    }
+    for(int i=0;i<count;++i){
+        int object=object_order[i],slot=-1;
+        for(int j=0;j<max_object_slot;++j)if(selected[j]==object){slot=j;break;}
+        if(slot<0)for(int j=0;j<max_object_slot;++j)if(selected[j]<0){slot=j;selected[j]=object;break;}
+        if(slot<0)continue;
+        ObjectEmitter *e=&object_emitter[object]; EventSoundControl *c=&event_control[8][object];
+        int volume,pan;original_spatial(&e->position,0,&volume,&pan);
+        volume+=recvxAudioEnvironment(7);
+        if(c->flags&2)volume=c->volume;
+        if(c->flags&4)pan=c->pan;
+        recvxAudioSoundControl(1,3+slot,6,volume,pan);
+        if(object_owner[slot]!=object||object_sound[slot]!=e->sound){
+            recvxAudioPlayMidi(3+slot,e->sound,volume,pan);
+            object_owner[slot]=object;object_sound[slot]=e->sound;
+        }
+    }
+}
+
+static void object_pool_stop(void)
+{
+    for(int i=0;i<3;++i)if(object_owner[i]>=0){
+        recvxAudioStopMidi(3+i);recvxAudioSoundControl(1,3+i,0,0,0);object_owner[i]=-1;
+    }
 }

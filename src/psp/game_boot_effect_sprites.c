@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdint.h>
+#include "ps2/veronica/prog/ps2_NaTextureFunction.h"
 #include "psp/game_boot_effect_sprites.h"
 #include "psp/game_boot_render.h"
 #include "psp/engine_original_fault.h"
@@ -141,3 +142,66 @@ void njDrawTexture3DEx(NJS_TEXTURE_VTX *p, Int count, Int trans)
 { njDrawTexture3DExStart(trans); njDrawTexture3DExSetData(p, count); }
 void njDrawTexture3DEx1P(NJS_TEXTURE_VTX *p, int count, int trans)
 { njDrawTexture3DExStart(trans); njDrawTexture3DExSetData1P(p, count); }
+
+/* Native GU billboards replacing the PS2 particle packet writer. */
+static unsigned int particle_color;
+static int particle_trans,particle_active;
+void njPtclSpriteStart(Sint32 texture,Uint32 color,Sint32 flag)
+{
+    if(flag<0||flag>1||particle_active)recvxGameBootUnsupported("invalid particle sprite begin");
+    njSetTextureNum((Uint32)texture);
+    particle_color=color;particle_trans=flag;particle_active=1;
+}
+void njPtclSpriteEnd(void){particle_active=0;}
+void njPtclDrawSprite(NJS_POINT3 *points,Sint32 count,Float width,Float height)
+{
+    if(!particle_active||!points||count<0||count>256||!isfinite(width)||!isfinite(height))
+        recvxGameBootUnsupported("invalid particle sprite data");
+    NJS_MATRIX saved;
+    njGetMatrix(&saved);
+    for(int i=0;i<count;++i){
+        NJS_POINT3 center;njCalcPoint(&saved,&points[i],&center);
+        recvxGameBootEffectSpriteCheckMath();
+        if(center.z<=0)continue;
+        RecvxGameChunkVertex q[4]={
+            {.x=center.x-width,.y=center.y-height,.z=center.z,.u=0,.v=0,.color=particle_color},
+            {.x=center.x+width,.y=center.y-height,.z=center.z,.u=1,.v=0,.color=particle_color},
+            {.x=center.x-width,.y=center.y+height,.z=center.z,.u=0,.v=1,.color=particle_color},
+            {.x=center.x+width,.y=center.y+height,.z=center.z,.u=1,.v=1,.color=particle_color}};
+        njUnitMatrix(NULL);
+        RecvxGameChunkVertex a[3]={q[0],q[1],q[2]},b[3]={q[2],q[1],q[3]};
+        recvxGameBootRenderSpriteTriangle(a,1,particle_trans);
+        recvxGameBootRenderSpriteTriangle(b,1,particle_trans);
+        njSetMatrix(NULL,&saved);
+    }
+}
+
+#include "psp/engine_original_view.h"
+/* PS2 polygon particles have a fixed size in projected screen pixels. */
+static unsigned int particle_polygon_color;
+static int particle_polygon_active;
+void njPtclPolygonStart(Uint32 color){particle_polygon_color=color;particle_polygon_active=1;}
+void njPtclPolygonEnd(void){particle_polygon_active=0;}
+void njPtclDrawPolygon(NJS_POINT3 *points,Sint32 count,Float half_size)
+{
+    float distance=recvxEngineOriginalViewProjectionDistance(),aspect_x,aspect_y;
+    recvxEngineOriginalViewAspect(&aspect_x,&aspect_y);
+    if(!particle_polygon_active||!points||count<0||count>256||!isfinite(half_size)||
+        distance<=0||aspect_x<=0||aspect_y<=0)
+        recvxGameBootUnsupported("invalid polygon particle data/projection");
+    NJS_MATRIX saved;njGetMatrix(&saved);
+    for(int i=0;i<count;++i){
+        NJS_POINT3 center;njCalcPoint(&saved,&points[i],&center);recvxGameBootEffectSpriteCheckMath();
+        if(center.z<=0)continue;
+        float w=half_size*center.z/(distance*aspect_x),h=half_size*center.z/(distance*aspect_y);
+        RecvxGameChunkVertex q[4]={
+            {.x=center.x-w,.y=center.y-h,.z=center.z,.color=particle_polygon_color},
+            {.x=center.x+w,.y=center.y-h,.z=center.z,.color=particle_polygon_color},
+            {.x=center.x-w,.y=center.y+h,.z=center.z,.color=particle_polygon_color},
+            {.x=center.x+w,.y=center.y+h,.z=center.z,.color=particle_polygon_color}};
+        njUnitMatrix(NULL);
+        RecvxGameChunkVertex a[3]={q[0],q[1],q[2]},b[3]={q[2],q[1],q[3]};
+        recvxGameBootRenderSpriteTriangle(a,0,1);recvxGameBootRenderSpriteTriangle(b,0,1);
+        njSetMatrix(NULL,&saved);
+    }
+}

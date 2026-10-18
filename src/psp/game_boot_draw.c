@@ -609,3 +609,19 @@ void recvxGameBootDrawTexturedOverlay(NJS_POINT2COL *polygon, Float priority)
             (polygon->tex[corner].tex.v+.5f)*texture->height/256};
     }
 }
+
+/* The original snapshot occupies eight bytes and saves polygon blend modes. */
+void njGetSystemAttr(NJS_SYS_ATTR *attributes)
+{
+    if(!attributes)recvxGameBootUnsupported("missing draw state snapshot");
+    const RecvxGameBootRenderState *state=recvxGameBootRenderStateGet();
+    unsigned char data[8]={(unsigned char)state->polygon_blend_source,
+        (unsigned char)state->polygon_blend_destination,(unsigned char)texture_filter,0,0,0,0,0};
+    memcpy(attributes,data,sizeof(data));
+}
+void njSetSystemAttr(NJS_SYS_ATTR *attributes)
+{
+    if(!attributes)recvxGameBootUnsupported("missing draw state restore");
+    unsigned char data[8];memcpy(data,attributes,sizeof(data));
+    njColorBlendingMode(0,data[0]);njColorBlendingMode(1,data[1]);njTextureFilterMode(data[2]);
+}

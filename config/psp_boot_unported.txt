@@ -1,12 +1,9 @@
 # Explicit original services still awaiting implementation; each stops its update.
 bhDispTime
-bhEff000
-bhEff002
 bhEff003
 bhEff004
 bhEff005
 bhEff006
-bhEff007
 bhEff008
 bhEff010
 bhEff011
@@ -166,9 +163,6 @@ bhEff246
 bhEff247
 bhEff248
 bhEff249
-bhEff300
-bhEff301
-bhEff302
 bhEff303
 bhEff304
 bhEff305
@@ -190,9 +184,6 @@ bhEff_E00_DropBlood
 bhEff_E00_Dust
 bhEff_E00_Fire
 bhEff_E00_Mince
-bhEff_E02_SandDust
-bhEff_E02_SandParticle
-bhEff_E02_SandParticle2
 bhEff_E03_Acid
 bhEff_E03_Shadow
 bhEff_E05_Blood
@@ -280,10 +271,8 @@ bhInitDoor
 bhPopAllTexture
 bhPushAllTexture
 bhReadDoorData
-bhReleaseMainTexture
 bhSetDoor
 # Gameplay-loop callbacks: keep real boundaries until their ports are ready.
-bhStartDoorDemo
 bhCheckEvtTimer
 bhDrawSmallScreenRenderTexture
 bhDrawFullScreenRenderTexture
@@ -301,10 +290,8 @@ bhCPM0_enedam
 bhCPM0_enedie
 bhCPM0_event
 bhCPM0_nothing
-bhCheckExmAtari
 bhCheckKnifeAtari
 bhFixPositionXYZ
-bhSetEffect
 bhSetWaterSplash
 bhSetWaterSplash3
 bhControlPlEyeCamera

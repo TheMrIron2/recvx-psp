@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <math.h>
 #include <setjmp.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -28,7 +29,7 @@ static int rejecting;
 static char reason[192];
 
 unsigned int (*bhScenarioJmpT[256])(void)={
-    [0]=bhEnd,[56]=bhFrameCheck,[252]=bhWhile,[243]=bhEwhile2,[254]=bhEvtNext,[43]=bhMotionPauseSet,[60]=bhMaskSet,[62]=bhMaskStart,
+    [0]=bhEnd,[52]=bhObjLinkSetPly,[56]=bhFrameCheck,[252]=bhWhile,[243]=bhEwhile2,[254]=bhEvtNext,[43]=bhMotionPauseSet,[60]=bhMaskSet,[62]=bhMaskStart,
     [103]=bhSubCtr,[154]=bhFaceRep,[255]=bhEvtEnd
 };
 void recvxGameBootUnsupported(const char *message)
@@ -115,9 +116,50 @@ static void test_frame_check(void)
     REJECT(bhEventScheduler2(),"object work");assert(recvxEventCoreTaskPc(0)==16);
 }
 
+static void test_player_object_link(void)
+{
+    unsigned char command[]={52,255,1,1,0,0,100,0,200,0,255,255,255,0};
+    for(unsigned int signs=0;signs<256;++signs){
+        setup(command,sizeof(command));sys->obwp=(O_WRK *)arena;
+        plp->mlwP=plp->mdl;plp->mdl[0].obj_num=2;plp->mdl[0].owP=(O_WORK *)(arena+6000);
+        sys->obwp[1].flg=0x12340001u;section[21]=signs;
+        tick();O_WRK *object=&sys->obwp[1];
+        assert(object->lkwkp==(unsigned char *)plp&&object->lkono==1&&object->flg==0x12340081u);
+        assert(object->lox==((signs&1)?-1:1)&&object->loy==((signs&2)?-2:2));
+        assert(fabsf(object->loz-((signs&4)?-655.35f:655.35f))<0.001f);
+        assert(!bhEtask[0].status&&recvxEventCoreTaskPc(0)==30);
+    }
+    for(unsigned int mode=1;mode<256;++mode){
+        setup(command,sizeof(command));sys->obwp=(O_WRK *)arena;section[20]=mode;section[19]=255;
+        sys->obwp[1].flg=0x12340081u;tick();
+        assert(sys->obwp[1].flg==0x12340001u&&sys->obwp[1].lkono==255);
+    }
+    for(unsigned int length=1;length<12;++length){
+        setup(command,length);core_fault(RECVX_EVENT_FAULT_TRUNCATED);assert(recvxEventCoreTaskPc(0)==16);
+    }
+    for(unsigned int variant=0;variant<5;++variant){
+        setup(command,sizeof(command));sys->obwp=(O_WRK *)arena;
+        plp->mlwP=plp->mdl;plp->mdl[0].obj_num=2;plp->mdl[0].owP=(O_WORK *)(arena+6000);
+        if(variant==0)sys->obwp=NULL;
+        if(variant==1)section[18]=255;
+        if(variant==2)section[19]=2;
+        if(variant==3)plp->mlwP=NULL;
+        if(variant==4)plp->mdl[0].owP=NULL;
+        core_fault(RECVX_EVENT_FAULT_BAD_OPERAND);assert(recvxEventCoreTaskPc(0)==16);
+    }
+    setup(command,sizeof(command));sys->obwp=(O_WRK *)arena;
+    plp->mlwP=plp->mdl;plp->mdl[0].obj_num=2;plp->mdl[0].owP=(O_WORK *)(arena+sizeof(arena)-4);
+    REJECT(bhEventScheduler2(),"pose array");assert(sys->obwp[1].lkwkp==NULL&&recvxEventCoreTaskPc(0)==16);
+    /* Place the command at an odd address. Byte 1 is ignored padding. */
+    unsigned char odd[15]={254};memcpy(odd+1,command,sizeof(command));
+    setup(odd,sizeof(odd));sys->obwp=(O_WRK *)arena;section[21]=1;
+    tick();tick();assert(sys->obwp[1].lox==1&&recvxEventCoreTaskPc(0)==31);
+}
+
 int main(void)
 {
     test_frame_check();
+    test_player_object_link();
     const unsigned char pause[]={43,0,255,0};
     setup(pause,sizeof(pause));ene[7].id=1;ene[7].exp1=(unsigned char *)&ene[8];
     tick();assert(ene[7].mode3==4&&ene[8].mode3==4);
@@ -171,6 +213,6 @@ int main(void)
         setup(command,sizes[i]-1);core_fault(RECVX_EVENT_FAULT_TRUNCATED);
         assert(!ene[7].mode3&&!ctx(0));
     }
-    puts("PASS: frame checks for player/enemy/object, half frames, unaligned operands, wait/resume and bounds; original NPC handoff and pause/companion state, mask record selection/sentinel, facial flags, and bounded work/context/enemy/stream operands");
+    puts("PASS: player/object link enable/disable, signed offsets and joint bounds; frame checks for player/enemy/object, half frames, unaligned operands, wait/resume and bounds; original NPC handoff and pause/companion state, mask record selection/sentinel, facial flags, and bounded work/context/enemy/stream operands");
     return 0;
 }

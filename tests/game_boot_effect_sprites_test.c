@@ -1,4 +1,5 @@
 #include <assert.h>
+#include "ps2/veronica/prog/ps2_NinjaPtcl.h"
 #include <math.h>
 #include <setjmp.h>
 #include <stdio.h>
@@ -51,6 +52,8 @@ void njColorBlendingMode(Int target, Int mode) { check(target==0 || target==1); 
 void njTranslateEx(NJS_VECTOR *p) { njTranslate(NULL,p->x,p->y,p->z); }
 void njProjectScreen(NJS_MATRIX *matrix, NJS_POINT3 *input, NJS_POINT2 *output)
 { NJS_POINT3 v; njCalcPoint(matrix,input,&v); output->x=v.x/(v.z+100); output->y=v.y/(v.z+100); }
+float recvxEngineOriginalViewProjectionDistance(void){return 320;}
+void recvxEngineOriginalViewAspect(float *x,float *y){*x=2;*y=1;}
 static void reset(void)
 {
     memset(&state,0,sizeof(state)); memset(eff,0,sizeof(eff)); memset(&arena,0,sizeof(arena));
@@ -127,6 +130,26 @@ int main(void)
     reset(); njDrawTexture3DEx(eff[0].tv,4,0); check(emitted==2 && !was_trans[0]);
     reset(); njDrawPolygon3DEx(eff[0].pv,4,1); check(emitted==2 && !was_textured[0]);
     reset(); REJECT(njDrawTexture3DEx1P(arena.vertices,257,1),"submission");
+    reset();
+    NJS_MATRIX before_particle,after_particle;
+    njUnitMatrix(NULL);njTranslate(NULL,3,4,50);njGetMatrix(&before_particle);
+    NJS_POINT3 particles[2]={{1,2,3},{-1,-2,-100}};
+    njPtclSpriteStart(7,0x80abcdefu,1);njPtclDrawSprite(particles,2,2,3);njPtclSpriteEnd();
+    check(emitted==2&&selected==7&&triangles[0][0].color==0x80abcdefu);
+    check(triangles[0][0].x==2&&triangles[0][0].y==3&&triangles[0][0].z==53);
+    check(triangles[0][1].x==6&&triangles[0][2].y==9);
+    njGetMatrix(&after_particle);check(!memcmp(before_particle,after_particle,sizeof(before_particle)));
+    REJECT(njPtclDrawSprite(particles,1,1,1),"particle");
+    njPtclSpriteStart(1,0xffffffffu,0);
+    REJECT(njPtclDrawSprite(particles,257,1,1),"particle");njPtclSpriteEnd();
+    reset();njUnitMatrix(NULL);njTranslate(NULL,0,0,320);
+    NJS_POINT3 dots[2]={{0,0,0},{0,0,320}};
+    njPtclPolygonStart(0xff112233u);njPtclDrawPolygon(dots,2,2);njPtclPolygonEnd();
+    check(emitted==4&&!was_textured[0]&&was_trans[0]);
+    check(triangles[0][0].x==-1&&triangles[0][0].y==-2&&triangles[0][0].z==320);
+    check(triangles[2][0].x==-2&&triangles[2][0].y==-4&&triangles[2][0].z==640);
+    check(triangles[0][0].color==0xff112233u);
+    REJECT(njPtclDrawPolygon(dots,1,1),"polygon particle");
     printf("original 3D effect sprites: %u checks passed\n",checks);
     return 0;
 }

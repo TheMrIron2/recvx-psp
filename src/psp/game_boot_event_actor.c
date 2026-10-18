@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <math.h>
 #include <string.h>
 #include "psp/game_boot.h"
 #include "psp/game_boot_event_actor.h"
@@ -38,7 +39,18 @@ static void context(BH_PWORK *work)
 void recvxGameBootEventActorPrepare(unsigned int opcode,const unsigned char *command)
 {
     if(!sys||!command)recvxGameBootUnsupported("missing actor event state");
-    if(opcode==56){
+    if(opcode==52){
+        if(!arena(&sys->obwp[command[2]],sizeof(O_WRK)))
+            recvxGameBootUnsupported("invalid player-linked object work");
+        if(command[4]==0){
+            if(!member(plp->mlwP,plp->mdl,16,sizeof(ML_WORK))||
+               !arena(plp->mlwP->owP,plp->mlwP->obj_num*sizeof(O_WORK)))
+                recvxGameBootUnsupported("invalid player link pose array");
+            for(unsigned int i=0;i<16;++i)
+                if(!isfinite(plp->mlwP->owP[command[3]].mtx[i]))
+                    recvxGameBootUnsupported("non-finite player link joint");
+        }
+    }else if(opcode==56){
         if(command[1]==1)(void)enemy(command[2]);
         if(command[1]==2&&!arena(&sys->obwp[command[2]],sizeof(O_WRK)))
             recvxGameBootUnsupported("invalid frame check object work");

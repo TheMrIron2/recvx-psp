@@ -15,7 +15,7 @@ typedef struct { float u, v; unsigned int color; float x, y, z; } SpriteVertex;
 typedef struct {
     int primitive, format, count, depth, cull, blend, alpha, textured, shade, fog;
     int wrap_u, wrap_v, filter_min, filter_mag, source, destination, operation;
-    int target_format, depth_mask, depth_function, texture_format, texture_swizzle, texture_component;
+    int target_format, depth_mask, depth_function, texture_format, texture_swizzle, texture_component,texture_function;
     int alpha_function, alpha_reference;
     unsigned int color_mask;
     uintptr_t target;
@@ -62,7 +62,7 @@ static int depth_stride, depth_near, depth_far, depth_function, front_face;
 static unsigned int screen_offset[2];
 static int viewport[4], scissor[4], display_enabled, vblanks, swaps, terminated;
 static unsigned int calls, start_at, finish_at, sync_at, consume_at, last_model_at, first_sprite_at;
-static unsigned int texsync_at, texflush_at;
+static unsigned int texsync_at, texflush_at,clut_loads;
 static struct { int flags, format; uintptr_t target; unsigned int color, at; } clears[16];
 static size_t clear_count;
 static jmp_buf fault;
@@ -151,7 +151,7 @@ void sceGuBlendFunc(int op, int source, int destination, unsigned int sf, unsign
 }
 void sceGuTexFunc(int function, int component)
 {
-    assert((function == GU_TFX_MODULATE && (component == GU_TCC_RGBA || component == GU_TCC_RGB)) ||
+    assert(((function == GU_TFX_MODULATE || function == (GU_TFX_MODULATE|0x10000)) && (component == GU_TCC_RGBA || component == GU_TCC_RGB)) ||
         (function == GU_TFX_BLEND && component == GU_TCC_RGBA) ||
         (function == GU_TFX_REPLACE && component == GU_TCC_RGB));
     texture_function=function;
@@ -169,7 +169,7 @@ void sceGuTexMode(int psm, int mips, int cache, int swizzle)
 void sceGuClutMode(unsigned int psm, unsigned int shift, unsigned int mask, unsigned int offset)
 { assert(psm == GU_PSM_8888 && !shift && mask == 255 && !offset); ++calls; }
 void sceGuClutLoad(int blocks, const void *palette)
-{ assert(blocks == 32 && palette); texture_palette = palette; ++calls; }
+{ assert(blocks == 32 && palette); texture_palette = palette; ++clut_loads;++calls; }
 void sceGuTexImage(int mip, int width, int height, int stride, const void *data)
 {
     assert(!mip && width <= 512 && height <= 512 && data);
@@ -215,6 +215,7 @@ static Submission *submission(int primitive, int format, int count, const void *
     s->target = draw_address; s->target_format = draw_buffer_mode;
     s->texture_format = texture_format; s->texture_swizzle = texture_swizzle;
     s->texture_component = texture_component;
+    s->texture_function = texture_function;
     s->at = calls; s->texsync_at = texsync_at; s->texflush_at = texflush_at;
     s->source_fixed = blend_src_fixed; s->destination_fixed = blend_dst_fixed;
     s->pixels = texture_pixels; s->palette = texture_palette;
@@ -253,7 +254,7 @@ static void reset_frame(void)
     memset(submissions, 0, sizeof(submissions)); memset(&frame, 0, sizeof(frame));
     movie_pixels = NULL;
     submission_count = memory_used = overlay_count = 0; consumed = cache_flushed = 0;
-    clear_count = texsync_at = texflush_at = 0;
+    clear_count = texsync_at = texflush_at = clut_loads = 0;
     first_sprite_at = last_model_at = consume_at = 0;
     memset(matrix_loaded, 0, sizeof(matrix_loaded)); memset(identities, 0, sizeof(identities));
     frame.vertices = vertices; frame.batches = batches;
@@ -274,6 +275,19 @@ static void display_init(void)
     assert(scissor[0] == 0 && scissor[1] == 0 && scissor[2] == 480 && scissor[3] == 272);
     assert(enabled[GU_SCISSOR_TEST] && !enabled[GU_DEPTH_TEST] && !enabled[GU_CULL_FACE]);
     assert(display_enabled == GU_TRUE && vblanks == 1 && synchronized);
+}
+
+static void shared_texture_batches(void)
+{
+    reset_frame();frame.vertex_count=9;frame.batch_count=3;
+    for(unsigned int i=0;i<3;++i)batches[i]=(RecvxBootRenderBatch){.first=i*3,.count=3,.texture=&texture,.sampler=i};
+    recvxGameBootPresent();assert(clut_loads==1&&submission_count==3);
+    assert(submissions[0].wrap_u==GU_REPEAT&&submissions[1].wrap_u==GU_CLAMP&&submissions[2].wrap_v==GU_CLAMP);
+    /* Palette snapshots have distinct identity even with identical pixels. */
+    reset_frame();frame.vertex_count=6;frame.batch_count=2;RecvxBootTexture snapshot=texture;
+    batches[0]=(RecvxBootRenderBatch){.count=3,.texture=&texture};
+    batches[1]=(RecvxBootRenderBatch){.first=3,.count=3,.texture=&snapshot};
+    recvxGameBootPresent();assert(clut_loads==2&&submissions[0].palette!=submissions[1].palette);
 }
 
 static void models_then_overlays(void)
@@ -592,9 +606,21 @@ static void movie_display(void)
     assert(!submissions[8].textured && submissions[8].blend);
 }
 
+static void specular_modulation(void)
+{
+    reset_frame();frame.vertex_count=6;frame.batch_count=2;
+    batches[0]=(RecvxBootRenderBatch){.count=3,.texture=&texture,.sampler=RECVX_RENDER_COLOR_DOUBLE};
+    batches[1]=(RecvxBootRenderBatch){.first=3,.count=3,.texture=&texture};
+    recvxGameBootPresent();
+    assert(submission_count==2&&submissions[0].texture_function==(GU_TFX_MODULATE|0x10000));
+    assert(submissions[1].texture_function==GU_TFX_MODULATE);
+    assert(submissions[0].texture_component==GU_TCC_RGBA&&submissions[1].texture_component==GU_TCC_RGBA);
+    assert(clut_loads==1); /* RGB scale is independent of immutable texture bindings. */
+}
+
 int main(void)
 {
-    display_init(); models_then_overlays(); blend_mappings(); authored_half_fog(); ordinary_depth_fog(); screen_gradient_triangles(); translucent_screen_depth(); shadow_protocol();
+    display_init(); specular_modulation(); shared_texture_batches(); models_then_overlays(); blend_mappings(); authored_half_fog(); ordinary_depth_fog(); screen_gradient_triangles(); translucent_screen_depth(); shadow_protocol();
     reset_frame(); frame.vertex_count=3; frame.batch_count=1;
     batches[0]=(RecvxBootRenderBatch){.count=3,.texture=&texture,.kind=RECVX_RENDER_SCREEN_OFFSET,
         .attributes=0x1b,.blend_source=8,.blend_destination=6,.fog_color=0x102030,.scissor={0,0,480,272}};

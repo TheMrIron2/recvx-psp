@@ -14,6 +14,10 @@ unsigned int (*bhScenarioJmpT[256])(void) = {
 #undef RECVX_EVENT_CORE
 #undef RECVX_EVENT_ENGINE
 #undef RECVX_EVENT_FULL
+#define RECVX_EVENT_REMAINING(number,handler,bytes) [number]=handler,
+#include "psp/game_boot_event_remaining.inc"
+#undef RECVX_EVENT_REMAINING
+    [52] = bhObjLinkSetPly,
     [41] = bhCamPauseSet,
     [56] = bhFrameCheck,
     [70]=bhSetNextRoomBgm, [71]=bhSetNextRoomBgSe,

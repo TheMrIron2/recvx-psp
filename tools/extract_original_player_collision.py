@@ -30,11 +30,16 @@ def prepare(destination):
               '#include "ps2/veronica/prog/player.h"',
               '#include "ps2/veronica/prog/ps2_NaMath.h"',
               '#include "ps2/veronica/prog/ps2_NaMatrix.h"',
+              '#include "ps2/veronica/prog/message.h"',
+              '#include "ps2/veronica/prog/pwksub.h"',
+              'void recvxGameBootCollisionInteractionPrepare(BH_PWORK *actor);',
+              'O_WRK *recvxGameBootCollisionInteractionObject(unsigned int index,int item);',
               'void recvxGameBootCollisionActorsPrepare(BH_PWORK *actor, int player_contact);',
               'void recvxGameBootCollisionFloorsPrepare(BH_PWORK *actor, int floor_query);',
               'void recvxGameBootCollisionStairPrepare(BH_PWORK *, ATR_WORK *, int, int);',
               'uintptr_t recvxGameBootCollisionActorAddress(const void *actor);']
     guards = {
+        'bhCheckExmAtari': 'recvxGameBootCollisionInteractionPrepare(pp);',
         'bhCheckEnemies': 'recvxGameBootCollisionActorsPrepare(pp, 0);',
         'bhCheckPlayer': 'recvxGameBootCollisionActorsPrepare(pp, 1);',
         'bhCheckFloorP': 'recvxGameBootCollisionFloorsPrepare(pp, 1);',
@@ -49,6 +54,9 @@ def prepare(destination):
     }
     for name, guard in guards.items():
         line, function = extract(source, name)
+        if name == 'bhCheckExmAtari':
+            function=function.replace('&sys->itwp[exp->prm0]', 'recvxGameBootCollisionInteractionObject(exp->prm0,1)').replace('&sys->obwp[exp->prm0]', 'recvxGameBootCollisionInteractionObject(exp->prm0,0)')
+            function=function.replace('pp->ay + 8192','(int)((unsigned int)pp->ay + 8192u)')
         if name == 'bhCheckEnemies':
             for actor in ('pp', 'enep', 'plp'):
                 function = function.replace(f'((unsigned int){actor} & ~0x80000000)',

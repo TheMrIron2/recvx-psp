@@ -3,6 +3,8 @@
 #include <setjmp.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <time.h>
 #include "psp/game_boot_render.h"
 #include "psp/game_boot_render_texture.h"
 #include "psp/game_boot_fog.h"
@@ -99,6 +101,57 @@ static void clip_model_vertices(const float positions[3][3],unsigned int attribu
     }
     put16(strip+26,255);recvxGameBootRenderTextureList(&textures);
 }
+static void specular_model(unsigned int diffuse,unsigned int specular,unsigned int attributes)
+{
+    reset();
+    static const float p[3][3]={{-1,-1,4},{0,1,4},{1,-1,4}};
+    clip_model_vertices(p,attributes);
+    memmove(data.polygons+12,data.polygons,32);
+    data.polygons[0]=21;data.polygons[1]=0;put16(data.polygons+2,4);
+    memcpy(data.polygons+4,&diffuse,4);memcpy(data.polygons+8,&specular,4);
+    recvxGameBootRenderTextureList(&textures);
+}
+static void specular_tests(void)
+{
+    const RecvxBootRenderFrame *f;
+    specular_model(0x80ffffffu,0x11ff0000u,0);
+    njCnkSetEasyLight(0,0,1);njCnkSetEasyLightColor(1,1,1);njCnkSetEasyLightIntensity(0.5f,1);
+    njCnkEasyDrawModel(&data.model);f=recvxGameBootRenderFrame();
+    CHECK(f->vertex_count==3&&f->batch_count==1&&(f->batches[0].sampler&RECVX_RENDER_COLOR_DOUBLE));
+    CHECK(f->vertices[0].color==0x8080808fu); /* red 143, green/blue 128, unchanged alpha. */
+    specular_model(0x80ffffffu,0x110000ffu,0);
+    njCnkSetEasyMultiLight(1);njCnkSetEasyMultiLightSwitch(1,1);njCnkSetEasyMultiLightVector(0,0,1);
+    njCnkSetEasyMultiLightColor(1,1.5f,1.5f,1.5f);f=draw();
+    CHECK(f->vertices[0].color==0x808f8f8fu); /* Retail multi-light specular tint is white. */
+    specular_model(0x80000000u,0x11ff0000u,0);
+    njCnkSetSimpleLight(0,0,1);njCnkSetSimpleLightColor(1,1,1);njCnkSetSimpleLightIntensity(1,0);
+    njCnkSimpleDrawModel(&data.model);f=recvxGameBootRenderFrame();
+    CHECK(f->vertices[0].color==0x8000001fu);
+    recvxGameBootRenderConsume();njCnkSetSimpleLightIntensity(0.9f,0);
+    njCnkSimpleDrawModel(&data.model);f=recvxGameBootRenderFrame();
+    unsigned int expected=(unsigned int)(0.5f*(31.0f/128.0f)*powf(0.9f,17)*255+0.5f);
+    CHECK((f->vertices[0].color&255u)==expected&&expected==5);
+    specular_model(0x80000000u,0x11ffffffu,0);
+    njCnkSetSimpleMultiLight(1);njCnkSetSimpleMultiLightSwitch(1,1);njCnkSetSimpleMultiLightVector(0,0,1);
+    njCnkSetSimpleMultiLightColor(1,0.5f,0.5f,0.5f);njCnkSetSimpleMultiAmbient(1,1,1);
+    njCnkSimpleMultiDrawModel(&data.model);f=recvxGameBootRenderFrame();
+    CHECK(f->vertices[0].color==0x80000000u); /* Ambient does not create Simple multi highlights. */
+    for(unsigned int ignore=1;ignore<=2;++ignore){
+        specular_model(0x80ffffffu,0x11ffffffu,ignore);
+        njCnkSetEasyMultiAmbient(0.5f,0.5f,0.5f);f=draw();
+        CHECK(!(f->batches[0].sampler&RECVX_RENDER_COLOR_DOUBLE));
+        CHECK(f->vertices[0].color==(ignore==1?0x80ffffffu:0x80808080u));
+    }
+    specular_model(0x80ffffffu,0x11ffffffu,4);
+    njCnkSetEasyLight(0,0,1);njCnkSetEasyLightColor(1,1,1);njCnkSetEasyLightIntensity(0.5f,1);
+    njCnkEasyDrawModel(&data.model);f=recvxGameBootRenderFrame();
+    CHECK(f->vertices[0].color==0x80404040u);
+    specular_model(0x80ffffffu,0x11ffffffu,0);
+    NJS_ARGB constant={0.5f,1,0,0};njControl3D(0x10);njSetConstantMaterial(&constant);
+    f=draw();CHECK(!(f->batches[0].sampler&RECVX_RENDER_COLOR_DOUBLE));
+    CHECK(f->vertices[0].color==0x80000000u); /* Existing constant diffuse lighting path. */
+}
+
 static void custom_clip_tests(void)
 {
     const float crossing[3][3]={{-4,0,4},{0,1,4},{0,-1,4}};
@@ -145,8 +198,75 @@ static void custom_clip_tests(void)
     reset();_Make_ClipVolume(0,240);REJECT(draw(),"clip volume");
     reset();_Make_ClipVolume(NAN,240);REJECT(draw(),"clip volume");
 }
+static void shared_vertex_tests(void)
+{
+    for(unsigned int mode=0;mode<4;++mode){
+        reset();
+        unsigned int attributes=mode==1?0x22:mode==2?3:2;
+        if(mode==3)for(unsigned int i=0;i<3;++i)putfloat(data.vertices+64+i*32+24,0);
+        njCnkSetEasyMultiAmbient(0.2f,0.3f,0.4f);
+        njCnkSetEasyMultiLight(2);njCnkSetEasyMultiLightSwitch(1,1);njCnkSetEasyMultiLightSwitch(2,1);
+        njCnkSetEasyMultiLightVector(0,0,1);njCnkSetEasyMultiLightColor(1,1,0,0);
+        njCnkSetEasyMultiLightColor(2,0,1,0);njCnkSetEasyMultiLightPoint(2,0,0,0);njCnkSetEasyMultiLightRange(2,5,20);
+        data.polygons[1]=attributes;put16(data.polygons+2,26);put16(data.polygons+6,24);
+        for(unsigned int i=0;i<24;++i)put16(data.polygons+8+2*i,i%3);
+        put16(data.polygons+56,255);
+        const RecvxBootRenderFrame *f=draw();CHECK(f->vertex_count==66);
+        RecvxBootRenderVertex expected[66];memcpy(expected,f->vertices,sizeof(expected));
+        RecvxBootRenderStats stats=recvxGameBootRenderStats();
+        CHECK(stats.position_transforms==3);
+        if(mode==0)CHECK(stats.normal_transforms==3&&stats.shaded_vertices==3);
+        if(mode==1||mode==2)CHECK(stats.normal_transforms==0);
+        if(mode==3)CHECK(stats.shaded_vertices==66); /* Face-dependent zero-normal fallback. */
+        recvxGameBootRenderConsume();
+        put16(data.polygons+2,5);put16(data.polygons+6,3);put16(data.polygons+14,255);
+        for(unsigned int i=0;i<22;++i){
+            unsigned int a=i%3,b=(i+1)%3,c=(i+2)%3;
+            if(i&1u){unsigned int swap=a;a=b;b=swap;}
+            put16(data.polygons+8,a);put16(data.polygons+10,b);put16(data.polygons+12,c);draw();
+        }
+        f=recvxGameBootRenderFrame();CHECK(f->vertex_count==66&&!memcmp(f->vertices,expected,sizeof(expected)));
+        recvxGameBootRenderConsume();putfloat(data.vertices+64,7);
+        put16(data.polygons+8,0);put16(data.polygons+10,1);put16(data.polygons+12,2);
+        f=draw();CHECK(f->vertices[0].x==7); /* Stream deformation invalidates the cache each draw. */
+    }
+    reset();data.polygons[1]=3;
+    unsigned char strip[14];memcpy(strip,data.polygons,sizeof(strip));
+    data.polygons[14]=17;data.polygons[15]=0;put16(data.polygons+16,2);
+    unsigned int red=0xffff0000u;memcpy(data.polygons+18,&red,4);
+    memcpy(data.polygons+22,strip,sizeof(strip));put16(data.polygons+36,255);
+    const RecvxBootRenderFrame *f=draw();
+    CHECK(f->vertex_count==6&&f->vertices[0].color==0xffffffffu&&f->vertices[3].color==0xff0000ffu);
+    CHECK(recvxGameBootRenderStats().position_transforms==3&&recvxGameBootRenderStats().shaded_vertices==6);
+    reset();recvxGameBootRenderTextureList(&textures);
+    data.polygons[0]=8;put16(data.polygons+2,0);
+    unsigned char *p=data.polygons+4;p[0]=65;p[1]=3;put16(p+2,21);put16(p+4,2);
+    for(unsigned int strip_index=0;strip_index<2;++strip_index){
+        unsigned char *q=p+6+strip_index*20;put16(q,3);
+        for(unsigned int i=0;i<3;++i){put16(q+2+i*6,i);put16(q+4+i*6,strip_index*255);put16(q+6+i*6,strip_index*255);}
+    }
+    put16(data.polygons+50,255);f=draw();
+    CHECK(f->vertex_count==6&&f->vertices[0].u==0&&close_to(f->vertices[3].u,1));
+    CHECK(recvxGameBootRenderStats().position_transforms==3);
+
+}
+static void benchmark_strip(void)
+{
+    if(!getenv("RECVX_RENDER_BENCHMARK"))return;
+    reset();data.polygons[1]=2;put16(data.polygons+2,26);put16(data.polygons+6,24);
+    for(unsigned int i=0;i<24;++i)put16(data.polygons+8+2*i,i%3);
+    put16(data.polygons+56,255);
+    clock_t start=clock();unsigned int total=0;
+    for(unsigned int i=0;i<20000;++i){
+        const RecvxBootRenderFrame *f=draw();total+=f->vertex_count;
+        recvxGameBootRenderConsume();
+    }
+    RecvxBootRenderStats stats=recvxGameBootRenderStats();
+    printf("RENDER BENCH: %u vertices %.3f CPU seconds, pos=%u normal=%u shade=%u\n",total,(double)(clock()-start)/CLOCKS_PER_SEC,stats.position_transforms,stats.normal_transforms,stats.shaded_vertices);
+}
 int main(void)
 {
+    benchmark_strip();
     const RecvxBootRenderFrame *f;
     reset(); njGenerateFogTable3(NULL,-1,-100); njSetFogColor(0xff123456); njFogEnable();
     f=draw(); draw();
@@ -221,7 +341,7 @@ int main(void)
     REJECT(njCnkEasyDrawObject(data.objects), "object transform");
     reset(); REJECT(njCnkEasyDrawObject((NJS_CNK_OBJECT *)1), "object tree");
     reset(); data.model.r = NAN; REJECT(draw(), "model bounds");
-    reset(); data.polygons[1] = 0; REJECT(draw(), "specular");
+    reset(); data.polygons[1] = 0; CHECK(draw()->vertex_count==3); /* Retail untextured strips use diffuse/ambient only. */
     reset(); data.polygons[1] = 0x43; REJECT(draw(), "environment-mapped");
     reset(); data.vertices[0] = 99; REJECT(draw(), "vertex command");
     reset();
@@ -372,7 +492,7 @@ int main(void)
     f=recvxGameBootRenderFrame(); CHECK(f->vertex_count==3 && f->batch_count==1);
     pending_overlay_view = recvxGameBootRenderSnapshotTexture(&texture);
     recvxGameBootRenderReset(); CHECK(!recvxGameBootRenderPending() && !pending_overlay_view);
-    custom_clip_tests();recvxGameBootRenderReset();
+    custom_clip_tests();shared_vertex_tests();specular_tests();recvxGameBootRenderReset();
     printf("PASS: original chunk transforms, hierarchy, custom plane clipping/UV/color interpolation, projection, lighting, batching, immutable palette view lifetime/capacity and malformed state: %u checks\n",checks);
     return 0;
 }

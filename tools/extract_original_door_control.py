@@ -10,7 +10,12 @@ def prepare(destination):
     source = re.sub(r'(?m)^static (void|int|float) ', r'\1 ', path.read_text())
     output = ['#include <math.h>', '#include <stdint.h>',
         '#pragma GCC diagnostic ignored "-Wunused-function"',
-        '#include "psp/game_boot.h"', '#include "ps2/veronica/prog/door.h"',
+        '#include "psp/game_boot.h"',
+        '#include "ps2/veronica/prog/main.h"',
+        '#include "ps2/veronica/prog/room.h"',
+        '#include "ps2/veronica/prog/screen.h"',
+        '#include "ps2/veronica/prog/cut.h"',
+        'void recvxGameBootDoorStartPrepare(void);', '#include "ps2/veronica/prog/door.h"',
         '#include "ps2/veronica/prog/ps2_NaMath.h"',
         '#include "ps2/veronica/prog/ps2_NaMatrix.h"',
         '#include "ps2/veronica/prog/ps2_NaView.h"',
@@ -44,6 +49,10 @@ def prepare(destination):
                 function = function.replace(f'-dwP->vew_ang[{i}]',
                     f'(int)((0u - (unsigned int)dwP->vew_ang[{i}]) & 65535u)')
         output += [f'#line {line} "{path.as_posix()}"', function, '']
+    room=Path('src/ps2/veronica/prog/room.c')
+    line,function=extract(room.read_text(),'bhStartDoorDemo')
+    function=function.replace('{','{\n    recvxGameBootDoorStartPrepare();',1)
+    output += [f'#line {line} "{room.as_posix()}"',function,'']
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text('\n'.join(output))
 

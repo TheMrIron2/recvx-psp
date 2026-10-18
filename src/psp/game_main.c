@@ -27,6 +27,9 @@ int main(int argc, char **argv)
     int thread_result;
     SceKernelThreadInfo main_thread = {0};
     unsigned int previous_vblank;
+    unsigned int perf_frames=0,perf_started=0;
+    uint64_t perf_tick_us=0;
+    RecvxBootRenderStats perf_render={0};RecvxBootGuStats perf_gu={0};
     pspDebugScreenInit();
     callback = sceKernelCreateCallback("RECVX Exit", exit_callback, NULL);
     sceKernelRegisterExitCallback(callback);
@@ -48,14 +51,20 @@ int main(int argc, char **argv)
         recvxGameBootLog("native audio ready: AVCODEC + SASCORE; %u Hz stereo; grain=%u",RECVX_AUDIO_RATE,RECVX_AUDIO_FRAMES);
         recvxGameBootDisplayInit();
         previous_vblank = sceDisplayGetVcount();
+        perf_started=sceKernelGetSystemTimeLow();
+        perf_render=recvxGameBootRenderStats();perf_gu=recvxGameBootGuStats();
         while (!exit_requested) {
             RecvxInputState input;
             if (recvxPlatformReadInput(&input) <= 0) {
                 recvxPlatformCheckCallbacks(); recvxPlatformWaitVblank(); continue;
             }
+            unsigned int tick_started=sceKernelGetSystemTimeLow();
             if (recvxGameBootTick(&input)) break;
-            /* Original PS2 presentation advances once per two vblanks. */
-            recvxPlatformWaitVblank(); recvxPlatformWaitVblank();
+            perf_tick_us+=sceKernelGetSystemTimeLow()-tick_started;
+            /* Cap at the original 30 Hz, counting time already spent drawing.
+               Over-budget frames wait only for the next tear-free swap. */
+            do {recvxPlatformWaitVblank();}
+            while((unsigned int)(sceDisplayGetVcount()-previous_vblank)<2u);
             recvxGameBootDisplaySwap();
             {
                 unsigned int vblank = sceDisplayGetVcount();
@@ -63,6 +72,18 @@ int main(int argc, char **argv)
                 previous_vblank = vblank;
             }
             recvxPlatformCheckCallbacks();
+            if(++perf_frames==120){
+                unsigned int now=sceKernelGetSystemTimeLow();
+                RecvxBootRenderStats r=recvxGameBootRenderStats();RecvxBootGuStats g=recvxGameBootGuStats();
+                recvxGameBootLog("perf frames=%u frame_us=%u tick_us=%u gu_build_us=%u gu_wait_us=%u models=%u tris=%u pos_xform=%u normal_xform=%u shade=%u",
+                    perf_frames,(now-perf_started)/perf_frames,(unsigned int)(perf_tick_us/perf_frames),
+                    (g.build_us-perf_gu.build_us)/perf_frames,(g.wait_us-perf_gu.wait_us)/perf_frames,
+                    (r.models-perf_render.models)/perf_frames,(r.triangles-perf_render.triangles)/perf_frames,
+                    (r.position_transforms-perf_render.position_transforms)/perf_frames,
+                    (r.normal_transforms-perf_render.normal_transforms)/perf_frames,
+                    (r.shaded_vertices-perf_render.shaded_vertices)/perf_frames);
+                perf_frames=0;perf_tick_us=0;perf_started=sceKernelGetSystemTimeLow();perf_render=r;perf_gu=g;
+            }
         }
         recvxGameBootMovieShutdown();
         recvxAudioOutputShutdown();

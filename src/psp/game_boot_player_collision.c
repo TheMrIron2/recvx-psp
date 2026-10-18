@@ -116,3 +116,34 @@ void recvxGameBootCollisionFloorsPrepare(BH_PWORK *actor, int floor_query)
     if (floor_query == 1 && !arena_span(plp->exp0, sizeof(EXP_WORK)))
         recvxGameBootUnsupported("invalid floor collision expression work");
 }
+
+/* Examination probes use the original five player-relative sample positions. */
+void recvxGameBootCollisionInteractionPrepare(BH_PWORK *actor)
+{
+    if(!sys||!rom||!plp||sys->metc_n<0||sys->metc_n>64)
+        recvxGameBootUnsupported("invalid interaction collision state/count");
+    actor_prepare(actor);actor_prepare(plp);
+    if(!arena_span(plp->exp0,sizeof(EXP_WORK)))
+        recvxGameBootUnsupported("invalid interaction expression work");
+    EXP_WORK *expression=(EXP_WORK *)plp->exp0;
+    if(!isfinite(expression->fpx)||!isfinite(expression->fpz)||!isfinite(expression->arn)||
+        !isfinite(actor->ar)||!isfinite(actor->ah)||actor->ar<0||actor->ah<0)
+        recvxGameBootUnsupported("invalid interaction probe dimensions");
+    table_prepare(rom->etcp,rom->etc_n);
+    if(rom->etc_n>INT32_MAX-64)
+        recvxGameBootUnsupported("invalid interaction collision count");
+    for(int i=0;i<rom->etc_n+sys->metc_n;++i){
+        ATR_WORK *record=i<rom->etc_n?&rom->etcp[i]:&sys->metcp[i-rom->etc_n];
+        if(!(record->flg&1u))continue;
+        if(record->type>=5||!isfinite(record->px)||!isfinite(record->pz)||
+            !isfinite(record->w)||!isfinite(record->d)||record->w<0||record->d<0)
+            recvxGameBootUnsupported("invalid interaction collision record");
+    }
+}
+O_WRK *recvxGameBootCollisionInteractionObject(unsigned int index,int item)
+{
+    O_WRK *base=item?sys->itwp:sys->obwp;
+    if(index>=39936u/sizeof(O_WRK)||!arena_span(base,(index+1u)*sizeof(*base)))
+        recvxGameBootUnsupported("invalid interaction object/item slot");
+    return &base[index];
+}

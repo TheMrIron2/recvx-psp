@@ -107,6 +107,25 @@ int main(void)
     Set3dSoundFlag(10,0,2);SetUserSoundVolume(10,0,-100,-30,20);
     assert(slot_seen==0&&volume_seen==-30&&fade_seen==20);
     Reset3dSoundFlag();assert(flags_seen==0);
+    recvxGameBootSoundReset();
+    RegistObjectSe(4,&p,0x123,3);RegistObjectSe(8,&p,0x124,1);
+    before=midi_starts;recvxGameBootSoundTick();
+    assert(midi_starts==before+1&&slot_seen==3&&sound_seen==0x223&&volume_seen==-40&&pan_seen==20);
+    recvxGameBootSoundTick();assert(midi_starts==before+1);
+    RegistObjectSe(4,&p,0x125,3);recvxGameBootSoundTick();
+    assert(midi_starts==before+2&&sound_seen==0x225);
+    Set3dSoundFlag(8,4,6);SetUserSoundVolume(8,4,-80,-20,2);SetUserSoundPan(8,4,-60,60,2);
+    recvxGameBootSoundTick();assert(slot_seen==3&&volume_seen==-50&&pan_seen==0);
+    recvxGameBootSoundTick();assert(volume_seen==-20&&pan_seen==60);
+    FreeObjectSe(4);recvxGameBootSoundTick();assert(sound_seen==0x224&&slot_seen==3);
+    FreeObjectSe(8);before=midi_starts;recvxGameBootSoundTick();assert(midi_starts==before);
+    assert(!CustomMidiSlotDef(3,2));
+    for(int id=0;id<16;++id)RegistObjectSe(id,&p,id,0);
+    recvxGameBootSoundTick();assert(midi_starts==before+3&&slot_seen==5);
+    before=midi_starts;recvxGameBootSoundTick();assert(midi_starts==before);
+    for(int id=0;id<16;++id)FreeObjectSe(id);
+    recvxGameBootSoundTick();assert(midi_starts==before);
+    puts("PASS persistent native object sounds: registration order, slot retention, sound replacement, spatial gain/pan, scripted ramps, freeing and full 16-emitter capacity");
     puts("PASS real native sound service: scripted slot masks, exact gain/pan ramps and native stream fades; event/background slot ownership, positional volume/pan, fade frames and voice modes");
     return 0;
 }
