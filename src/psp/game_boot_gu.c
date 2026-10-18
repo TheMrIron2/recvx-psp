@@ -157,7 +157,9 @@ static void models(const RecvxBootRenderFrame *frame)
             sceGuEnable(GU_FOG);
         } else sceGuDisable(GU_FOG);
         const RecvxBootTexture *texture = batch->texture;
-        sceGuEnable(GU_DEPTH_TEST); sceGuDepthMask(GU_FALSE);
+        int screen_space = batch->kind == RECVX_RENDER_SCREEN_TRIANGLES ||
+            batch->kind == RECVX_RENDER_SCREEN_OFFSET || batch->kind == RECVX_RENDER_SCREEN_HALF_BASE;
+        sceGuEnable(GU_DEPTH_TEST); sceGuDepthMask(screen_space ? GU_TRUE : GU_FALSE);
         sceGuEnable(GU_ALPHA_TEST); sceGuAlphaFunc(GU_GREATER, 0, 255);
         sceGuShadeModel(batch->attributes & 0x20u ? GU_FLAT : GU_SMOOTH);
         if (batch->attributes & 0x10u) sceGuDisable(GU_CULL_FACE);
@@ -180,11 +182,26 @@ static void models(const RecvxBootRenderFrame *frame)
             sceGuTexFilter(batch->sampler & 4 ? GU_LINEAR : GU_NEAREST, batch->sampler & 4 ? GU_LINEAR : GU_NEAREST);
             sceGuTexFlush();
         } else sceGuDisable(GU_TEXTURE_2D);
-        if (batch->kind == RECVX_RENDER_SCREEN_TRIANGLES || batch->kind == RECVX_RENDER_SCREEN_OFFSET ||
-            batch->kind == RECVX_RENDER_SCREEN_HALF_BASE)
+        if (screen_space) {
+            /* Retail Ps2DrawOTag uses alpha-fail FB_ONLY: translucent pixels
+               change color without writing Z. A near full-screen effect must
+               not hide actors submitted after it. GE has no FB_ONLY mode,
+               so draw color first, then write only fully opaque pixels' Z. */
             sceGuDrawArray(GU_TRIANGLES, GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
                 batch->count, NULL, frame->vertices + batch->first);
-        else sceGumDrawArray(batch->kind == RECVX_RENDER_LINES ? GU_LINES : GU_TRIANGLES,
+            int opaque = 0;
+            for (unsigned int j = 0; j < batch->count; ++j)
+                if ((frame->vertices[batch->first + j].color >> 24) == 255u) { opaque = 1; break; }
+            if (opaque) {
+                sceGuDepthMask(GU_FALSE);
+                sceGuAlphaFunc(GU_EQUAL, 255, 255);
+                sceGuPixelMask(0xffffffffu);
+                sceGuDrawArray(GU_TRIANGLES, GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
+                    batch->count, NULL, frame->vertices + batch->first);
+                sceGuPixelMask(0);
+                sceGuAlphaFunc(GU_GREATER, 0, 255);
+            }
+        } else sceGumDrawArray(batch->kind == RECVX_RENDER_LINES ? GU_LINES : GU_TRIANGLES,
             GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
             batch->count, NULL, frame->vertices + batch->first);
     }

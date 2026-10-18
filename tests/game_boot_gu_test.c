@@ -16,6 +16,8 @@ typedef struct {
     int primitive, format, count, depth, cull, blend, alpha, textured, shade, fog;
     int wrap_u, wrap_v, filter_min, filter_mag, source, destination, operation;
     int target_format, depth_mask, depth_function, texture_format, texture_swizzle, texture_component;
+    int alpha_function, alpha_reference;
+    unsigned int color_mask;
     uintptr_t target;
     unsigned int at, texsync_at, texflush_at;
     unsigned int source_fixed, destination_fixed;
@@ -47,7 +49,7 @@ static int shade_model;
 static int blend_operation, texture_format, texture_swizzle, texture_component;
 static float fog_near, fog_far;
 static unsigned int fog_color;
-static unsigned int blend_src_fixed, blend_dst_fixed, clear_color, clear_depth;
+static unsigned int blend_src_fixed, blend_dst_fixed, clear_color, clear_depth, color_mask;
 static int clear_flags, depth_mask, alpha_func, alpha_value, alpha_mask;
 static int texture_width, texture_height, texture_stride;
 static const void *texture_pixels, *texture_palette;
@@ -137,6 +139,7 @@ void sceGuScissor(int x, int y, int width, int height)
 void sceGuEnable(int mode) { assert(mode >= 0 && mode < 32); enabled[mode] = 1; ++calls; }
 void sceGuDisable(int mode) { assert(mode >= 0 && mode < 32); enabled[mode] = 0; ++calls; }
 void sceGuDepthMask(int mask) { depth_mask = mask; ++calls; }
+void sceGuPixelMask(unsigned int mask) { color_mask=mask; ++calls; }
 void sceGuShadeModel(int mode) { shade_model = mode; ++calls; }
 void sceGuAlphaFunc(int func, int value, int mask)
 { alpha_func = func; alpha_value = value; alpha_mask = mask; ++calls; }
@@ -207,6 +210,7 @@ static Submission *submission(int primitive, int format, int count, const void *
     s->shade = shade_model;
     s->wrap_u = wraps[0]; s->wrap_v = wraps[1]; s->filter_min = filters[0]; s->filter_mag = filters[1];
     s->source = blend_source; s->destination = blend_destination;
+    s->alpha_function=alpha_func; s->alpha_reference=alpha_value; s->color_mask=color_mask;
     s->operation = blend_operation; s->depth_mask = depth_mask; s->depth_function = depth_function;
     s->target = draw_address; s->target_format = draw_buffer_mode;
     s->texture_format = texture_format; s->texture_swizzle = texture_swizzle;
@@ -492,15 +496,15 @@ static void screen_gradient_triangles(void)
     memcpy(vertices+9,vertices+3,3*sizeof(*vertices));
     overlays[0]=(RecvxBootDraw){.quad={.x1=0,.y1=0,.x2=640,.y2=480,.u2=1,.v2=1},.texture=&texture,.color=0xffffffff};
     overlay_count=1;
-    recvxGameBootPresent();assert(consumed&&submission_count==5);
+    recvxGameBootPresent();assert(consumed&&submission_count==7);
     assert(submissions[0].fog&&submissions[0].format==
         (GU_TEXTURE_32BITF|GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_3D));
-    for(unsigned int i=1;i<=3;i+=2) {
+    for(unsigned int i=1;i<=4;i+=3) {
         const Submission *s=&submissions[i];
         assert(s->primitive==GU_TRIANGLES&&s->count==3&&s->format==
             (GU_TEXTURE_32BITF|GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_2D));
-        assert(s->pointer==vertices+batches[i].first&&!s->fog&&!s->cull&&s->depth&&s->alpha&&s->blend);
-        assert(s->depth_mask==GU_FALSE&&s->depth_function==GU_GEQUAL&&s->shade==GU_SMOOTH);
+        assert(s->pointer==vertices+batches[i==1?1:3].first&&!s->fog&&!s->cull&&s->depth&&s->alpha&&s->blend);
+        assert(s->depth_mask==GU_TRUE&&s->depth_function==GU_GEQUAL&&s->shade==GU_SMOOTH);
         assert(s->target==context_draw_address&&s->target_format==GU_PSM_8888);
         assert(s->textured&&s->texture_format==GU_PSM_T8&&s->pixels==pixels&&s->palette==texture.palette);
         for(unsigned int j=0;j<3;++j) {
@@ -512,14 +516,33 @@ static void screen_gradient_triangles(void)
     }
     assert(submissions[1].filter_min==GU_LINEAR&&submissions[1].wrap_u==GU_CLAMP&&submissions[1].wrap_v==GU_REPEAT);
     assert(submissions[1].source==GU_SRC_ALPHA&&submissions[1].destination==GU_ONE_MINUS_SRC_ALPHA);
-    assert(submissions[3].filter_min==GU_NEAREST&&submissions[3].wrap_u==GU_REPEAT&&submissions[3].wrap_v==GU_CLAMP);
-    assert(submissions[3].source==GU_FIX&&submissions[3].source_fixed==0xffffffu&&submissions[3].destination==GU_FIX&&!submissions[3].destination_fixed);
-    assert(submissions[2].primitive==GU_TRIANGLES&&submissions[2].format==
+    assert(submissions[4].filter_min==GU_NEAREST&&submissions[4].wrap_u==GU_REPEAT&&submissions[4].wrap_v==GU_CLAMP);
+    assert(submissions[4].source==GU_FIX&&submissions[4].source_fixed==0xffffffu&&submissions[4].destination==GU_FIX&&!submissions[4].destination_fixed);
+    assert(submissions[3].primitive==GU_TRIANGLES&&submissions[3].format==
         (GU_TEXTURE_32BITF|GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_3D));
-    assert(submissions[2].depth&&submissions[2].depth_mask==GU_FALSE&&submissions[2].cull&&submissions[2].shade==GU_FLAT&&!submissions[2].fog);
-    assert(submissions[4].primitive==GU_SPRITES&&!submissions[4].depth&&!submissions[4].alpha&&!submissions[4].fog&&
-        submissions[4].blend&&submissions[4].operation==GU_ADD&&submissions[4].wrap_u==GU_CLAMP&&submissions[4].wrap_v==GU_CLAMP);
+    assert(submissions[3].depth&&submissions[3].depth_mask==GU_FALSE&&submissions[3].cull&&submissions[3].shade==GU_FLAT&&!submissions[3].fog);
+    assert(submissions[6].primitive==GU_SPRITES&&!submissions[6].depth&&!submissions[6].alpha&&!submissions[6].fog&&
+        submissions[6].blend&&submissions[6].operation==GU_ADD&&submissions[6].wrap_u==GU_CLAMP&&submissions[6].wrap_v==GU_CLAMP);
+    for(unsigned int i=2;i<=5;i+=3){
+        const Submission *depth=&submissions[i],*color=&submissions[i-1];
+        assert(color->depth_mask==GU_TRUE&&!color->color_mask&&color->alpha_function==GU_GREATER&&color->alpha_reference==0);
+        assert(depth->depth_mask==GU_FALSE&&depth->color_mask==0xffffffffu&&depth->alpha_function==GU_EQUAL&&depth->alpha_reference==255);
+        assert(depth->pointer==color->pointer&&depth->pixels==color->pixels&&depth->count==color->count);
+    }
+    assert(!submissions[3].color_mask&&!submissions[6].color_mask&&submissions[3].alpha_function==GU_GREATER);
     assert(last_model_at<first_sprite_at&&first_sprite_at<finish_at&&sync_at<consume_at);
+}
+
+static void translucent_screen_depth(void)
+{
+    reset_frame();frame.vertex_count=6;frame.batch_count=2;
+    batches[0]=(RecvxBootRenderBatch){.count=3,.kind=RECVX_RENDER_SCREEN_TRIANGLES,
+        .texture=&texture,.attributes=0x18,.blend_source=8,.blend_destination=6};
+    batches[1]=(RecvxBootRenderBatch){.first=3,.count=3};
+    for(unsigned int i=0;i<3;++i)vertices[i]=(RecvxBootRenderVertex){0,0,0x7fffffffu,i,1,65534};
+    recvxGameBootPresent();
+    assert(submission_count==2&&submissions[0].depth_mask==GU_TRUE&&!submissions[0].color_mask);
+    assert(submissions[1].depth_mask==GU_FALSE&&submissions[1].alpha_function==GU_GREATER&&!submissions[1].color_mask);
 }
 
 static void gradient_overlays(void)
@@ -571,7 +594,7 @@ static void movie_display(void)
 
 int main(void)
 {
-    display_init(); models_then_overlays(); blend_mappings(); authored_half_fog(); ordinary_depth_fog(); screen_gradient_triangles(); shadow_protocol();
+    display_init(); models_then_overlays(); blend_mappings(); authored_half_fog(); ordinary_depth_fog(); screen_gradient_triangles(); translucent_screen_depth(); shadow_protocol();
     reset_frame(); frame.vertex_count=3; frame.batch_count=1;
     batches[0]=(RecvxBootRenderBatch){.count=3,.texture=&texture,.kind=RECVX_RENDER_SCREEN_OFFSET,
         .attributes=0x1b,.blend_source=8,.blend_destination=6,.fog_color=0x102030,.scissor={0,0,480,272}};

@@ -1542,3 +1542,27 @@ game-boot-item-view-test: build/host/game-boot-item-view-test
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $<
 build/host/game-boot-item-view-test: tests/game_boot_item_view_test.c src/psp/game_boot_item_view.c src/psp/game_boot_inventory_control.c build/host/game_boot_item_view_original.c src/ps2/veronica/prog/item.c $(HOST_HEADERS) Makefile
 	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_GAME_BOOT_HOST_TEST -Wno-error=unused-function -Wno-error=unused-variable -Wno-error=unused-but-set-variable -Wno-error=implicit-fallthrough -ffunction-sections -fdata-sections -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
+
+# Optional pixel regression using the real PSP GU adapter, not SDK call mocks.
+# Run the PRX on hardware, or set PPSSPP_HEADLESS for a software GE check.
+PPSSPP_HEADLESS ?= PPSSPPHeadless
+.PHONY: game-boot-gu-depth-probe game-boot-gu-raster-test
+game-boot-gu-depth-probe: build/psp-tests/gu-depth.prx
+build/psp-tests/gu-depth.o: tests/psp_game_boot_gu_depth_probe.c $(wildcard include/psp/*.h) Makefile
+	mkdir -p $(@D)
+	$(CC) $(CFLAGS) -Iinclude -Iinclude/ps2/veronica/prog -I$(PSPSDK)/include -c $< -o $@
+build/psp-tests/gu-depth.elf: build/psp-tests/gu-depth.o $(BUILD_DIR)/src/psp/game_boot_gu.o
+	$(CC) -G0 -L$(PSPSDK)/lib -specs=$(PSPSDK)/lib/prxspecs \
+		-Wl,-q,-T$(PSPSDK)/lib/linkfile.prx -Wl,-zmax-page-size=128 \
+		$^ $(PSPSDK)/lib/prxexports.o $(LIBS) -o $@
+	psp-fixup-imports $@
+build/psp-tests/gu-depth.prx: build/psp-tests/gu-depth.elf
+	psp-prxgen $< $@
+game-boot-gu-raster-test: build/psp-tests/gu-depth.prx
+	$(PPSSPP_HEADLESS) --graphics=software --root $(abspath build/psp-tests) \
+		--timeout-wall=30 --timeout-emulated=5 \
+		--screenshot-save=$(abspath build/psp-tests/gu-depth.png) $(abspath $<) \
+		> build/psp-tests/gu-depth.log 2>&1
+	cat build/psp-tests/gu-depth.log
+	! rg '^FAIL:' build/psp-tests/gu-depth.log
+	rg '^PASS: PSP GU translucent screen depth, opaque occlusion and per-texel alpha' build/psp-tests/gu-depth.log

@@ -25,6 +25,13 @@ Pulse strips use native GE texture and blend passes for the authored base/offset
 colors. Ordinary 3D fog uses the GE near/far ramp; it does not reproduce every
 quantization step in the PS2 lookup table.
 
+Screen-space effects preserve the original ordering table's alpha-dependent
+depth writes (`Ps2ZbuffOff` / `FB_ONLY`). The GU draws their color without
+writing depth, then writes depth only for fully opaque pixels in a color-masked
+pass. This prevents the opening full-screen translucent effect from hiding
+Claire and other subsequently drawn models, while opaque texels still occlude
+geometry. Ordinary 3D geometry keeps its normal depth writes.
+
 ## Save slots
 
 `CreateSaveScreen`, `ExecuteSaveScreen`, `CreateLoadScreen` and
@@ -55,6 +62,11 @@ Focused sanitizer targets cover ranking/typewriter, system-save cancellation,
 real save files and failures, inventory entry/navigation/exit, item use and
 combination, inspection actions, file pages/bookmarks, reverse skinning,
 collision, doors, terminals, game-over, textures, rendering and GU commands.
+`make game-boot-gu-raster-test PPSSPP_HEADLESS=/path/to/PPSSPPHeadless`
+executes the shipping GU adapter through PPSSPP's software GE. Its four pixel
+checks cover translucent full-screen effects, opaque occlusion, mixed opaque /
+translucent texture pixels and transparent texels. The PRX produced by
+`make game-boot-gu-depth-probe` can also run on PSP hardware.
 `game-boot-map-assets-test` checks all 71 MRY index/floor resources used by the
 map. The native 32-bit `game-boot-map-control-test` executes actual MRY loading,
 model relocation, texture decoding and original map normal/zoom/exit tasks.
