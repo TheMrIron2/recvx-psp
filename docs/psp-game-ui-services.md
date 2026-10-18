@@ -80,6 +80,14 @@ The sound batch also enables opcodes 70/71 (next-room settings), 117–119
 and BGM commands), 167 (alternate BGM volume), 182 (room sound case) and 212 (system sound). All command
 spans are checked before handlers advance the script or change sound state.
 
+Opcode 105 (`bhCommonCtr`) now includes all 53 subcommands present in the
+original `Common_controll`: actor/joint translation and rotation, motion setup
+and explicit frames, companion motion flags, linear/Overhauser interpolation,
+control-point capture, visibility and event counters. Packed halfwords use
+bytewise PSP-safe reads. The interpreter checks each command's actual span,
+selector, joint/control-point index and interpolation divisor before mutation.
+Unknown subcommands remain explicit faults.
+
 ## Verification
 
 Focused sanitizer targets cover ranking/typewriter, system-save cancellation,

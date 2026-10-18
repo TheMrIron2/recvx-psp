@@ -195,10 +195,12 @@ static void test_attribute_commands(void)
 static void test_common_motion_extent(void)
 {
     static const unsigned char valid[] = {
-        105, 24, 1, 1, 0, 0, 1, 16, 0xfc, 0x08, 0
+        105, 34, 1, 1, 0, 0, 1, 16, 0xfc, 0x08, 0
     };
     const RecvxEventCoreFault *fault;
 
+    static MN_WORK motion;
+    sys->rmthp=&motion;sys->emtp[player_work.id]=&motion;
     common_command_size = 10;
     setup_scenario(valid, sizeof(valid));
     bhCetask = &bhEtask[0];

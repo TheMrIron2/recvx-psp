@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 
-CASES = {2, 5, 7, 11, 12, 13, 23, 24, 36, 47}
+CASES = {0,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,38,40,41,42,43,44,45,46,47,48,49,50,51,52,53,132,140,141}
 CASE_LINE = re.compile(r"^        case\s+(0[xX][0-9a-fA-F]+|[0-9]+)\s*:")
 
 
@@ -64,8 +64,18 @@ def extract_cases(function):
     result = {}
     for position, (start, value) in enumerate(starts):
         if value in CASES:
-            end = starts[position + 1][0] if position + 1 < len(starts) else len(lines) - 1
+            end = starts[position + 1][0] if position + 1 < len(starts) else len(lines) - 2
             result[value] = (start, "\n".join(lines[start:end]).rstrip())
+    # PSP scripts are packed, so a halfword operand may start at an odd byte.
+    for value,(line,body) in result.items():
+        body=re.sub(r'\*\(unsigned short\s*\*\s*\)bhScePtr',
+                    'recvxEventCommonRead16(bhScePtr)',body)
+        # Preserve PS2 bit packing while avoiding C signed-shift UB.
+        body=body.replace('(v0 * -1) << 0x10', '(unsigned int)(v0 * -1) << 0x10')
+        body=body.replace('(t1 * -1) << 0x10', '(unsigned int)(t1 * -1) << 0x10')
+        body=body.replace('v0 << 0x10', '(unsigned int)v0 << 0x10')
+        body=body.replace('t1 << 0x10', '(unsigned int)t1 << 0x10')
+        result[value]=(line,body)
     missing = CASES - result.keys()
     if missing:
         raise ValueError(f"original event command cases missing: {sorted(missing)}")
@@ -89,7 +99,10 @@ def main():
         '#include "ps2/veronica/prog/main.h"',
         '#include "ps2/veronica/prog/pwksub.h"',
         '#include "psp/engine_event_core.h"',
+        '#include "ps2/veronica/prog/ps2_NaMath.h"',
         "",
+        "static unsigned int recvxEventCommonRead16(const unsigned char *p)",
+        "{ return p[0] | ((unsigned int)p[1] << 8); }",
         "int Common_controll(void)",
         "{",
         "    switch (*bhScePtr) {",

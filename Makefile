@@ -1369,7 +1369,7 @@ build/host/game_boot_event_commands_original.c: tools/extract_original_event_com
 .PHONY: game-boot-event-movement-test
 game-boot-event-movement-test: build/host/game-boot-event-movement-test
 	ASAN_OPTIONS=detect_leaks=0 $<
-build/host/game-boot-event-movement-test: tests/game_boot_event_movement_test.c src/psp/event_core.c build/host/game_boot_event_commands_original.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
+build/host/game-boot-event-movement-test: tests/game_boot_event_movement_test.c src/psp/event_core.c src/psp/engine_original_math.c src/psp/engine_original_fault.c build/host/game_boot_event_commands_original.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
 	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_GAME_BOOT_HOST_TEST -DRECVX_EVENT_CORE_HOST_TEST -Wno-error=unused-function -Wno-error=maybe-uninitialized \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie $(filter %.c,$^) -lm -o $@
 build/host/game_boot_message_set_original.c: tools/extract_original_message_set.py src/ps2/veronica/prog/message.c

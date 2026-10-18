@@ -1,4 +1,5 @@
 #include <limits.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -1083,42 +1084,77 @@ static int validate_core_instruction(unsigned int opcode)
         }
         command = bhScePtr[1];
         switch (command) {
-        case 2: extent = 3; break;
-        case 5: extent = 6; break;
-        case 7: extent = 8; break;
-        case 11: case 12: case 13: extent = 6; break;
-        case 23: extent = 4; break;
-        case 36: extent = 2; break;
-        case 24:
-            if (!has_task_bytes(bhScePtr, 4)) {
-                set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode,
-                          bhScePtr);
-                return -1;
+        case 0: case 36: case 47: extent=2;break;
+        case 2: case 3: case 4: case 17: case 18: case 19:
+        case 28: case 29: case 30: case 31: case 32: case 33: extent=3;break;
+        case 14: case 21: case 23: case 40: case 41: case 42: case 46:
+        case 48: case 49: case 50: case 52: case 53: extent=4;break;
+        case 43: case 44: case 45: extent=5;break;
+        case 5: case 6: case 9: case 10: case 11: case 12: case 13:
+        case 15: case 16: case 22: case 51: case 132: case 141: extent=6;break;
+        case 7: case 8: case 27: case 140: extent=8;break;
+        case 26: case 38: extent=10;break;
+        case 24: case 25: case 34: case 35:
+            if (!has_task_bytes(bhScePtr,4)) {
+                set_fault(RECVX_EVENT_FAULT_TRUNCATED,(uint8_t)opcode,bhScePtr);return -1;
             }
-            if (bhScePtr[2] > 25 || bhScePtr[3] > 3) {
-                set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode,
-                          bhScePtr);
-                return -1;
+            if(bhScePtr[2]>25||bhScePtr[3]>(command==25||command==35?1:3)) {
+                set_fault(RECVX_EVENT_FAULT_BAD_OPERAND,(uint8_t)opcode,bhScePtr);return -1;
             }
-            extent = bhScePtr[3] == 1 ? 10 : 8;
+            extent=command==34?10:command==35&&bhScePtr[3]==1?9:8;
             break;
-        case 47: extent = 2; break;
         default:
-            set_fault(RECVX_EVENT_FAULT_UNSUPPORTED, (uint8_t)opcode, bhScePtr);
-            return -1;
+            set_fault(RECVX_EVENT_FAULT_UNSUPPORTED,(uint8_t)opcode,bhScePtr);return -1;
         }
-        if (!has_task_bytes(bhScePtr, extent)) {
-            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
-            return -1;
+        if(!has_task_bytes(bhScePtr,extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED,(uint8_t)opcode,bhScePtr);return -1;
         }
-        if ((command == 23 && bhScePtr[2] > 3) ||
-            (command == 36 && (bhCetask->work->mlwP == NULL ||
-                bhCetask->work->mlwP->objP == NULL || !bhCetask->work->mlwP->obj_num ||
-                bhCetask->work->mlwP->obj_num > 128))) {
-            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
-            return -1;
+        BH_PWORK *work=bhCetask->work;
+        ML_WORK *model=NULL;
+        unsigned int joint=0;
+        int use_nodes=0,use_world=0;
+        if(!sys || (command==23&&bhScePtr[2]>3) ||
+           ((command==10||command==22)&&bhScePtr[2]>2) ||
+           ((command==26||command==27||command==48||command==49)&&bhScePtr[2]>3))
+            goto bad_common_operand;
+        if((command==40||command==53||command==24||command==25||command==34||command==35)&&
+           work->id==1&&work->exp1==NULL)goto bad_common_operand;
+        if(command==24||command==25||command==34||command==35){
+            unsigned int mode=bhScePtr[3];
+            if(bhScePtr[6]>7 || (mode==1&&(work->id>=128||!sys->emtp[work->id])) ||
+               ((command==24||command==34)&&!sys->rmthp) ||
+               ((command==25||command==35)&&mode==0&&!sys->plmthp))goto bad_common_operand;
+        }
+        if((command>=28&&command<=33)||(command>=43&&command<=45)){
+            if(bhCetask->cnt3<=0||bhCetask->cnt2<0||bhCetask->cnt2>bhCetask->cnt3)
+                goto bad_common_operand;
+            for(unsigned int i=0;i<4;++i)for(unsigned int axis=0;axis<3;++axis)
+                if(!isfinite(bhCetask->ips[i][axis])||!isfinite(bhCetask->ian[i][axis]))
+                    goto bad_common_operand;
+        }
+        if(command==8||command==9||command==17||command==18||command==19||command==22||
+           (((command>=28&&command<=33)||(command>=43&&command<=45)||command==48||command==49)&&bhCetask->model_cno)){
+            model=&work->mdl[0];joint=bhCetask->model_cno;use_nodes=1;
+        }else if(command==15||command==16||command==36||command==38){
+            model=work->mlwP;joint=command==16?1:command==38?bhScePtr[2]:0;use_nodes=1;
+        }else if(command==42){
+            model=&work->mdl[0];joint=bhScePtr[3];use_world=1;
+        }else if(command==51){
+            unsigned int index=bhScePtr[2];
+            if(!rom||!rom->enep||rom->ene_n<0||index>=(unsigned int)rom->ene_n||rom->enep[index].wrk_no>=128)
+                goto bad_common_operand;
+            model=ene[rom->enep[index].wrk_no].mlwP;joint=bhScePtr[3];use_world=1;
+        }
+        if((use_nodes||use_world)&&(!model||model->obj_num==0||model->obj_num>128||joint>=model->obj_num||
+            (use_nodes&&!model->objP)||(use_world&&!model->owP)))goto bad_common_operand;
+        if(command==51||command==52){
+            unsigned int slot=bhScePtr[command==51?4:2];
+            if(slot>=4||!rom||!rom->posp||rom->pos_n<0||sys->evt_posno[slot]>=(unsigned int)rom->pos_n)
+                goto bad_common_operand;
         }
         return 0;
+    bad_common_operand:
+        set_fault(RECVX_EVENT_FAULT_BAD_OPERAND,(uint8_t)opcode,bhScePtr);return -1;
     }
     if (opcode == 250) {
         if (current_task >= RECVX_EVENT_TASK_COUNT || !valid_task_record()) {

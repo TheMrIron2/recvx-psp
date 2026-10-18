@@ -300,7 +300,8 @@ if __name__ == '__main__':
     event_source = event_path.read_text()
     common = extract_function(event_source, 'Common_controll')
     first_line = event_source.count('\n', 0, event_source.index(common)) + 1
-    output += ['int Common_controll(void)', '{', '    switch (*bhScePtr) {']
+    output += ['static unsigned int recvxEventCommonRead16(const unsigned char *p)',
+               '{ return p[0] | ((unsigned int)p[1] << 8); }', 'int Common_controll(void)', '{', '    switch (*bhScePtr) {']
     for _, (case_line, case_body) in sorted(extract_cases(common).items()):
         output += [f'#line {first_line + case_line} "{event_path.as_posix()}"', case_body]
     output += ['    default:', '        recvxEventCoreFailUnsupportedCommand(105, bhScePtr);',

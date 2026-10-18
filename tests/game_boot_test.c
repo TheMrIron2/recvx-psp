@@ -1524,6 +1524,28 @@ static void test_easy_sound_task(void)
     puts("PASS: opcode 134 native task 3/script 3 sound playback, gain/pan flags, yield/end and all 18 sound command truncation boundaries");
 }
 
+static void test_common_control_task(void)
+{
+    static unsigned char section[]={12,0,0,0,14,0,0,0,16,0,0,0,0,0,0,0,
+        105,26,0,0,100,0,200,0,44,1,
+        105,26,1,0,244,1,88,2,188,2,
+        105,30,1,105,6,10,20,30,0,105,13,0,1,0,0,105,3,0,
+        105,41,1,0,105,46,1,0,105,50,7,255,105,14,255,255,105,21,7,255,254,255,0};
+    EVT_WORK *previous=rom->evtp;unsigned int enabled=sys->sp_flg;
+    BH_PWORK saved=*plp;
+    recvxEventCoreReset();rom->evtp=(EVT_WORK *)section;
+    assert(!recvxEventCoreBindSection(section,sizeof(section))&&!Event_exec(1,0));
+    bhEtask[1].work=plp;bhEtask[1].cnt2=1;bhEtask[1].cnt3=2;
+    sys->sp_flg|=0x10;plp->ax=plp->ay=plp->az=0;
+    assert(!bhEventScheduler2()&&bhEtask[1].status&&recvxEventCoreTaskPc(1)==sizeof(section)-2);
+    assert(plp->px==3&&plp->py==4&&plp->pz==5);
+    assert(plp->ax==910&&plp->ay==-1820&&plp->az==2730);
+    assert((plp->flg&0x40020)==0x40020&&(plp->type&255)==7&&plp->ct3==255&&plp->ct1==7);
+    assert(!bhEventScheduler2()&&!bhEtask[1].status&&recvxEventCoreTaskPc(1)==sizeof(section));
+    *plp=saved;recvxEventCoreReset();rom->evtp=previous;sys->sp_flg=enabled;
+    puts("PASS: opcode 105 task 1 original position interpolation, signed rotations, flags, type and counters with yield/resume/end");
+}
+
 static void test_vibration_event_task(void)
 {
     extern int EventVibrationMode;
@@ -1865,6 +1887,7 @@ int main(int argc, char **argv)
     test_vibration_event_task();
     test_frame_check_task();
     test_easy_sound_task();
+    test_common_control_task();
     /* Casing cleanup must cover the entire pool, preserve inactive entries,
        and leave unrelated live effects and actor data intact. */
     for (i = 0; i < 512; ++i) {

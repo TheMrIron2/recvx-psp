@@ -21,11 +21,11 @@ unsigned int (*bhScenarioJmpT[256])(void) = {
     [250] = bhFor, [251] = bhNext, [254] = bhEvtNext, [255] = bhEvtEnd
 };
 /* These unrelated common commands must never run in the fixture. */
-char bhCheckFloorNum(float height) { (void)height; assert(0); return 0; }
+char bhCheckFloorNum(float height) { (void)height; return 1; }
 int bhSetMotion(BH_PWORK *p, int a, int b, void *d)
-{ (void)p; (void)a; (void)b; (void)d; assert(0); return 0; }
-void bhCalcModel(BH_PWORK *p) { (void)p; assert(0); }
-void bhCalcLinkModel(BH_PWORK *p) { (void)p; assert(0); }
+{ assert(p==&actor); (void)a; (void)b; (void)d; return 0; }
+void bhCalcModel(BH_PWORK *p) { assert(p==&actor); }
+void bhCalcLinkModel(BH_PWORK *p) { assert(p==&actor); }
 static void setup(const unsigned char *bytes, size_t count)
 {
     memset(&work, 0, sizeof(work)); memset(&room, 0, sizeof(room));
@@ -44,8 +44,91 @@ static void bad(const unsigned char *bytes, size_t count, enum RecvxEventCoreFau
     setup(bytes, count); assert(bhEventScheduler2() == -1);
     assert(recvxEventCoreGetFault()->code == code);
 }
+static const unsigned char common_sizes[256]={
+    [0]=2,[2]=3,[3]=3,[4]=3,[5]=6,[6]=6,[7]=8,[8]=8,[9]=6,[10]=6,[11]=6,[12]=6,[13]=6,
+    [14]=4,[15]=6,[16]=6,[17]=3,[18]=3,[19]=3,[21]=4,[22]=6,[23]=4,[24]=8,[25]=8,
+    [26]=10,[27]=8,[28]=3,[29]=3,[30]=3,[31]=3,[32]=3,[33]=3,[34]=10,[35]=8,
+    [36]=2,[38]=10,[40]=4,[41]=4,[42]=4,[43]=5,[44]=5,[45]=5,[46]=4,[47]=2,
+    [48]=4,[49]=4,[50]=4,[51]=6,[52]=4,[53]=4,[132]=6,[140]=8,[141]=6
+};
+static NJS_CNK_OBJECT nodes[2];
+static O_WORK worlds[2];
+static ETTY_WORK descriptor;
+static POS position;
+static MN_WORK motion_work;
+static void common_context(void)
+{
+    memset(nodes,0,sizeof(nodes));memset(worlds,0,sizeof(worlds));
+    memset(&position,0,sizeof(position));memset(&descriptor,0,sizeof(descriptor));
+    actor.mlwP=&actor.mdl[0];actor.mdl[0].objP=nodes;actor.mdl[0].owP=worlds;actor.mdl[0].obj_num=2;
+    bhEtask[0].cnt3=2;bhEtask[0].cnt2=1;
+    sys->rmthp=&motion_work;sys->plmthp=(void *)&motion_work;sys->emtp[0]=&motion_work;
+    room.enep=&descriptor;room.ene_n=1;descriptor.wrk_no=7;
+    ene[7].mlwP=&actor.mdl[0];room.posp=&position;room.pos_n=1;
+}
+static void test_all_common_extents(void)
+{
+    unsigned char command[16];unsigned int count=0;
+    for(unsigned int sub=0;sub<256;++sub){
+        unsigned int size=common_sizes[sub];if(!size)continue;++count;
+        memset(command,0,sizeof(command));command[0]=105;command[1]=sub;
+        if(sub==24||sub==25||sub==34||sub==35){command[2]=1;command[6]=1;}
+        command[size]=255;
+        setup(command,size+2);common_context();tick();
+        assert(!bhEtask[0].status&&recvxEventCoreTaskPc(0)==18+size);
+        for(unsigned int length=1;length<size;++length){
+            setup(command,length);common_context();
+            assert(bhEventScheduler2()==-1);
+            assert(recvxEventCoreGetFault()->code==RECVX_EVENT_FAULT_TRUNCATED);
+            assert(recvxEventCoreTaskPc(0)==16);
+        }
+    }
+    assert(count==53);
+    /* Every animation selector and its optional explicit starting frame.
+       Callback selector 1 keeps these checks focused on animation setup. */
+    for(unsigned int sub=24;sub<=35;++sub){
+        if(sub!=24&&sub!=25&&sub!=34&&sub!=35)continue;
+        unsigned int modes=sub==25||sub==35?2:4;
+        for(unsigned int mode=0;mode<modes;++mode){
+            unsigned int size=sub==34?10:sub==35&&mode==1?9:8;
+            memset(command,0,sizeof(command));command[0]=105;command[1]=sub;
+            command[2]=1;command[3]=mode;command[4]=3;command[6]=1;
+            if(sub==34){command[8]=0xff;command[9]=0xff;}
+            command[size]=255;
+            setup(command,size+2);common_context();tick();
+            assert(!bhEtask[0].status&&recvxEventCoreTaskPc(0)==18+size&&actor.mtn_add==65536);
+            if(sub==34)assert(actor.frm_no==-65536);
+            for(unsigned int length=4;length<size;++length){
+                setup(command,length);common_context();
+                assert(bhEventScheduler2()==-1&&recvxEventCoreGetFault()->code==RECVX_EVENT_FAULT_TRUNCATED);
+                assert(recvxEventCoreTaskPc(0)==16&&!actor.mtn_add);
+            }
+        }
+    }
+    /* Odd halfword address, signed movement and high-bit frame packing. */
+    const unsigned char frame[]={254,105,40,0xff,0xff,254,255,0};
+    setup(frame,sizeof(frame));actor.id=1;actor.exp1=(unsigned char *)&ene[8];tick();tick();
+    assert(actor.frm_no==-65536&&ene[8].frm_no==-65536);
+    const unsigned char blend[]={105,53,0,255,255,0};
+    setup(blend,sizeof(blend));actor.id=1;actor.exp1=(unsigned char *)&ene[8];
+    actor.mtn_md=ene[8].mtn_md=0x100;tick();
+    assert(actor.mtn_md==0x128&&ene[8].mtn_md==0x128);
+    setup(blend,sizeof(blend));actor.id=1;actor.exp1=NULL;
+    assert(bhEventScheduler2()==-1&&recvxEventCoreTaskPc(0)==16);
+    assert(recvxEventCoreGetFault()->code==RECVX_EVENT_FAULT_BAD_OPERAND);
+    const unsigned char interpolate[]={105,26,0,0,100,0,200,0,44,1,
+        105,26,1,0,244,1,88,2,188,2,105,30,1,255,0};
+    setup(interpolate,sizeof(interpolate));common_context();tick();
+    assert(actor.px==3&&actor.py==4&&actor.pz==5);
+    const unsigned char node_move[]={105,8,100,0,200,0,44,1,255,0};
+    setup(node_move,sizeof(node_move));common_context();bhEtask[0].model_cno=1;tick();
+    assert(nodes[1].pos[0]==1&&nodes[1].pos[1]==2&&nodes[1].pos[2]==3&&actor.px==0);
+    setup(node_move,sizeof(node_move));common_context();bhEtask[0].model_cno=2;
+    assert(bhEventScheduler2()==-1&&recvxEventCoreGetFault()->code==RECVX_EVENT_FAULT_BAD_OPERAND);
+}
 int main(void)
 {
+    test_all_common_extents();
     const unsigned int flags[4]={0xfffffee7u,0xffffffffu,0xffffffe7u,0xffffffffu};
     for(unsigned int mode=0;mode<4;++mode){
         unsigned char command[]={105,23,(unsigned char)mode,0,255,0};
@@ -120,6 +203,6 @@ int main(void)
     /* A saved loop body cannot escape its owning script. */
     bhEtask[0].lstack[0] = section + 12;
     assert(bhEventScheduler2() == -1 && recvxEventCoreGetFault()->code == RECVX_EVENT_FAULT_BAD_OPERAND);
-    puts("PASS original CommonCtr movement/signs, authored per-frame counted loops, nested stacks, operand bounds and liveness");
+    puts("PASS all 53 original CommonCtr subcommands, exact extents/truncations, companion frames/flags, joint positions, interpolation; original CommonCtr movement/signs, authored per-frame counted loops, nested stacks, operand bounds and liveness");
     return 0;
 }

@@ -150,3 +150,15 @@ void njOverhauserSpline(Float *idata, Float *odata, NJS_SPLINE *attr,
     odata[1] = result[1];
     odata[2] = result[2];
 }
+
+/* ps2_NaMath.c::njLinear, retaining the original three-axis interpolation. */
+void njLinear(Float *idata,Float *odata,NJS_SPLINE *attr,Float frame)
+{
+    (void)attr;
+    if(!idata||!odata||!isfinite(frame)){
+        recvxEngineOriginalFaultSet("original linear interpolation input is invalid");return;
+    }
+    Float result[3];
+    for(int axis=0;axis<3;++axis)result[axis]=idata[axis]+(idata[3+axis]-idata[axis])*frame;
+    for(int axis=0;axis<3;++axis)odata[axis]=result[axis];
+}
