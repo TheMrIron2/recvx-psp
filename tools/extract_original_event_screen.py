@@ -15,7 +15,7 @@ def main(destination):
               '#include "ps2/veronica/prog/message.h"',
               '#include "ps2/veronica/prog/sdfunc.h"',
               '#include "ps2/veronica/prog/ps2_NaView.h"']
-    for name, opcode in [('bhCineSet',18), ('bhCamSet',19), ('bhFadeSet',54), ('bhMessageSet',31), ('bhInitCamSet',91), ('bhMesDispEndSet',92), ('bhEventSkipSet',106), ('bhPuruPuruFlagSet',158), ('bhPuruPuruStart',159)]:
+    for name, opcode in [('bhCamPauseSet',41), ('bhCineSet',18), ('bhCamSet',19), ('bhFadeSet',54), ('bhMessageSet',31), ('bhInitCamSet',91), ('bhMesDispEndSet',92), ('bhEventSkipSet',106), ('bhPuruPuruFlagSet',158), ('bhPuruPuruStart',159)]:
         line, function = extract(source.read_text(), name)
         function = function.replace('unsigned int '+name+'()', 'static unsigned int '+name+'Original(void)', 1)
         if name == 'bhFadeSet':

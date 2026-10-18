@@ -1577,6 +1577,31 @@ static void test_vibration_event_task(void)
     puts("PASS: opcodes 158/159 task 0 vibration mode/start, yield/resume/end, exact PCs and truncated operand rejection");
 }
 
+static void test_camera_pause_task(void)
+{
+    static unsigned char section[]={12,0,0,0,14,0,0,0,16,0,0,0,0,0,0,0,
+        41,0,254,41,1,254,255,0};
+    static unsigned char truncated[]={12,0,0,0,14,0,0,0,16,0,0,0,0,0,0,0,41};
+    EVT_WORK *previous=rom->evtp;unsigned int enabled=sys->sp_flg;CAM_WORK saved=cam;
+    recvxEventCoreReset();rom->evtp=(EVT_WORK *)section;
+    assert(!recvxEventCoreBindSection(section,sizeof(section))&&!Event_exec(0,0));
+    sys->sp_flg|=0x10;
+    assert(!bhEventScheduler2()&&cam.mode0==3&&bhEtask[0].status&&recvxEventCoreTaskPc(0)==19);
+    CAM_WORK paused=cam;
+    for(unsigned int i=0;i<3;++i){bhControlEventCamera();assert(!memcmp(&cam,&paused,sizeof(cam)));}
+    assert(!bhEventScheduler2()&&cam.mode0==1&&bhEtask[0].status&&recvxEventCoreTaskPc(0)==22);
+    paused.mode0=1;assert(!memcmp(&cam,&paused,sizeof(cam)));
+    assert(!bhEventScheduler2()&&!bhEtask[0].status&&recvxEventCoreTaskPc(0)==24);
+    recvxEventCoreReset();rom->evtp=(EVT_WORK *)truncated;
+    assert(!recvxEventCoreBindSection(truncated,sizeof(truncated))&&!Event_exec(0,0));
+    assert(bhEventScheduler2()==-1);
+    const RecvxEventCoreFault *fault=recvxEventCoreGetFault();
+    assert(fault->code==RECVX_EVENT_FAULT_TRUNCATED&&fault->opcode==41&&fault->task==0&&fault->event_id==0);
+    assert(recvxEventCoreTaskPc(0)==16&&!memcmp(&cam,&paused,sizeof(cam)));
+    recvxEventCoreReset();rom->evtp=previous;sys->sp_flg=enabled;cam=saved;
+    puts("PASS: opcode 41 task 0/script 0 pause/yield/held camera/resume/end with exact PCs and truncated operand rejection");
+}
+
 static void test_loaded_camera_reset(void)
 {
     /* Real event dispatch and room cut/camera/light controllers with loaded
@@ -1883,6 +1908,7 @@ int main(int argc, char **argv)
     test_loaded_arm_ik();
     test_loaded_inventory_transition();
     test_loaded_camera_reset();
+    test_camera_pause_task();
     test_event_skip_task();
     test_vibration_event_task();
     test_frame_check_task();

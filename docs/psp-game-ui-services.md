@@ -88,6 +88,12 @@ bytewise PSP-safe reads. The interpreter checks each command's actual span,
 selector, joint/control-point index and interpolation divisor before mutation.
 Unknown subcommands remain explicit faults.
 
+Opcode 41 (`bhCamPauseSet`) retains its original two-byte selector: zero
+holds event-camera mode 3, one resumes mode 1, and other values leave the mode
+unchanged. The camera guard accepts the authored pause state; the original
+controller preserves position, keyframe and timer while paused and resumes
+from that saved state. Truncated commands are rejected before changing mode.
+
 ## Verification
 
 Focused sanitizer targets cover ranking/typewriter, system-save cancellation,

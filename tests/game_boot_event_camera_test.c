@@ -225,6 +225,32 @@ static void spline_control(void)
     for(unsigned int i=0;i<4;++i)bhControlEventCamera();
     CHECK(cam.evc_no==1&&cam.keyf_no==0&&cam.mode0==1);
 }
+static void pause_commands(void)
+{
+    reset();
+    for(unsigned int selector=0;selector<256;++selector){
+        unsigned char command[]={41,selector};
+        cam.mode0=2;cam.mode1=17;cam.ct0=7;cam.px=31;cam.keyf_no=1;
+        CAM_WORK expected=cam;
+        if(selector==0)expected.mode0=3;
+        if(selector==1)expected.mode0=1;
+        bhScePtr=command;
+        CHECK(bhCamPauseSet()==1&&bhScePtr==command+2);
+        CHECK(!memcmp(&cam,&expected,sizeof(cam)));
+    }
+    /* Pause an already initialized spline and hold its entire camera state.
+       Resume must advance from the saved time rather than reinitialize it. */
+    reset();data.camera[0].nxt_no=1;bhControlEventCamera();
+    unsigned char command[]={41,0};bhScePtr=command;bhCamPauseSet();
+    CAM_WORK paused=cam;
+    for(unsigned int i=0;i<5;++i){bhControlEventCamera();CHECK(!memcmp(&cam,&paused,sizeof(cam)));}
+    command[1]=1;bhScePtr=command;bhCamPauseSet();
+    CHECK(cam.mode0==1&&cam.ct0==paused.ct0&&cam.keyf_no==paused.keyf_no);
+    bhControlEventCamera();CHECK(cam.keyf_no==1&&cam.ct0==0&&close_to(cam.px,5));
+    sys=NULL;bhScePtr=command;CAM_WORK before=cam;
+    REJECT(bhCamPauseSet(),"screen event state");CHECK(bhScePtr==command&&!memcmp(&cam,&before,sizeof(cam)));
+    reset();cam.mode0=4;REJECT(bhControlEventCamera(),"mode or timer");
+}
 static void malformed(void)
 {
     reset();REJECT(bhSetEventCamera(-1,0),"table or index");
@@ -250,7 +276,7 @@ static void malformed(void)
 }
 int main(void)
 {
-    screen_commands();reset_command();skip_command();vibration_commands();setter_and_locks();spline_control();malformed();
-    printf("PASS: original screen commands, camera setters/visibility/lock targets, clip/background tables and spline transitions/self-loops: %u checks\n",checks);
+    screen_commands();reset_command();skip_command();vibration_commands();setter_and_locks();spline_control();pause_commands();malformed();
+    printf("PASS: camera pause/resume, held spline state and all 256 selectors; original screen commands, camera setters/visibility/lock targets, clip/background tables and spline transitions/self-loops: %u checks\n",checks);
     return 0;
 }

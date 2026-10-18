@@ -140,7 +140,8 @@ void recvxGameBootEventCameraControlPrepare(void)
 {
     EVC_WORK *work=camera(cam.evc_no);
     recvxGameBootEventCameraPrepare(cam.evc_no,cam.keyf_no);
-    if(cam.mode0>2||cam.ct0<0)recvxGameBootUnsupported("invalid original event camera control mode or timer");
+    /* Mode 3 is the retail bhCamPauseSet hold state. */
+    if(cam.mode0>3||cam.ct0<0)recvxGameBootUnsupported("invalid original event camera control mode or timer");
     EVC_WORK *next=work->nxt_no?camera(work->nxt_no-1):NULL;
     for(unsigned int group=0;group<2;++group){
         EVC_WORK *table=group?next:work;
