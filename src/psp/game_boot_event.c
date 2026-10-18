@@ -14,6 +14,13 @@ unsigned int (*bhScenarioJmpT[256])(void) = {
 #undef RECVX_EVENT_CORE
 #undef RECVX_EVENT_ENGINE
 #undef RECVX_EVENT_FULL
+    [56] = bhFrameCheck,
+    [70]=bhSetNextRoomBgm, [71]=bhSetNextRoomBgSe,
+    [117]=bhInitMidiSlotSet, [118]=bh3dSoundFlagSet, [119]=bhSoundVolumeSet,
+    [121]=bhEneSeOn, [122]=bhEneSeOff, [127]=bhSoundPanSet,
+    [131]=bhSoundFadeOut, [134]=bhEasySESet, [135]=bhSoundFlagReSet,
+    [146]=bhBGSeOff2, [147]=bhBgmOff2, [148]=bhBGSeOn2, [149]=bhBgmOn2,
+    [167]=bhBgmOn2Ex, [182]=bhRoomSoundCase, [212]=bhCallSysSe,
     [43] = bhMotionPauseSet, [103] = bhSubCtr, [60] = bhMaskSet, [62] = bhMaskStart, [154] = bhFaceRep,
     [94] = bhMovieStart, [95] = bhMovieStop, [155] = bhMovieCk,
     [252] = bhWhile, [253] = bhEwhile, [243] = bhEwhile2,

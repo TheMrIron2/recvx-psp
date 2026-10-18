@@ -28,6 +28,8 @@ int recvxGameBootDisplayInit(void)
     sceGuDepthBuffer((void *)(2 * 512 * 272 * 4), 512);
     sceGuDepthRange(65535, 0);
     sceGuDepthFunc(GU_GEQUAL);
+    /* Strip expansion preserves outward-facing triangle order. Selecting CW
+       here exposes model interiors by culling the exterior faces. */
     sceGuFrontFace(GU_CCW);
     sceGuOffset(2048 - 240, 2048 - 136);
     sceGuViewport(2048, 2048, 480, 272);

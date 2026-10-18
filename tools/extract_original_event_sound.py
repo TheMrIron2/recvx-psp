@@ -4,10 +4,16 @@ from pathlib import Path
 import sys
 from extract_original_boot_initializers import extract
 
-FUNCTIONS = ['bhBgmOn', 'bhBgmOff', 'bhBgmOnEx', 'bhSeOn', 'bhSeOff',
-             'bhVoiceOn', 'bhVoiceOff', 'bhBGSeOn', 'bhBGSeOff']
-OPCODES = {'bhSeOn': 23, 'bhSeOff': 24, 'bhVoiceOn': 25, 'bhVoiceOff': 26,
-           'bhBGSeOn': 28, 'bhBGSeOff': 29}
+OPCODES = {
+    'bhSeOn':23, 'bhSeOff':24, 'bhVoiceOn':25, 'bhVoiceOff':26,
+    'bhBGSeOn':28, 'bhBGSeOff':29, 'bhSetNextRoomBgm':70,
+    'bhSetNextRoomBgSe':71, 'bhInitMidiSlotSet':117, 'bh3dSoundFlagSet':118,
+    'bhSoundVolumeSet':119, 'bhEneSeOn':121, 'bhEneSeOff':122,
+    'bhSoundPanSet':127, 'bhSoundFadeOut':131, 'bhEasySESet':134,
+    'bhSoundFlagReSet':135, 'bhBGSeOff2':146, 'bhBgmOff2':147,
+    'bhBGSeOn2':148, 'bhBgmOn2':149, 'bhBgmOn2Ex':167, 'bhRoomSoundCase':182, 'bhCallSysSe':212,
+}
+FUNCTIONS = ['bhBgmOn', 'bhBgmOff', 'bhBgmOnEx', *OPCODES]
 
 
 def main():
@@ -25,7 +31,12 @@ def main():
             opening = function.index('{') + 1
             function = function[:opening] + f'\n    recvxGameBootEventSoundPrepare({OPCODES[name]});' + function[opening:]
             function = function.replace('*(unsigned short*)bhScePtr', 'recvxGameBootEventSoundRead16(bhScePtr)')
+        if name == 'bhEasySESet':
+            function=function.replace('BH_PWORK* epw;', 'BH_PWORK* epw = NULL;')
         output.extend([f'#line {line} "{source_path.as_posix()}"', function, ''])
+    service_path=Path('src/ps2/veronica/prog/sdfunc.c')
+    line,function=extract(service_path.read_text(),'PlayGameSe4Event')
+    output.extend([f'#line {line} "{service_path.as_posix()}"',function,''])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text('\n'.join(output))
 

@@ -38,7 +38,11 @@ static void context(BH_PWORK *work)
 void recvxGameBootEventActorPrepare(unsigned int opcode,const unsigned char *command)
 {
     if(!sys||!command)recvxGameBootUnsupported("missing actor event state");
-    if(opcode==103||opcode==43){
+    if(opcode==56){
+        if(command[1]==1)(void)enemy(command[2]);
+        if(command[1]==2&&!arena(&sys->obwp[command[2]],sizeof(O_WRK)))
+            recvxGameBootUnsupported("invalid frame check object work");
+    }else if(opcode==103||opcode==43){
         if(opcode==103&&(command[1]==0||command[1]==139))return;
         if(!bhCetask||!actor(bhCetask->work))
             recvxGameBootUnsupported("invalid actor event work");

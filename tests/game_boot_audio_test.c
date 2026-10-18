@@ -87,6 +87,24 @@ int main(int argc, char **argv)
         render(1);
     }
     assert(starts == 4 && stops >= 3);
+    /* Script controls survive starts, mute existing voices without key-off,
+       preserve the sample gain, and release back to spatial gain/pan. */
+    recvxAudioStopSounds(0);
+    recvxAudioSoundControl(0,17,6,-127,100);
+    assert(recvxAudioPlaySe(17,0,-20,-40)>0);
+    assert(voice[4].keyed&&voice[4].volume==0);
+    unsigned int keyed_before=starts,stopped_before=stops;
+    recvxAudioSoundControl(0,17,6,0,100);
+    assert(voice[4].volume>0&&voice[4].pan>0&&starts==keyed_before&&stops==stopped_before);
+    int full=voice[4].volume;
+    recvxAudioSoundControl(0,17,0,0,0);
+    assert(voice[4].volume<full&&voice[4].pan<0);
+    recvxAudioSoundControl(0,17,6,0,100);full=voice[4].volume;
+    recvxAudioStopSounds(2);fade();
+    assert(voice[4].keyed&&voice[4].volume>0&&voice[4].volume<full);
+    fade();assert(!voice[4].keyed);
+    recvxAudioSoundControl(0,17,0,0,0);
+    recvxAudioStopSounds(0);
     bank(0); bank(0xfff0); bank(0x4000);
     assert(recvxAudioEnvironment(9) == 16);
     assert(recvxAudioPlaySe(6, 0x200, 0, 0) > 0);
@@ -108,6 +126,11 @@ int main(int argc, char **argv)
     int half_volume = voice[midi_voice].volume;
     fade();
     assert(voice[midi_voice].volume >= half_volume);
+    recvxAudioSoundControl(1,7,6,-127,-100);
+    assert(voice[midi_voice].volume==0);
+    recvxAudioSoundControl(1,7,6,0,-100);
+    assert(voice[midi_voice].volume>0&&voice[midi_voice].pan<0);
+    recvxAudioSoundControl(1,7,0,0,0);
     /* A muted sequence must also mute notes scheduled after the change. */
     recvxAudioStopMidi(7);
     assert(!recvxAudioPlayMidi(7, 0x200, 0, 0));

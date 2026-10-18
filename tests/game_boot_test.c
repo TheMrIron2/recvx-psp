@@ -1472,6 +1472,58 @@ static void test_event_skip_task(void)
     puts("PASS: opcode 106 task 0 skip flag enable/yield/resume/disable/end, exact PCs, unrelated flags and truncated operand rejection");
 }
 
+static void test_frame_check_task(void)
+{
+    static unsigned char section[]={12,0,0,0,14,0,0,0,16,0,0,0,0,0,0,0,
+        252,8,56,0,0,1,7,0,254,243,255,0};
+    EVT_WORK *previous=rom->evtp;
+    unsigned int enabled=sys->sp_flg;
+    int frame=plp->frm_no;
+    recvxEventCoreReset();rom->evtp=(EVT_WORK *)section;
+    assert(!recvxEventCoreBindSection(section,sizeof(section))&&!Event_exec(0,0));
+    sys->sp_flg|=0x10;plp->frm_no=(7<<16)+32767;
+    assert(!bhEventScheduler2()&&recvxEventCoreTaskPc(0)==25);
+    assert(!bhEventScheduler2()&&recvxEventCoreTaskPc(0)==25&&bhEtask[0].status);
+    ++plp->frm_no;
+    assert(!bhEventScheduler2()&&recvxEventCoreTaskPc(0)==28&&!bhEtask[0].status);
+    assert(bhEtask[0].loop==-1);
+    recvxEventCoreReset();rom->evtp=previous;sys->sp_flg=enabled;plp->frm_no=frame;
+    puts("PASS: opcode 56 real task 0 animation half-frame wait/yield/resume/end with exact PCs");
+}
+
+static void test_easy_sound_task(void)
+{
+    static unsigned char section[96]={24,0,0,0,26,0,0,0,28,0,0,0,
+        30,0,0,0,32,0,0,0,34,0,0,0};
+    static const unsigned char body[]={118,2,0,6,119,2,0,20,40,2,
+        127,2,0,0,255,2,
+        134,2,0,20,40,128,160,2,0,0,255,0,0,255,0,0,
+        254,135,255,117,1,4,255,182,0,131,255,255,0};
+    static const unsigned int opcodes[]={70,71,117,118,119,121,122,127,131,134,135,146,147,148,149,167,182,212};
+    static const unsigned int sizes[]={8,10,4,4,6,6,2,6,2,16,2,2,2,4,4,4,2,4};
+    EVT_WORK *previous=rom->evtp;unsigned int enabled=sys->sp_flg;
+    memcpy(section+34,body,sizeof(body));
+    recvxEventCoreReset();rom->evtp=(EVT_WORK *)section;
+    assert(!recvxEventCoreBindSection(section,34+sizeof(body))&&!Event_exec(3,3));
+    sys->sp_flg|=0x10;
+    assert(!bhEventScheduler2()&&recvxEventCoreTaskPc(3)==67&&bhEtask[3].status);
+    assert(!bhEventScheduler2()&&recvxEventCoreTaskPc(3)==79&&!bhEtask[3].status);
+    assert(!recvxAudioFault()&&!recvxAudioNativeError());
+    for(unsigned int i=0;i<sizeof(opcodes)/sizeof(opcodes[0]);++i){
+        for(unsigned int length=1;length<sizes[i];++length){
+            memset(section+34,0,sizeof(section)-34);section[34]=opcodes[i];
+            recvxEventCoreReset();rom->evtp=(EVT_WORK *)section;
+            assert(!recvxEventCoreBindSection(section,34+length)&&!Event_exec(3,3));
+            assert(bhEventScheduler2()==-1);
+            const RecvxEventCoreFault *fault=recvxEventCoreGetFault();
+            assert(fault->code==RECVX_EVENT_FAULT_TRUNCATED&&fault->opcode==opcodes[i]&&fault->task==3&&fault->event_id==3);
+            assert(recvxEventCoreTaskPc(3)==34);
+        }
+    }
+    recvxEventCoreReset();rom->evtp=previous;sys->sp_flg=enabled;
+    puts("PASS: opcode 134 native task 3/script 3 sound playback, gain/pan flags, yield/end and all 18 sound command truncation boundaries");
+}
+
 static void test_vibration_event_task(void)
 {
     extern int EventVibrationMode;
@@ -1811,6 +1863,8 @@ int main(int argc, char **argv)
     test_loaded_camera_reset();
     test_event_skip_task();
     test_vibration_event_task();
+    test_frame_check_task();
+    test_easy_sound_task();
     /* Casing cleanup must cover the entire pool, preserve inactive entries,
        and leave unrelated live effects and actor data intact. */
     for (i = 0; i < 512; ++i) {

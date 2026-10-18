@@ -18,7 +18,7 @@ typedef struct Voice {
     const unsigned char *data;
     size_t size;
     unsigned int rate, position;
-    int active, paused, codec, slot, owner, key, volume, target, fade, pan;
+    int active, paused, codec, slot, owner, key, volume, target, fade, pan, sample_gain, stop_frames;
 } Voice;
 typedef struct Sequence {
     const unsigned char *data;
@@ -33,6 +33,14 @@ static unsigned char *sequences[BANKS];
 static size_t sequence_sizes[BANKS];
 static Voice voices[VOICES];
 static Sequence midi[MIDI_SLOTS];
+typedef struct SoundControl { unsigned int flags; int volume,pan; } SoundControl;
+static SoundControl se_control[20],midi_control[MIDI_SLOTS];
+static const SoundControl *voice_control(const Voice *v)
+{
+    if(v->codec!=1)return NULL;
+    if(v->owner>=0&&v->owner<MIDI_SLOTS)return &midi_control[v->owner];
+    return v->slot>=0&&v->slot<20?&se_control[v->slot]:NULL;
+}
 static char directory[512], fault[192];
 static unsigned int pending, bank_key;
 static unsigned short keys[1024];
@@ -72,7 +80,27 @@ static unsigned char *read_asset(const char *relative, size_t *size)
 static void stop(Voice *v) { recvxAudioNativeStop((unsigned int)(v - voices)); memset(v, 0, sizeof(*v)); }
 static int native_volume(const Voice *v)
 {
-    return v->owner >= 0 ? v->volume * midi[v->owner].master / 4096 : v->volume;
+    const SoundControl *c=voice_control(v);
+    int volume=c&&(c->flags&2)?v->sample_gain*gain(c->volume)/4096:v->volume;
+    if(c&&(c->flags&2)&&v->stop_frames>0)
+        volume=(int)((int64_t)volume*v->fade/v->stop_frames);
+    return v->owner >= 0 ? volume * midi[v->owner].master / 4096 : volume;
+}
+static int native_pan(const Voice *v)
+{
+    const SoundControl *c=voice_control(v);
+    return c&&(c->flags&4)?c->pan:v->pan;
+}
+void recvxAudioSoundControl(int is_midi,int slot,unsigned int flags,int volume,int pan)
+{
+    if(slot<0||slot>=(is_midi?MIDI_SLOTS:20))return;
+    recvxAudioLock();
+    SoundControl *c=is_midi?&midi_control[slot]:&se_control[slot];
+    *c=(SoundControl){flags,volume,pan};
+    for(int i=4;i<VOICES;++i)if(voices[i].active&&voices[i].codec==1&&
+       (is_midi?voices[i].owner==slot:voices[i].owner==-1&&voices[i].slot==slot))
+        recvxAudioNativeVolume((unsigned int)i,native_volume(&voices[i]),native_pan(&voices[i]));
+    recvxAudioUnlock();
 }
 static unsigned int record(const Bank *b, unsigned int base, unsigned int index, unsigned int minimum)
 {
@@ -152,6 +180,7 @@ void recvxAudioShutdown(void)
     for (int i = 0; i < VOICES; ++i) stop(&voices[i]);
     for (int k = 0; k < 2; ++k) for (int i = 0; i < BANKS; ++i) { free(banks[k][i].data); memset(&banks[k][i], 0, sizeof(Bank)); }
     for (int i = 0; i < BANKS; ++i) { free(sequences[i]); sequences[i] = NULL; sequence_sizes[i] = 0; }
+    memset(se_control,0,sizeof(se_control));memset(midi_control,0,sizeof(midi_control));
     memset(midi, 0, sizeof(midi)); memset(environment, 0, sizeof(environment)); mounted = 0; pending = 0;
     for (int i = 0; i < 2; ++i) { free(stream_data[i]); stream_data[i] = NULL; stream_volume[i] = 4096; }
     memset(stream_pan, 0, sizeof(stream_pan));
@@ -293,7 +322,7 @@ void recvxAudioStopSounds(int frames)
     for (int i = 0; i < MIDI_SLOTS; ++i) { midi[i].active = 0; midi[i].fade = 0; }
     for (int i = 4; i < VOICES; ++i) {
         if (frames <= 0) stop(&voices[i]);
-        else { voices[i].target = 0; voices[i].fade = frames; }
+        else { voices[i].target = 0; voices[i].fade = voices[i].stop_frames = frames; }
     }
     recvxAudioUnlock();
 }
@@ -303,7 +332,7 @@ void recvxAudioStopAll(int frames)
     for (int i = 0; i < MIDI_SLOTS; ++i) { midi[i].active = 0; midi[i].fade = 0; }
     for (int i = 0; i < VOICES; ++i) {
         if (frames <= 0) stop(&voices[i]);
-        else { voices[i].target = 0; voices[i].fade = frames; }
+        else { voices[i].target = 0; voices[i].fade = voices[i].stop_frames = frames; }
     }
     recvxAudioUnlock();
 }
@@ -342,10 +371,11 @@ static int play_note(int kind, int bank, int program, int key, int velocity, int
             v->rate = (unsigned int)(le16(h + wave + 4) * pow(2, (key - h[sample + 11]) / 12.0));
             if (!v->rate || v->rate > 192000) return fail("invalid sound pitch");
             v->codec = 1;
+            v->sample_gain = 4096 * velocity / 127 * h[p + 6] / 127 * h[sample + 4] / 127;
             v->volume = v->target = gain(volume) * velocity / 127 * h[p + 6] / 127 * h[sample + 4] / 127;
             v->pan = pan; v->slot = slot; v->owner = owner; v->key = key;
             if ((v->size & 15) || recvxAudioNativeStart((unsigned int)(v - voices), v->data, v->size,
-                v->rate, h[wave + 6] & 1, le16(h + sample + 19), le16(h + sample + 21), native_volume(v), v->pan))
+                v->rate, h[wave + 6] & 1, le16(h + sample + 19), le16(h + sample + 21), native_volume(v), native_pan(v)))
                 return fail("native bank sample start failed");
             v->active = 1; ++started;
         }
@@ -450,7 +480,7 @@ void recvxAudioUpdateSe(int slot, int volume, int pan, int pitch)
     recvxAudioLock();
     for (int i = 4; i < VOICES; ++i) if (voices[i].active && voices[i].owner == -1 && voices[i].slot == slot) {
         voices[i].volume = voices[i].target = gain(volume); voices[i].pan = pan;
-        recvxAudioNativeVolume((unsigned int)i, voices[i].volume, pan);
+        recvxAudioNativeVolume((unsigned int)i, native_volume(&voices[i]), native_pan(&voices[i]));
         if (pitch) recvxAudioNativePitch((unsigned int)i, (unsigned int)(voices[i].rate * pow(2, pitch / 4096.0)));
     }
     recvxAudioUnlock();
@@ -466,7 +496,7 @@ void recvxAudioMidiVolume(int slot, int volume, int frames, int stop_when_done)
         if (!s->fade) {
             s->master = s->target;
             for (int i = 4; i < VOICES; ++i) if (voices[i].active && voices[i].owner == slot)
-                recvxAudioNativeVolume((unsigned int)i, native_volume(&voices[i]), voices[i].pan);
+                recvxAudioNativeVolume((unsigned int)i, native_volume(&voices[i]), native_pan(&voices[i]));
             if (s->stop_when_done) {
                 s->active = 0;
                 for (int i = 4; i < VOICES; ++i) if (voices[i].active && voices[i].owner == slot) stop(&voices[i]);
@@ -506,7 +536,7 @@ void recvxAudioAdvanceFades(void)
         s->master += (s->target - s->master) / s->fade;
         if (!--s->fade) s->master = s->target;
         for (int i = 4; i < VOICES; ++i) if (voices[i].active && voices[i].owner == slot)
-            recvxAudioNativeVolume((unsigned int)i, native_volume(&voices[i]), voices[i].pan);
+            recvxAudioNativeVolume((unsigned int)i, native_volume(&voices[i]), native_pan(&voices[i]));
         if (!s->fade && s->stop_when_done) {
             s->active = 0;
             for (int i = 4; i < VOICES; ++i) if (voices[i].active && voices[i].owner == slot) stop(&voices[i]);
@@ -517,7 +547,7 @@ void recvxAudioAdvanceFades(void)
         if (!v->fade) continue;
         v->volume += (v->target - v->volume) / v->fade;
         if (!--v->fade) v->volume = v->target;
-        recvxAudioNativeVolume((unsigned int)i, native_volume(v), v->pan);
+        recvxAudioNativeVolume((unsigned int)i, native_volume(v), native_pan(v));
         if (!v->fade && !v->target && v->active) stop(v);
     }
 }

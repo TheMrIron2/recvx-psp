@@ -13,6 +13,13 @@ static int room_case, init_script, current_bgm = -1, pending_bgm = -1, pending_v
 static int system_slot, weapon_slot, foot_slot[3], request_kind;
 static int background[3], background_pending[3];
 static short background_fade[3];
+typedef struct EventSoundControl {
+    unsigned int flags;
+    int volume,pan,vol_start,vol_end,pan_start,pan_end,vol_frames,pan_frames,vol_tick,pan_tick;
+} EventSoundControl;
+static EventSoundControl event_control[12][16];
+static int bgm_volume=-45;
+static void event_control_tick(void);
 static int max_event_slot = 4, max_object_slot = 1;
 static void original_spatial(const NJS_POINT3 *position, int room_fx, int *volume, int *pan);
 extern char ThreeDVolTbl[510], PanTbl360[68], PanTbl360Vol[68];
@@ -28,6 +35,7 @@ static void check(void)
 }
 void recvxGameBootSoundReset(void)
 {
+    memset(event_control,0,sizeof(event_control));bgm_volume=-45;
     room_case = init_script = system_slot = weapon_slot = request_kind = 0;
     current_bgm = pending_bgm = -1; memset(foot_slot, 0, sizeof(foot_slot));
     max_event_slot = 4; max_object_slot = 1;
@@ -36,6 +44,7 @@ void recvxGameBootSoundReset(void)
 void recvxGameBootSoundTick(void)
 {
     recvxAudioService();
+    event_control_tick();
     recvxAudioLock(); recvxAudioAdvanceFades(); recvxAudioUnlock();
     check();
 }
@@ -91,7 +100,7 @@ void PlayBgmEx2(unsigned int partition, int bgm, int fade, int volume)
     recvxAudioVolume(0, fade ? -127 : volume, 0);
     PlayAdx(0, partition, (unsigned int)bgm);
     if (fade) recvxAudioVolume(0, volume, fade);
-    current_bgm = bgm;
+    current_bgm = bgm;bgm_volume=volume;
 }
 void PlayBgmEx(int bgm, int fade, int volume) { PlayBgmEx2((unsigned int)PatId[0], bgm, fade, volume); }
 void PlayBgm(int bgm, int fade) { PlayBgmEx(bgm, fade, -45); }
@@ -261,4 +270,83 @@ void SendSoundCommand(unsigned int command)
     default: recvxGameBootUnsupported("unsupported original sound command");
     }
     check();
+}
+
+
+/* Script control is retained by logical sound slot, independently of whether
+   a voice has started yet. SAS receives only gain/pan updates; ADPCM stays
+   compressed. The original type 9/11 selectors have no control operation. */
+static EventSoundControl *event_sound(int type,int slot)
+{
+    int limit=type==1||type==6?3:type==5?6:type==7?5:type==8?16:1;
+    if(type<0||type>11||slot<0||((type==1||type==5||type==6||type==7||type==8)&&slot>=limit))
+        recvxGameBootUnsupported("invalid script sound control slot");
+    return &event_control[type][limit==1?0:slot];
+}
+static void apply_event_control(int type,int slot,EventSoundControl *c)
+{
+    int slots[3],count=1,is_midi=0;
+    switch(type){
+    case 0:slots[0]=7;break;
+    case 1:slots[0]=11+slot*2;slots[1]=slots[0]+1;count=2;break;
+    case 2:slots[0]=6;break;
+    case 3:slots[0]=8;slots[1]=9;slots[2]=19;count=3;break;
+    case 4:slots[0]=10;break;
+    case 5:slots[0]=slot;break;
+    case 6:slots[0]=slot;is_midi=1;break;
+    case 7:slots[0]=7-slot;is_midi=1;break;
+    default:return;
+    }
+    unsigned int flags=type==6?c->flags&~4u:c->flags;
+    for(int i=0;i<count;++i)recvxAudioSoundControl(is_midi,slots[i],flags,c->volume,c->pan);
+}
+void Set3dSoundFlag(int type,int slot,unsigned int flags)
+{
+    EventSoundControl *c=event_sound(type,slot);
+    *c=(EventSoundControl){.flags=flags};
+    if(type==10)recvxAudioVolume(0,bgm_volume,0);
+    else apply_event_control(type,slot,c);
+}
+void Reset3dSoundFlag(void)
+{
+    for(int type=0;type<12;++type){
+        int limit=type==1||type==6?3:type==5?6:type==7?5:type==8?16:1;
+        for(int slot=0;slot<limit;++slot)Set3dSoundFlag(type,slot,0);
+    }
+}
+void SetUserSoundVolume(int type,int slot,int first,int last,int frames)
+{
+    EventSoundControl *c=event_sound(type,slot);
+    if(!(c->flags&2)||type==9||type==11)return;
+    if(frames<0)recvxGameBootUnsupported("invalid script sound volume duration");
+    c->volume=frames?first:last;c->vol_start=first;c->vol_end=last;c->vol_frames=frames;c->vol_tick=0;
+    if(type==10){recvxAudioVolume(0,first,0);recvxAudioVolume(0,last,frames);}
+    else apply_event_control(type,slot,c);
+}
+void SetUserSoundPan(int type,int slot,int first,int last,int frames)
+{
+    EventSoundControl *c=event_sound(type,slot);
+    if(!(c->flags&4)||type==6||type>=9)return;
+    if(frames<0)recvxGameBootUnsupported("invalid script sound pan duration");
+    c->pan=frames?first:last;c->pan_start=first;c->pan_end=last;c->pan_frames=frames;c->pan_tick=0;
+    apply_event_control(type,slot,c);
+}
+static void event_control_tick(void)
+{
+    for(int type=0;type<9;++type)for(int slot=0;slot<16;++slot){
+        EventSoundControl *c=&event_control[type][slot];int changed=0;
+        if(c->vol_tick<c->vol_frames){
+            c->volume=c->vol_start+(c->vol_end-c->vol_start)*++c->vol_tick/c->vol_frames;changed=1;
+        }
+        if(c->pan_tick<c->pan_frames){
+            c->pan=c->pan_start+(c->pan_end-c->pan_start)*++c->pan_tick/c->pan_frames;changed=1;
+        }
+        if(changed)apply_event_control(type,slot,c);
+    }
+}
+void CallYakkyouSe(NJS_POINT3 *position,int sound)
+{
+    int volume,pan;
+    if(request_kind==2&&recvxAudioBankBusy())return;
+    spatial(position,3,&volume,&pan);se(10,(sound&255)|0x100,volume,pan);
 }

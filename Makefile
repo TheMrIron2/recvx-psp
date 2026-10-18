@@ -505,7 +505,7 @@ $(BOOT_MESSAGE_CONTROL_SOURCE): tools/extract_original_message_control.py tools/
 $(BOOT_MESSAGE_CONTROL_OBJECT): $(BOOT_MESSAGE_CONTROL_SOURCE) Makefile
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BOOT_EVENT_SOUND_SOURCE): tools/extract_original_event_sound.py tools/extract_original_boot_initializers.py src/ps2/veronica/prog/event.c
+$(BOOT_EVENT_SOUND_SOURCE): tools/extract_original_event_sound.py tools/extract_original_boot_initializers.py src/ps2/veronica/prog/event.c src/ps2/veronica/prog/sdfunc.c
 	python3 $< src/ps2/veronica/prog/event.c $@
 $(BOOT_EVENT_SOUND_OBJECT): $(BOOT_EVENT_SOUND_SOURCE) Makefile
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
@@ -1311,7 +1311,7 @@ build/host/game-boot-event-conditions-test: tests/game_boot_event_conditions_tes
 		-fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
 		$(filter %.c,$^) -lm -o $@
 
-build/host/game_boot_event_sound_original.c: tools/extract_original_event_sound.py tools/extract_original_boot_initializers.py src/ps2/veronica/prog/event.c
+build/host/game_boot_event_sound_original.c: tools/extract_original_event_sound.py tools/extract_original_boot_initializers.py src/ps2/veronica/prog/event.c src/ps2/veronica/prog/sdfunc.c
 	python3 $< src/ps2/veronica/prog/event.c $@
 .PHONY: game-boot-event-sound-test
 game-boot-event-sound-test: build/host/game-boot-event-sound-test
@@ -1565,4 +1565,4 @@ game-boot-gu-raster-test: build/psp-tests/gu-depth.prx
 		> build/psp-tests/gu-depth.log 2>&1
 	cat build/psp-tests/gu-depth.log
 	! rg '^FAIL:' build/psp-tests/gu-depth.log
-	rg '^PASS: PSP GU translucent screen depth, opaque occlusion and per-texel alpha' build/psp-tests/gu-depth.log
+	rg '^PASS: PSP GU translucent screen depth, opaque occlusion, per-texel alpha and Ninja winding' build/psp-tests/gu-depth.log

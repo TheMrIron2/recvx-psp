@@ -753,6 +753,22 @@ static int validate_core_instruction(unsigned int opcode)
             return -1;
         }
         return 0;
+    } else if (opcode == 70 || opcode == 71 || opcode == 117 || opcode == 118 ||
+               opcode == 119 || opcode == 121 || opcode == 122 || opcode == 127 ||
+               opcode == 131 || opcode == 134 || opcode == 135 || opcode == 146 ||
+               opcode == 147 || opcode == 148 || opcode == 149 || opcode == 167 || opcode == 182 || opcode == 212) {
+        extent = opcode == 134 ? 16 : opcode == 71 ? 10 : opcode == 70 ? 8 :
+            opcode == 119 || opcode == 121 || opcode == 127 ? 6 :
+            opcode == 117 || opcode == 118 || opcode == 148 || opcode == 149 || opcode == 167 || opcode == 212 ? 4 : 2;
+        if (!has_task_bytes(bhScePtr, extent)) {
+            set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        if (!sys) {
+            set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
+            return -1;
+        }
+        return 0;
     } else if (opcode == 23 || opcode == 24 || opcode == 25 || opcode == 28 || opcode == 29) {
         extent = opcode == 23 || opcode == 25 ? 8 : opcode == 24 ? 2 : opcode == 28 ? 6 : 4;
         if (!has_task_bytes(bhScePtr, extent)) {

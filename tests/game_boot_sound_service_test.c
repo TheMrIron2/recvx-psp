@@ -17,6 +17,16 @@ char ThreeDVolTbl[510], PanTbl360[68], PanTbl360Vol[68];
 static int slot_seen, sound_seen, volume_seen, pan_seen, fade_seen, stop_seen;
 static int midi_starts, adx_starts, adx_stops, stream_active;
 static unsigned int partition_seen;
+static unsigned int flags_seen;
+static int control_midi,controls;
+extern void recvxGameBootSoundTick(void);
+void recvxAudioService(void){}
+void recvxAudioLock(void){}
+void recvxAudioUnlock(void){}
+void recvxAudioAdvanceFades(void){}
+void recvxAudioSoundControl(int midi,int slot,unsigned int flags,int volume,int pan)
+{control_midi=midi;slot_seen=slot;flags_seen=flags;volume_seen=volume;pan_seen=pan;++controls;}
+
 
 extern void recvxGameBootSoundReset(void);
 void recvxGameBootLog(const char *format, ...) { (void)format; }
@@ -83,6 +93,20 @@ int main(void)
     PlayVoiceEx2(1, 21, &p, 2, 90, 0);
     assert(adx_starts == before && adx_stops == 2 && pan_seen == 20 && volume_seen == -23);
     StopVoice(70); assert(slot_seen == 1 && volume_seen == -127 && fade_seen == 70);
-    puts("PASS real native sound service: event/background slot ownership, positional volume/pan, fade frames and voice modes");
+    Set3dSoundFlag(7,2,6);
+    assert(control_midi==1&&slot_seen==5&&flags_seen==6&&volume_seen==0&&pan_seen==0);
+    SetUserSoundVolume(7,2,-20,-60,2);SetUserSoundPan(7,2,-100,100,2);
+    assert(volume_seen==-20&&pan_seen==-100);
+    recvxGameBootSoundTick();assert(slot_seen==5&&volume_seen==-40&&pan_seen==0);
+    recvxGameBootSoundTick();assert(volume_seen==-60&&pan_seen==100);
+    int old_controls=controls;recvxGameBootSoundTick();assert(controls==old_controls);
+    Set3dSoundFlag(3,255,2);assert(!control_midi&&slot_seen==19&&flags_seen==2);
+    SetUserSoundVolume(3,255,-90,-10,0);assert(volume_seen==-10);
+    old_controls=controls;SetUserSoundPan(3,255,-128,127,20);assert(controls==old_controls);
+    Set3dSoundFlag(6,1,6);assert(control_midi&&slot_seen==1&&flags_seen==2);
+    Set3dSoundFlag(10,0,2);SetUserSoundVolume(10,0,-100,-30,20);
+    assert(slot_seen==0&&volume_seen==-30&&fade_seen==20);
+    Reset3dSoundFlag();assert(flags_seen==0);
+    puts("PASS real native sound service: scripted slot masks, exact gain/pan ramps and native stream fades; event/background slot ownership, positional volume/pan, fade frames and voice modes");
     return 0;
 }

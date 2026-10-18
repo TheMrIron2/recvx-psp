@@ -25,6 +25,11 @@ Pulse strips use native GE texture and blend passes for the authored base/offset
 colors. Ordinary 3D fog uses the GE near/far ramp; it does not reproduce every
 quantization step in the PS2 lookup table.
 
+Ninja model strips use counterclockwise GE front faces after the camera-to-GU
+coordinate conversion. Clockwise selection culls the exterior and exposes model
+interiors. Back-face culling remains enabled for single-sided
+materials; double-sided materials disable it as authored.
+
 Screen-space effects preserve the original ordering table's alpha-dependent
 depth writes (`Ps2ZbuffOff` / `FB_ONLY`). The GU draws their color without
 writing depth, then writes depth only for fully opaque pixels in a color-masked
@@ -50,11 +55,30 @@ A missing or corrupt primary can recover from a valid backup. System settings
 and ranking-record persistence through the separate system-save screen still
 use the explicit no-card lifecycle; those are not game-save slots.
 
+Scenario opcode 56 (`bhFrameCheck`) compares player, room-enemy, or object
+animation frames using the original signed 16.16 frame value and optional
+half-frame threshold. It consumes all six bytes and returns the original
+condition result so event loops resume when the animation reaches that frame.
+The PSP port reads the packed frame operand bytewise, including at odd script
+addresses, and validates actor indices and object arena storage before use.
+
 Scenario opcodes 158 (`bhPuruPuruFlagSet`) and 159 (`bhPuruPuruStart`)
 execute the original two-byte handlers. Selector zero enables event vibration
 mode; every nonzero selector disables it. The sound service retains that mode,
 while pattern requests return without hardware output because stock PSP has no
 vibration unit. The interpreter rejects truncated operands before either call.
+
+Scenario sound opcode 134 (`bhEasySESet`) executes its original 16-byte command
+and `PlayGameSe4Event` routing. Player, room-enemy, object and item model joints
+supply bounded positions. Scripted gain and pan overrides survive voice starts
+and update the native SAS voices without decoding ADPCM. Frame-based curves
+retain the original volume/pan sentinel values and zero-duration endpoints.
+
+The sound batch also enables opcodes 70/71 (next-room settings), 117–119
+(slot layout, flags and volume), 121/122 (enemy sounds), 127 (pan), 131
+(the original two-byte no-op), 135 (flag reset), 146–149 (alternate background
+and BGM commands), 167 (alternate BGM volume), 182 (room sound case) and 212 (system sound). All command
+spans are checked before handlers advance the script or change sound state.
 
 ## Verification
 
@@ -63,9 +87,10 @@ real save files and failures, inventory entry/navigation/exit, item use and
 combination, inspection actions, file pages/bookmarks, reverse skinning,
 collision, doors, terminals, game-over, textures, rendering and GU commands.
 `make game-boot-gu-raster-test PPSSPP_HEADLESS=/path/to/PPSSPPHeadless`
-executes the shipping GU adapter through PPSSPP's software GE. Its four pixel
+executes the shipping GU adapter through PPSSPP's software GE. Its seven pixel
 checks cover translucent full-screen effects, opaque occlusion, mixed opaque /
-translucent texture pixels and transparent texels. The PRX produced by
+translucent texture pixels, transparent texels, front/back-face winding and a
+colored shell that detects exposed interiors. The PRX produced by
 `make game-boot-gu-depth-probe` can also run on PSP hardware.
 `game-boot-map-assets-test` checks all 71 MRY index/floor resources used by the
 map. The native 32-bit `game-boot-map-control-test` executes actual MRY loading,

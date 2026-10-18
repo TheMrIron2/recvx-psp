@@ -28,7 +28,7 @@ static int rejecting;
 static char reason[192];
 
 unsigned int (*bhScenarioJmpT[256])(void)={
-    [0]=bhEnd,[43]=bhMotionPauseSet,[60]=bhMaskSet,[62]=bhMaskStart,
+    [0]=bhEnd,[56]=bhFrameCheck,[252]=bhWhile,[243]=bhEwhile2,[254]=bhEvtNext,[43]=bhMotionPauseSet,[60]=bhMaskSet,[62]=bhMaskStart,
     [103]=bhSubCtr,[154]=bhFaceRep,[255]=bhEvtEnd
 };
 void recvxGameBootUnsupported(const char *message)
@@ -71,8 +71,53 @@ static void tick(void){assert(!bhEventScheduler2());}
 static void core_fault(enum RecvxEventCoreFaultCode code)
 {assert(bhEventScheduler2()==-1);assert(recvxEventCoreGetFault()->code==code);}
 
+static void test_frame_check(void)
+{
+    /* Exact fixed-point comparison for all actor selectors and nonzero half flags.
+       Offset 17 deliberately exercises an unaligned 16-bit script operand. */
+    unsigned char body[]={254,56,0,1,0,7,0,255,0};
+    for(unsigned int kind=0;kind<3;++kind){
+        for(unsigned int half=0;half<256;++half){
+            body[2]=kind;body[4]=half;
+            setup(body,sizeof(body));sys->obwp=(O_WRK *)arena;
+            int *frame=kind==0?&plp->frm_no:kind==1?&ene[7].frm_no:&sys->obwp[1].frm_no;
+            int threshold=(7<<16)+(half?32768:0);
+            for(int delta=-1;delta<=1;++delta){
+                *frame=threshold+delta;bhScePtr=section+17;
+                assert(bhFrameCheck()==(unsigned int)(delta<0));
+                assert(bhScePtr==section+23&&*frame==threshold+delta);
+            }
+        }
+    }
+    const unsigned char wait[]={252,8,56,0,0,1,7,0,254,243,255,0};
+    setup(wait,sizeof(wait));plp->frm_no=(7<<16)+32767;
+    tick();assert(recvxEventCoreTaskPc(0)==25&&bhEtask[0].loop==0);
+    tick();assert(recvxEventCoreTaskPc(0)==25&&bhEtask[0].status);
+    plp->frm_no++;tick();assert(!bhEtask[0].status&&bhEtask[0].loop==-1);
+    assert(recvxEventCoreTaskPc(0)==28);
+    unsigned char bad[]={56,0,1,0,7,0,255,0};
+    for(unsigned int length=1;length<6;++length){
+        setup(bad,length);core_fault(RECVX_EVENT_FAULT_TRUNCATED);
+        assert(recvxEventCoreTaskPc(0)==16);
+    }
+    for(unsigned int variant=0;variant<7;++variant){
+        bad[1]=variant==0?3:variant==1?0:variant<5?1:2;
+        setup(bad,sizeof(bad));
+        if(variant==1)plp=NULL;
+        if(variant==2)rom->ene_n=1;
+        if(variant==3)descriptors[1].wrk_no=128;
+        if(variant==4)rom->enep=NULL;
+        if(variant==6){sys->obwp=(O_WRK *)arena;section[18]=255;}
+        core_fault(RECVX_EVENT_FAULT_BAD_OPERAND);
+        assert(recvxEventCoreTaskPc(0)==16);plp=&player;
+    }
+    bad[1]=2;setup(bad,sizeof(bad));sys->obwp=(O_WRK *)(arena+sizeof(arena)-4);
+    REJECT(bhEventScheduler2(),"object work");assert(recvxEventCoreTaskPc(0)==16);
+}
+
 int main(void)
 {
+    test_frame_check();
     const unsigned char pause[]={43,0,255,0};
     setup(pause,sizeof(pause));ene[7].id=1;ene[7].exp1=(unsigned char *)&ene[8];
     tick();assert(ene[7].mode3==4&&ene[8].mode3==4);
@@ -126,6 +171,6 @@ int main(void)
         setup(command,sizes[i]-1);core_fault(RECVX_EVENT_FAULT_TRUNCATED);
         assert(!ene[7].mode3&&!ctx(0));
     }
-    puts("PASS: original NPC handoff and pause/companion state, mask record selection/sentinel, facial flags, and bounded work/context/enemy/stream operands");
+    puts("PASS: frame checks for player/enemy/object, half frames, unaligned operands, wait/resume and bounds; original NPC handoff and pause/companion state, mask record selection/sentinel, facial flags, and bounded work/context/enemy/stream operands");
     return 0;
 }
