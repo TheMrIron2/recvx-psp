@@ -107,9 +107,15 @@ int main(int argc, char **argv)
     recvxAudioStopSounds(0);
     bank(0); bank(0xfff0); bank(0x4000);
     assert(recvxAudioEnvironment(9) == 16);
+    /* The room's MIDI section likewise has highest ID 113, not 113 entries. */
+    assert(!recvxAudioPlayMidi(7,0x271,0,0)); render(1); recvxAudioStopMidi(7);
     assert(recvxAudioPlaySe(6, 0x200, 0, 0) > 0);
     assert(recvxAudioPlaySe(8, 0x100, 0, 0) > 0);
-    assert(recvxAudioPlaySe(7, 0x400, 0, 0) > 0); render(1);
+    /* Sony's program header has highest ID 3: all four Claire voices,
+       including pain voice 0x403, must be selectable with native ADPCM. */
+    for (int program=0;program<=3;++program) {
+        assert(recvxAudioPlaySe(7, 0x400 | program, 0, 0) > 0); render(1);
+    }
     /* Replacing a bank stops its voices before releasing compressed storage. */
     bank(0); render(1);
     before = starts; assert(!recvxAudioPlayMidi(0, 0x200, 0, 0)); render(6); assert(starts > before);
@@ -143,9 +149,39 @@ int main(int argc, char **argv)
     recvxAudioMidiVolume(7, -127, 2, 1);
     fade(); assert(voice[midi_voice].keyed);
     fade(); assert(!voice[midi_voice].keyed);
+    /* COMMON.MLT supplies all four shared door sequences. Door packs
+       contain only MIDI instruments, so mounting those alone is insufficient. */
+    recvxAudioStopSounds(0);
+    bank(0x8016);
+    for (int sequence = 0; sequence < 4; ++sequence) {
+        before = starts;
+        assert(!recvxAudioPlayMidi(2, (int)(0x80000100u | sequence), 0, 0));
+        render(8);
+        assert(starts > before);
+        recvxAudioStopMidi(2);
+    }
+    bank(0x8019); /* Replacing door instruments preserves shared sequences. */
+    before = starts;
+    assert(!recvxAudioPlayMidi(2, (int)0x80000100u, 0, 0));
+    render(8); assert(starts > before); recvxAudioStopMidi(2);
     assert(!recvxAudioAdx(0, 3, 3)); assert(voice[0].pan < 0 && voice[1].pan > 0);
     render(2); time = recvxAudioTime(0); assert(time > 0);
     recvxAudioPause(0, 1); render(2); assert(recvxAudioTime(0) == time);
+    /* COMMON.MLT supplies all four shared door sequences. Door packs
+       contain only MIDI instruments, so mounting those alone is insufficient. */
+    recvxAudioStopSounds(0);
+    bank(0x8016);
+    for (int sequence = 0; sequence < 4; ++sequence) {
+        before = starts;
+        assert(!recvxAudioPlayMidi(2, (int)(0x80000100u | sequence), 0, 0));
+        render(8);
+        assert(starts > before);
+        recvxAudioStopMidi(2);
+    }
+    bank(0x8019); /* Replacing door instruments preserves shared sequences. */
+    before = starts;
+    assert(!recvxAudioPlayMidi(2, (int)0x80000100u, 0, 0));
+    render(8); assert(starts > before); recvxAudioStopMidi(2);
     assert(!recvxAudioAdx(0, 3, 3)); render(1); /* Replace paused stereo stream. */
     recvxAudioPause(0, 1); recvxAudioStop(0); render(1); assert(!recvxAudioStatus(0));
     assert(!invalid_keyoffs);

@@ -92,6 +92,10 @@ void recvxGameBootEffectCallbackPrepare(unsigned int kind,O_WRK *e)
         if(e->mode0>1||e->type>10||e->ct0<0||e->ct0>64||
             (e->mode0&&!e->exp0))recvxGameBootUnsupported("invalid muzzle effect state");
         break;
+    case 26:
+        if(e->mode0>1||e->ct0<0||e->ct0>=32768||e->ct1<0||e->ct1>32||
+            (e->mode0&&(!isfinite(e->sz)||e->sz<=0)))recvxGameBootUnsupported("invalid timer expiry effect state");
+        break;
     case 300:{
         if(e->mode0>2)recvxGameBootUnsupported("invalid blood mesh effect mode");
         context(e->exp0,sizeof(E17_WORK));

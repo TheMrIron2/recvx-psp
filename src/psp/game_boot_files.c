@@ -167,3 +167,10 @@ int GetFileSize(char *name)
 { return GetIsoFileSize(name); }
 int RequestReadIsoFile(char *name, void *destination)
 { char path[512]; iso_path(path, sizeof(path), name); return read_file(path, destination); }
+
+void DeletePartition(unsigned int partition)
+{
+    /* Packaged PSP archives use synchronous reads and retain no partition
+       handles. Their loaded ranges remain valid for relocation/validation. */
+    if(partition>=7)recvxGameBootUnsupported("invalid archive partition release");
+}

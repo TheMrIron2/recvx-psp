@@ -171,12 +171,12 @@ SOURCES := src/psp/game_main.c src/psp/game_boot_map.c src/psp/game_boot_file_vi
 	$(BOOT_UNPORTED_OBJECT) $(BOOT_TABLES_OBJECT) src/psp/services.c \
 	src/psp/engine_original_clock_psp.c src/psp/engine_original_math.c \
 	src/psp/engine_original_object.c src/psp/game_boot_effect.c \
-	src/psp/game_boot_player.c src/psp/game_boot_player_pitch.c src/psp/game_boot_wall.c src/psp/game_boot_wall_geometry.c src/psp/game_boot_player_head.c src/psp/game_boot_world_control.c src/psp/game_boot_visibility.c src/psp/game_boot_light.c src/psp/game_boot_overlay.c src/psp/game_boot_player_action.c src/psp/game_boot_player_collision.c src/psp/player_asset.c src/ps2/veronica/prog/ps2_NaMem.c \
+	src/psp/game_boot_player.c src/psp/game_boot_player_pitch.c src/psp/game_boot_wall.c src/psp/game_boot_wall_geometry.c src/psp/game_boot_player_head.c src/psp/game_boot_world_control.c src/psp/game_boot_visibility.c src/psp/game_boot_light.c src/psp/game_boot_overlay.c src/psp/game_boot_player_action.c src/psp/game_boot_player_remaining.c src/psp/game_boot_game_remaining.c src/psp/game_boot_player_collision.c src/psp/player_asset.c src/ps2/veronica/prog/ps2_NaMem.c \
 	src/psp/game_boot_room.c src/psp/expand.c src/psp/room.c src/psp/event_data.c \
 	src/psp/engine_original_effect.c src/psp/game_boot_mask.c src/psp/game_boot_mask_anim.c src/psp/game_boot_event.c src/psp/game_boot_event_control.c src/psp/game_boot_event_inventory.c src/psp/game_boot_event_conditions.c src/psp/game_boot_event_effect.c src/psp/game_boot_event_screen.c src/psp/game_boot_event_camera.c src/psp/game_boot_event_sound.c src/psp/game_boot_message_control.c src/psp/game_boot_effect_control.c src/psp/event_core.c src/ps2/veronica/prog/Motion.c \
 	src/psp/engine_original_effect_init.c src/ps2/veronica/prog/binfunc.c \
 	src/ps2/veronica/prog/camera.c src/psp/engine_original_matrix_cpu.c \
-	$(BOOT_PLAYER_HEAD_OBJECT) $(BOOT_WORLD_CONTROL_OBJECT) $(BOOT_VISIBILITY_OBJECT) $(BOOT_LIGHT_OBJECT) $(BOOT_OVERLAY_OBJECT) $(BOOT_PLAYER_ACTION_OBJECT) $(BOOT_DRAW_CONTROL_OBJECT) $(BOOT_DRAW_SKIN_OBJECT) $(BOOT_EFFECT_DRAW_OBJECT) $(BOOT_EFFECT_SPRITES_OBJECT) $(BOOT_EFFECT_SHADOW_OBJECT) $(BOOT_EFFECT_LINES_OBJECT) $(BOOT_EFFECT_THL_OBJECT) $(BOOT_EFFECT_2D_OBJECT) $(BOOT_EFFECT_VIGNETTE_OBJECT) $(BOOT_MESSAGE_CONTROL_OBJECT) $(BOOT_EVENT_SOUND_OBJECT) $(BOOT_EVENT_SCREEN_OBJECT) $(BOOT_EVENT_CAMERA_OBJECT) $(BOOT_EVENT_ACTOR_OBJECT) $(BOOT_EVENT_REMAINING_OBJECT) $(BUILD_DIR)/game_boot_event_services_original.o $(BOOT_ITEM_VIEW_OBJECT) $(BOOT_ACTOR_WALL_OBJECT) $(BOOT_DOOR_CONTROL_OBJECT) $(BOOT_TERMINAL_GAMEOVER_OBJECT) $(BOOT_INVENTORY_CONTROL_OBJECT) $(BOOT_MAP_CONTROL_OBJECT) $(BOOT_FILE_VIEW_OBJECT) $(BOOT_SAVE_CONTROLLERS_OBJECT) $(BOOT_INITIALIZERS_OBJECT) $(BOOT_SEQUENCE_OBJECT) $(BOOT_PLAYER_CONTROL_OBJECT) $(BOOT_CUT_CONTROL_OBJECT) $(BOOT_PLAYER_PITCH_OBJECT) $(BOOT_PLAYER_COLLISION_OBJECT) $(BOOT_WALL_OBJECT) $(BOOT_WALL_GEOMETRY_OBJECT)
+	$(BOOT_PLAYER_HEAD_OBJECT) $(BOOT_WORLD_CONTROL_OBJECT) $(BOOT_VISIBILITY_OBJECT) $(BOOT_LIGHT_OBJECT) $(BOOT_OVERLAY_OBJECT) $(BOOT_PLAYER_ACTION_OBJECT) $(BUILD_DIR)/game_boot_game_remaining_original.o $(BUILD_DIR)/game_boot_player_remaining_original.o $(BOOT_DRAW_CONTROL_OBJECT) $(BOOT_DRAW_SKIN_OBJECT) $(BOOT_EFFECT_DRAW_OBJECT) $(BOOT_EFFECT_SPRITES_OBJECT) $(BOOT_EFFECT_SHADOW_OBJECT) $(BOOT_EFFECT_LINES_OBJECT) $(BOOT_EFFECT_THL_OBJECT) $(BOOT_EFFECT_2D_OBJECT) $(BOOT_EFFECT_VIGNETTE_OBJECT) $(BOOT_MESSAGE_CONTROL_OBJECT) $(BOOT_EVENT_SOUND_OBJECT) $(BOOT_EVENT_SCREEN_OBJECT) $(BOOT_EVENT_CAMERA_OBJECT) $(BOOT_EVENT_ACTOR_OBJECT) $(BOOT_EVENT_REMAINING_OBJECT) $(BUILD_DIR)/game_boot_event_services_original.o $(BOOT_ITEM_VIEW_OBJECT) $(BOOT_ACTOR_WALL_OBJECT) $(BOOT_DOOR_CONTROL_OBJECT) $(BOOT_TERMINAL_GAMEOVER_OBJECT) $(BOOT_INVENTORY_CONTROL_OBJECT) $(BOOT_MAP_CONTROL_OBJECT) $(BOOT_FILE_VIEW_OBJECT) $(BOOT_SAVE_CONTROLLERS_OBJECT) $(BOOT_INITIALIZERS_OBJECT) $(BOOT_SEQUENCE_OBJECT) $(BOOT_PLAYER_CONTROL_OBJECT) $(BOOT_CUT_CONTROL_OBJECT) $(BOOT_PLAYER_PITCH_OBJECT) $(BOOT_PLAYER_COLLISION_OBJECT) $(BOOT_WALL_OBJECT) $(BOOT_WALL_GEOMETRY_OBJECT)
 else ifeq ($(BUILD_PROFILE),engine-event-test)
 BUILD_DIR := build/psp-engine-event-test
 TARGET := $(BUILD_DIR)/recvx-event-test
@@ -656,7 +656,7 @@ HOST_BOOT_SOURCES := src/psp/game_boot_map.c src/psp/game_boot_file_view.c src/p
 	build/host/game_boot_visibility_original.c \
 	build/host/game_boot_light_original.c \
 	build/host/game_boot_overlay_original.c \
-	build/host/game_boot_player_action_original.c \
+	build/host/game_boot_player_action_original.c build/host/game_boot_player_remaining_original.c build/host/game_boot_game_remaining_original.c \
 	build/host/game_boot_draw_control_original.c \
 	build/host/game_boot_draw_skin_original.c \
 	build/host/game_boot_effect_draw_original.c \
@@ -670,7 +670,7 @@ HOST_BOOT_SOURCES := src/psp/game_boot_map.c src/psp/game_boot_file_view.c src/p
 	src/psp/live_task_dispatch.c src/psp/original_clock.c src/psp/services.c \
 	src/psp/engine_original_clock_psp.c src/psp/engine_original_math.c \
 	src/psp/engine_original_object.c src/psp/game_boot_effect.c \
-	src/psp/game_boot_player.c src/psp/game_boot_player_pitch.c src/psp/game_boot_wall.c src/psp/game_boot_wall_geometry.c src/psp/game_boot_player_head.c src/psp/game_boot_world_control.c src/psp/game_boot_visibility.c src/psp/game_boot_light.c src/psp/game_boot_overlay.c src/psp/game_boot_player_action.c src/psp/game_boot_player_collision.c src/psp/player_asset.c src/ps2/veronica/prog/ps2_NaMem.c \
+	src/psp/game_boot_player.c src/psp/game_boot_player_pitch.c src/psp/game_boot_wall.c src/psp/game_boot_wall_geometry.c src/psp/game_boot_player_head.c src/psp/game_boot_world_control.c src/psp/game_boot_visibility.c src/psp/game_boot_light.c src/psp/game_boot_overlay.c src/psp/game_boot_player_action.c src/psp/game_boot_player_remaining.c src/psp/game_boot_game_remaining.c src/psp/game_boot_player_collision.c src/psp/player_asset.c src/ps2/veronica/prog/ps2_NaMem.c \
 	src/psp/game_boot_room.c src/psp/expand.c src/psp/room.c src/psp/event_data.c \
 	src/psp/engine_original_effect.c src/psp/game_boot_mask.c src/psp/game_boot_mask_anim.c src/psp/game_boot_event.c src/psp/game_boot_event_control.c src/psp/game_boot_event_inventory.c src/psp/game_boot_event_conditions.c src/psp/game_boot_event_effect.c src/psp/game_boot_event_screen.c src/psp/game_boot_event_camera.c src/psp/game_boot_event_sound.c src/psp/game_boot_message_control.c src/psp/game_boot_effect_control.c src/psp/event_core.c src/ps2/veronica/prog/Motion.c \
 	src/psp/engine_original_effect_init.c src/ps2/veronica/prog/binfunc.c \
@@ -1501,7 +1501,7 @@ game-boot-terminal-gameover-test: build/host/game-boot-terminal-gameover-test
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $<
 build/host/game-boot-actor-wall-test: tests/game_boot_actor_wall_test.c src/psp/game_boot_actor_wall.c build/host/game_boot_actor_wall_original.c src/psp/game_boot_wall.c build/host/game_boot_wall_original.c $(GAME_BOOT_WALL_GEOMETRY_TEST_SOURCES) src/psp/game_boot_player_collision.c build/host/game_boot_player_collision_original.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
 	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_GAME_BOOT_HOST_TEST -Wno-error=unused-function -Wno-error=unused-variable -ffunction-sections -fdata-sections -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
-build/host/game-boot-door-test: tests/game_boot_door_test.c src/psp/game_boot_door.c build/host/game_boot_door_control_original.c src/psp/engine_original_math.c src/psp/engine_original_fault.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
+build/host/game-boot-door-test: tests/game_boot_door_test.c src/psp/game_boot_door.c build/host/game_boot_door_scheduler_original.c src/psp/engine_original_math.c src/psp/engine_original_fault.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
 	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_GAME_BOOT_HOST_TEST -Wno-error=unused-function -ffunction-sections -fdata-sections -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
 build/host/game-boot-inventory-control-test: tests/game_boot_inventory_control_test.c tests/game_boot_inventory_control_mocks.c src/ps2/veronica/prog/item.c src/ps2/veronica/prog/flag.c src/psp/game_boot_message_control.c build/host/game_boot_message_control_original.c src/psp/game_boot_inventory_control.c build/host/game_boot_inventory_control_original.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
 	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_GAME_BOOT_HOST_TEST -Wno-error=unused-function -Wno-error=unused-variable -Wno-error=unused-but-set-variable -Wno-error=missing-braces -Wno-error=discarded-qualifiers -Wno-error=overflow -Wno-error=missing-field-initializers -Wno-error=sign-compare -Wno-error=char-subscripts -Wno-error=unused-parameter -Wno-error=implicit-fallthrough -ffunction-sections -fdata-sections -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
@@ -1584,3 +1584,31 @@ $(BUILD_DIR)/game_boot_event_services_original.o: $(BUILD_DIR)/game_boot_event_s
 .PHONY: game-boot-opcode-check
 game-boot-opcode-check:
 	python3 tools/check_game_boot_opcodes.py
+
+$(BUILD_DIR)/game_boot_player_remaining_original.c build/host/game_boot_player_remaining_original.c: tools/extract_original_player_remaining.py tools/extract_original_event_services.py tools/extract_original_boot_tables.py src/ps2/veronica/prog/player.c src/ps2/veronica/prog/pl_evt.c src/ps2/veronica/prog/playpch.c src/ps2/veronica/prog/playpch2.c src/ps2/veronica/prog/weapon.c src/ps2/veronica/prog/pwksub.c src/ps2/veronica/prog/cut.c src/ps2/veronica/prog/ps2_NinjaCnk.c src/ps2/veronica/prog/hitchk.c src/ps2/veronica/prog/sub1.c src/ps2/veronica/prog/njplus.c
+	python3 $< $@
+$(BUILD_DIR)/game_boot_player_remaining_original.o: $(BUILD_DIR)/game_boot_player_remaining_original.c Makefile
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+.PHONY: game-boot-player-remaining-test
+game-boot-player-remaining-test: build/host/game-boot-player-remaining-test
+	ASAN_OPTIONS=detect_leaks=0 $<
+
+build/host/game-boot-player-remaining-test: tests/game_boot_player_remaining_test.c src/psp/game_boot_player_remaining.c build/host/game_boot_player_remaining_original.c src/psp/engine_original_math.c src/psp/engine_original_fault.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -Wno-error \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
+		-ffunction-sections -fdata-sections $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
+
+$(BUILD_DIR)/game_boot_game_remaining_original.c build/host/game_boot_game_remaining_original.c: tools/extract_original_game_remaining.py tools/extract_original_event_services.py $(wildcard src/ps2/veronica/prog/*.c)
+	python3 $< $@
+$(BUILD_DIR)/game_boot_game_remaining_original.o: $(BUILD_DIR)/game_boot_game_remaining_original.c Makefile
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+build/host/game_boot_door_scheduler_original.c: tools/extract_original_door_control.py tools/extract_original_boot_initializers.py src/ps2/veronica/prog/door.c src/ps2/veronica/prog/room.c
+	python3 $< $@ --scheduler-test
+
+.PHONY: game-boot-door-package-test
+game-boot-door-package-test: build/host/game-boot-door-package-test
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $<
+build/host/game-boot-door-package-test: tests/game_boot_door_package_test.c src/psp/game_boot_door.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -Wno-error=unused-function -ffunction-sections -fdata-sections \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie $(filter %.c,$^) -Wl,--gc-sections -lm -o $@

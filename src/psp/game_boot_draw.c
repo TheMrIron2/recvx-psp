@@ -1,4 +1,6 @@
 #include <stdlib.h>
+#include <malloc.h>
+#include "psp/game_boot_game_remaining.h"
 #include <string.h>
 #include <math.h>
 #include "psp/game_boot.h"
@@ -356,7 +358,8 @@ void njReleaseTextureAll(void)
     Ps2_current_texmemlist = NULL;
     recvxGameBootRenderTextureList(NULL);
 }
-void recvxGameBootTexturesShutdown(void) { njReleaseTextureAll(); Init_PS2_SAVE_TEX(); }
+static void reset_extra_texture_state(void);
+void recvxGameBootTexturesShutdown(void) { njReleaseTextureAll(); Init_PS2_SAVE_TEX(); reset_extra_texture_state(); }
 Uint32 njCalcTexture(Uint32 flag)
 {
     /* Retail reports this fixed compatibility capacity, not measured free
@@ -583,7 +586,7 @@ void njDrawLine2D(NJS_POINT2COL *polygon, Int count, Float priority, Uint32 attr
 }
 
 void SyncPath(void) { /* GU users synchronize before queue storage is reclaimed. */ }
-void Ps2DrawOTag(void) { recvxGameBootPresent(); }
+void Ps2DrawOTag(void) { recvxGameBootPresent(); recvxGameBootCaptureSubmitted(); }
 void Ps2DrawOTagI(void) { recvxGameBootPresent(); }
 int ViewType;
 
@@ -625,3 +628,71 @@ void njSetSystemAttr(NJS_SYS_ATTR *attributes)
     unsigned char data[8];memcpy(data,attributes,sizeof(data));
     njColorBlendingMode(0,data[0]);njColorBlendingMode(1,data[1]);njTextureFilterMode(data[2]);
 }
+
+/* PSP surfaces are owned RAM allocations, so a display-mode transition never
+   migrates or releases them. Preserve palette/selection around that transition. */
+static struct { NJS_TEXLIST *list; unsigned int number, mode; int filter; Uint32 palette[4096]; } texture_stack[2];
+static unsigned int texture_stack_depth;
+void bhPushAllTexture(void)
+{
+    if(texture_stack_depth==2)recvxGameBootUnsupported("texture state stack overflow");
+    if(draw_count||recvxGameBootRenderPending())recvxGameBootPresent();
+    unsigned int n=texture_stack_depth++;
+    texture_stack[n].list=current_list;texture_stack[n].number=current_number;
+    texture_stack[n].mode=palette_mode;texture_stack[n].filter=texture_filter;
+    memcpy(texture_stack[n].palette,palbuf,sizeof(palbuf));
+}
+void bhPopAllTexture(void)
+{
+    if(!texture_stack_depth)recvxGameBootUnsupported("texture state stack underflow");
+    if(draw_count||recvxGameBootRenderPending())recvxGameBootPresent();
+    unsigned int n=--texture_stack_depth;
+    njGarbageTexture(NULL,0);
+    memcpy(palbuf,texture_stack[n].palette,sizeof(palbuf));
+    palette_mode=texture_stack[n].mode;texture_filter=texture_stack[n].filter;
+    current_list=texture_stack[n].list;current_number=texture_stack[n].number;
+    recvxGameBootRenderTextureList(current_list);
+    if(current_list)njSetTextureNum(current_number);
+}
+
+static unsigned int capture_state,capture_height;
+unsigned int PS2_Render_tex_sub_flag,Ps2_render_width;
+int recvxGameBootCaptureActive(void){return capture_state==1;}
+void recvxGameBootCaptureBegin(unsigned int height)
+{
+    if(capture_state||!(height==480||height==512))recvxGameBootUnsupported("nested or invalid scene capture");
+    if(draw_count||recvxGameBootRenderPending())recvxGameBootPresent();
+    capture_state=1;capture_height=height;
+}
+void recvxGameBootCaptureSubmitted(void){if(capture_state==1)capture_state=2;}
+void njSetRenderWidth(Uint32 width)
+{if(width!=512)recvxGameBootUnsupported("invalid scene capture width");Ps2_render_width=width;}
+static void capture_texture(unsigned int slot)
+{
+    if(capture_state!=2)recvxGameBootUnsupported("scene capture has not been rendered");
+    RecvxBootTexture *t=&textures[slot];
+    if(!t->rgba8888){
+        unsigned char *pixels=memalign(64,512u*512u*4u);
+        if(!pixels)recvxGameBootUnsupported("scene capture allocation failed");
+        memset(pixels,0,512u*512u*4u);free(t->pixels);t->pixels=pixels;
+        t->rgba8888=1;t->width=t->height=t->tile_width=512;t->tile_count=1;
+    }
+    t->capture_scale_u=480.0f/512;t->capture_scale_v=272.0f/capture_height;
+    recvxGameBootCaptureCopy(t->pixels);
+    descriptors[slot].texinfo.texaddr=t->pixels;
+    descriptors[slot].texinfo.texsurface.nWidth=descriptors[slot].texinfo.texsurface.nHeight=512;
+    capture_state=0;
+}
+void njRenderTextureNum(Uint32 number)
+{
+    if(!current_list||number>=current_list->nbTexture)recvxGameBootUnsupported("invalid scene capture texture");
+    capture_texture(descriptor_slot((NJS_TEXMEMLIST *)(uintptr_t)current_list->textures[number].texaddr));
+}
+void njRenderTextureNumG(Uint32 index)
+{
+    for(unsigned int i=0;i<TEXTURE_LIMIT;++i)if(textures[i].source&&descriptors[i].globalIndex==index){capture_texture(i);return;}
+    recvxGameBootUnsupported("scene capture global texture is not loaded");
+}
+void PS2_Render_Tex_Sub(void){PS2_Render_tex_sub_flag=1;njRenderTextureNumG(2);}
+
+static void reset_extra_texture_state(void){texture_stack_depth=capture_state=capture_height=0;PS2_Render_tex_sub_flag=Ps2_render_width=0;}

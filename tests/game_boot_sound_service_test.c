@@ -59,6 +59,9 @@ void recvxAudioStop(unsigned int slot) { slot_seen = (int)slot; stream_active = 
 int main(void)
 {
     recvxGameBootSoundReset();
+    SendSoundCommand(0);
+    for(unsigned int command=4;command<10;++command)SendSoundCommand(command);
+    assert(!midi_starts&&!adx_starts&&!adx_stops&&!controls);
     for (int i = 0; i < 68; ++i) { PanTbl360[i] = (char)(i - 34); PanTbl360Vol[i] = -3; }
     ThreeDVolTbl[10] = -20;
     NJS_POINT3 p = {10, 0, 0};

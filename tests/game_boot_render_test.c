@@ -297,6 +297,11 @@ int main(void)
     recvxGameBootRenderConsume(); f=draw();
     CHECK(f->projection[0] != queued_projection[0] && close_to(f->projection[10],-25.0f/15.0f));
 
+    reset(); f=draw();
+    RecvxBootRenderVertex original_triangle[3];memcpy(original_triangle,f->vertices,sizeof(original_triangle));
+    recvxGameBootRenderConsume();njScale(NULL,-1,1,1);f=draw();
+    CHECK(f->vertices[0].x==-original_triangle[0].x && f->vertices[1].x==-original_triangle[2].x);
+    CHECK(f->vertices[1].y==original_triangle[2].y && f->vertices[2].y==original_triangle[1].y);
     reset(); njTranslate(NULL, 10, 0, 0); f = draw(); CHECK(f->vertices[0].x == 9);
     reset(); njScale(NULL, 2, 3, 1); f = draw(); CHECK(f->vertices[0].x == -2 && f->vertices[0].y == 3);
     reset(); data.polygons[1] = 2; njCnkSetEasyMultiAmbient(0.25f, 0.5f, 1); f = draw();

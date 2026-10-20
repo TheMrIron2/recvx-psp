@@ -2,13 +2,13 @@
 from pathlib import Path
 import re,sys
 ROOT=Path('src/ps2/veronica/prog')
-CALLBACKS={'bhEff000':0,'bhEff002':2,'bhEff007':7,'bhEff300':300,'bhEff301':301,'bhEff302':302,'bhEff_E02_SandDust':253,'bhEff_E02_SandParticle':254,'bhEff_E02_SandParticle2':255,'bhEff_E00_DrawParticlePly':1000,'bhEff_PtclSpriteDrawB':302,'bhEff_PtclLineDraw':302}
+CALLBACKS={'bhEff000':0,'bhEff002':2,'bhEff007':7,'bhEff026':26,'bhEff300':300,'bhEff301':301,'bhEff302':302,'bhEff_E02_SandDust':253,'bhEff_E02_SandParticle':254,'bhEff_E02_SandParticle2':255,'bhEff_E00_DrawParticlePly':1000,'bhEff_PtclSpriteDrawB':302,'bhEff_PtclLineDraw':302}
 GROUPS={
 'ps2_texture.c':['bhReleaseMainTexture'],
 'ps2_NaColi.c':['njIsParalellL2PL'],
 'effect.c':['bhSetEffect','bhSetEffectEvt','bhPushEffectWork','bhPopEffectWork','bhClearEventEffect','bhClrEff_YT','bhSetExtraEffectWork'],
 'effsub3.c':['AllocOwork','AllocOworkOne','bhClrEff_RY','bhSetBloodPoolLnk','bhSetEffParticle','bhSetEffParticleMk2','bhSetRapEff','bhSetEffGunSpark','bhEff_PtclSpriteDrawB','bhEff_PtclLineDraw','bhEff300','bhEff301','bhEff302','bhCheckCamWall2D'],
-'effsub1.c':['bhEff000','bhEff002','bhEff007'],
+'effsub1.c':['bhEff000','bhEff002','bhEff007','bhEff026'],
 'effsub2.c':['bhClrEff_YG','bhEff_E02_SandDust','bhEff_E02_SandParticle','bhEff_E02_SandParticle2','bhEff_E00_DrawParticlePly','bhEff_SetUVInfo','bhEff_SetAlign','bhEff_SetBaseColor'],
 'en02.c':['bhEne02_SetSandEffect','bhEne02_SetSandEffectEV','bhEne02_SetSandEffectMain','bhEne02_SetSandSpr','bhEne02_SetSandParticle'],
 'zonzon.c':['bhEne_SetBlood2','bhEne_SetBlood4','bhEne_SetBlood3','bhDGCdirCheck2'],
@@ -45,6 +45,8 @@ def main(dest):
             if name in ('bhSetEffParticle','bhSetEffParticleMk2'):
                 fn=fn.replace('O_WRK* oP;', 'O_WRK* oP = NULL;')
                 fn=fn.replace('{','{\n    if (typ_no < 0 || typ_no >= 19) recvxGameBootUnsupported("particle type out of range");',1)
+            if name=='bhEff026':
+                fn=fn.replace('POINT pnt;', 'POINT pnt = {0};').replace('(int)(128.0f * njSin(op->ct0)) << 24','(unsigned int)(128.0f * njSin(op->ct0)) << 24')
             if name=='bhEff002':
                 tables=re.findall(r'static UV_WORK (uvinfo_\w+)\[(\d+)\]',fn)
                 check='size_t uv_count=0;\n'+''.join('if(op->exp0==(unsigned char *)'+table+')uv_count='+count+';\n' for table,count in tables)

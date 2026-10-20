@@ -7,8 +7,17 @@
 #pragma GCC diagnostic ignored "-Wunused-function"
 #include "psp/game_boot.h"
 #include "ps2/veronica/prog/door.h"
+#include "ps2/veronica/prog/main.h"
+#include "ps2/veronica/prog/room.h"
 
 extern _door_wrk DoorWrk;
+static SYS_WORK state;
+SYS_WORK *sys=&state;
+static unsigned int screen_color;
+static float screen_frames;
+static int screen_calls,cut_calls;
+void bhSetScreenFade(unsigned int color,float frames){screen_color=color;screen_frames=frames;++screen_calls;}
+void bhCheckCut(int force){assert(force==1);++cut_calls;}
 static NJS_CNK_OBJECT model;
 static NJS_TEXLIST textures;
 static char order[64];
@@ -60,6 +69,40 @@ static void reset(void)
     pushes=pops=draws=texture_sets=fade_draws=rotation_count=0;
     audio_fault=NULL; audio_error=0; fault=NULL;
 }
+static void door_start(void)
+{
+    for(int timer=0;timer<2;++timer){
+        reset();memset(&state,0,sizeof(state));sys=&state;
+        state.ddmd=0;state.door.flg=0x1234;state.door.stg_no=2;state.door.rom_no=17;
+        state.door.pos_no=3;state.door.dor_tp=255;
+        state.door.mode0=state.door.mode1=state.door.mode2=state.door.mode3=7;
+        state.door.ct0=1;state.door.ct1=2;state.door.ct2=3;state.door.ct3=4;
+        state.ts_flg=0x40000800;state.sp_flg=0x90000400u|(timer?0x200:0);
+        state.cb_flg=0x1001;state.pad_on=state.pad_ps=~0u;state.ef_ct=70;state.ef_ctb=48;state.error=99;
+        state.mn_mode0=state.mn_mode1=state.mn_mode2=state.mn_mode3=7;
+        screen_calls=cut_calls=0;
+        bhStartDoorDemo();
+        assert(screen_calls==1&&screen_color==0xff000000u&&screen_frames==10&&command_count==1&&commands[0]==2);
+        assert(!state.door.mode0&&!state.door.mode1&&!state.door.mode2&&!state.door.mode3);
+        assert(!state.door.ct0&&!state.door.ct1&&!state.door.ct2&&!state.door.ct3);
+        assert(state.door.flg==0x1234&&state.door.dor_tp==255&&state.stg_no==2&&state.rom_no==17&&state.pos_no==3);
+        assert(state.ts_flg==0x40100000&&state.sp_flg==(unsigned int)(timer?0x248:0x48));
+        assert(!state.pad_on&&!state.pad_ps&&state.ef_ct==48&&!state.error&&state.cb_flg==0x1001);
+        assert(state.mn_mode0==2&&!state.mn_mode1&&!state.mn_mode2&&!state.mn_mode3&&state.ddmd==1);
+        SYS_WORK waiting=state;
+        for(int frame=0;frame<5;++frame)bhStartDoorDemo();
+        assert(!memcmp(&state,&waiting,sizeof(state))&&screen_calls==1&&command_count==1&&!cut_calls);
+        state.ts_flg|=0x800;state.fade_pbk=0xff112233;
+        bhStartDoorDemo();
+        assert(screen_calls==2&&!screen_color&&screen_frames==5&&cut_calls==1&&command_count==1);
+        assert(!state.fade_pbk&&state.cb_flg==0x1000&&state.sp_flg==~0u&&state.ddmd==1);
+    }
+    state.ddmd=-1;REJECT(bhStartDoorDemo(),"door start state");
+    state.ddmd=2;REJECT(bhStartDoorDemo(),"door start state");
+    sys=NULL;REJECT(bhStartDoorDemo(),"door start state");sys=&state;
+    puts("PASS: original door entry fade/sound, destination and controller reset, timer retention, unchanged wait frames, completion fade/cut and invalid entry states");
+}
+
 int main(void)
 {
     for(int speed=0;speed<3;++speed) {
@@ -100,6 +143,7 @@ int main(void)
     REJECT(bhControlDoor(),"fade rate");
     reset(); DoorWrk.status=0x10000; audio_fault="door bank unavailable"; REJECT(bhControlDoor(),"bank unavailable");
     reset(); DoorWrk.status=0x10000; audio_error=-1; REJECT(bhControlDoor(),"native door sound");
+    door_start();
     puts("PASS: original door callback order and speed, pause/completion, sound priority and schedule consumption, view/model/fade submission, wrapped light timing and malformed state");
     return 0;
 }

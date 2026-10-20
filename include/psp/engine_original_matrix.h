@@ -15,6 +15,7 @@ Bool njPopMatrixEx(void);
 void njUnitMatrix(NJS_MATRIX *matrix);
 void njSetMatrix(NJS_MATRIX *destination, NJS_MATRIX *source);
 void njGetMatrix(NJS_MATRIX *destination);
+void njMirror(NJS_MATRIX *matrix, NJS_PLANE *plane);
 void njMultiMatrix(NJS_MATRIX *destination, NJS_MATRIX *source);
 void njTranslate(NJS_MATRIX *matrix, Float x, Float y, Float z);
 void njTranslateV(NJS_MATRIX *matrix, NJS_VECTOR *offset);

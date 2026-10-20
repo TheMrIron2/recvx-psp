@@ -273,7 +273,10 @@ void SendSoundCommand(unsigned int command)
         break;
     case 2: RequestAllStopSoundEx(1, 1, 12); break;
     case 3: init_script = 1; for (int i = 3; i < 8; ++i) recvxAudioStopMidi(i); break;
-    case 4: break;
+    /* Retail command 0 has a null callback; 4 and 5..9 dispatch to empty
+       Com_FinishInitScript / Com_ExecCallBgm_And_BgSe bodies. Door timing
+       legitimately consumes these commands as it crosses animation states. */
+    case 0: case 4: case 5: case 6: case 7: case 8: case 9: break;
     default: recvxGameBootUnsupported("unsupported original sound command");
     }
     check();

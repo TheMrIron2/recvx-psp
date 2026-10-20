@@ -96,6 +96,20 @@ int main(void)
                      "matrix underflow leaves current matrix unchanged");
     checks += 3;
 
+    recvxEngineOriginalMatrixReset();recvxEngineOriginalFaultReset();
+    NJS_PLANE mirror={0,2,0,0,4,0}; /* Non-unit normal, horizontal plane y=2. */
+    njUnitMatrix(&matrix);njMirror(&matrix,&mirror);
+    point=(NJS_POINT3){1,5,3};njCalcPoint(&matrix,&point,&result);
+    passed &= expect(near(result.x,1)&&near(result.y,-1)&&near(result.z,3),"offset non-unit reflection plane");
+    njMirror(&matrix,&mirror);njCalcPoint(&matrix,&point,&result);
+    passed &= expect(near(result.y,5),"double reflection restores input");
+    mirror=(NJS_PLANE){0,0,0,1,1,0};njUnitMatrix(NULL);njMirror(NULL,&mirror);
+    point=(NJS_POINT3){3,1,2};njCalcPoint(NULL,&point,&result);
+    passed &= expect(near(result.x,-1)&&near(result.y,-3)&&near(result.z,2),"oblique plane through origin");
+    mirror.vx=mirror.vy=mirror.vz=0;njMirror(NULL,&mirror);
+    passed &= expect(recvxEngineOriginalFault()!=NULL,"zero mirror normal rejected");
+    checks+=4;
+
     printf("Original CPU matrix checks: %d\n%s\n", checks,
            passed ? "TEST PASSED" : "TEST FAILED");
     return passed ? EXIT_SUCCESS : EXIT_FAILURE;

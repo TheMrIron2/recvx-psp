@@ -20,6 +20,8 @@ typedef struct RecvxBootTexture {
     unsigned char *pixels;
     uint32_t palette[256] __attribute__((aligned(16)));
     unsigned int width, height, tile_width, tile_count;
+    unsigned int rgba8888; /* Linear GE framebuffer capture; otherwise indexed/swizzled. */
+    float capture_scale_u, capture_scale_v;
     size_t source_size;
 } RecvxBootTexture;
 int recvxBootTextureDecode(const void *data, size_t size,

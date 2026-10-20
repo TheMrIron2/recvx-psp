@@ -1,4 +1,12 @@
 #include "ps2/veronica/prog/MdlPut.h"
+#define PT_WORK RecvxDoorParameterRecord
+#include "ps2/veronica/prog/door.h"
+#undef PT_WORK
+#include "ps2/veronica/prog/en71.h"
+#include "ps2/veronica/prog/flag.h"
+#include "psp/game_boot_game_remaining.h"
+#include "ps2/veronica/prog/weapon.h"
+#include "ps2/veronica/prog/ps2_NinjaCnk.h"
 #define _GNU_SOURCE
 #define u_long recvx_host_u_long
 #include <assert.h>
@@ -68,6 +76,13 @@ static const char *capture_path;
 static int loading_captured;
 uint64_t recvxPlatformTimeUs(void) { return presentations * 33333u; }
 void recvxPlatformFlushCaches(void) { }
+static unsigned int scene_captures;
+void recvxGameBootCaptureCopy(unsigned char *pixels)
+{
+    /* Native fixture models the GE transfer contract; raster output is tested
+       by the production GU adapter's command mocks. */
+    memset(pixels,0x7f,512u*512u*4u);++scene_captures;
+}
 
 static unsigned int sample(const RecvxBootTexture *t, float u, float v)
 {
@@ -431,6 +446,12 @@ static void weapon_fixture_task(void)
         assert(plp->mnwP[101].md2P == (void *)0x1234); /* Original holes preserve old slots. */
         assert(plp->mnwP[102].frm_num == weapon_fixture_motion->frame_count);
     }
+    /* This fixture has loaded weapon motion 100, unlike the unarmed opening.
+       Exercise the actual attack dispatcher using the relocated motion. */
+    swork.pip=sys->itm; sys->itm[0]=2; sys->itm[2]=0x2000c;
+    plp->mode2=64; plp->mode3=0;
+    bhCPM1_act_atk();
+    assert(plp->mode3==1 && plp->mtn_no==100 && (plp->stflg&0x10000));
 }
 
 static void write_fixture(const char *path, const void *data, size_t size)
@@ -1068,9 +1089,17 @@ static void test_checkpoint(const char *directory, void *arena, size_t arena_siz
 }
 
 extern void (*bhCtrPly_mode0[9])(void);
-/* Isolate controller routing/history from the action state machine's own fixtures. */
-static void player_action_dispatch_probe(void)
-{ recvxGameBootUnsupported("bhCPM0_action"); }
+/* Isolate controller routing/history; real action behavior is tested below. */
+#define PLAYER_DISPATCH_PROBE(name) static void probe_##name(void) { recvxGameBootUnsupported(#name); }
+PLAYER_DISPATCH_PROBE(bhCPM0_action)
+PLAYER_DISPATCH_PROBE(bhCPM0_damage)
+PLAYER_DISPATCH_PROBE(bhCPM0_die)
+PLAYER_DISPATCH_PROBE(bhCPM0_nage)
+PLAYER_DISPATCH_PROBE(bhCPM0_enedam)
+PLAYER_DISPATCH_PROBE(bhCPM0_enedie)
+PLAYER_DISPATCH_PROBE(bhCPM0_event)
+PLAYER_DISPATCH_PROBE(bhCPM0_nothing)
+#undef PLAYER_DISPATCH_PROBE
 static int player_control_case;
 static void player_control_task(void)
 {
@@ -1113,11 +1142,15 @@ static void player_control_task(void)
 static void test_player_control(const char *directory, void *arena, size_t arena_size)
 {
     RecvxLiveTaskProc original_init = bhSysTaskJumpTab[0];
-    void (*original_action)(void) = bhCtrPly_mode0[1];
+    void (*original_callbacks[9])(void);
+    memcpy(original_callbacks, bhCtrPly_mode0, sizeof(original_callbacks));
+    void (*probes[9])(void) = {NULL, probe_bhCPM0_action, probe_bhCPM0_damage,
+        probe_bhCPM0_die, probe_bhCPM0_nage, probe_bhCPM0_enedam, probe_bhCPM0_enedie,
+        probe_bhCPM0_event, probe_bhCPM0_nothing};
     RecvxInputState input = {.analog_x = 128, .analog_y = 128};
     const char *callbacks[] = {NULL, "bhCPM0_action", "bhCPM0_damage", "bhCPM0_die",
         "bhCPM0_nage", "bhCPM0_enedam", "bhCPM0_enedie", "bhCPM0_event", "bhCPM0_nothing"};
-    bhCtrPly_mode0[1] = player_action_dispatch_probe;
+    for (unsigned int i=1;i<9;++i) bhCtrPly_mode0[i] = probes[i];
     bhSysTaskJumpTab[0] = player_control_task;
     for (player_control_case = 0; player_control_case < 18; ++player_control_case) {
         const char *expected;
@@ -1132,7 +1165,7 @@ static void test_player_control(const char *directory, void *arena, size_t arena
             player_control_case == 14 ? "invalid player turn timer" :
             player_control_case == 16 ? "bhCPM0_die" : "bhCPM0_action";
         assert(strcmp(recvxGameBootFault(), expected) == 0);
-        if (player_control_case == 17) bhCtrPly_mode0[1] = player_action_dispatch_probe;
+        if (player_control_case == 17) for (unsigned int i=1;i<9;++i) bhCtrPly_mode0[i] = probes[i];
         if (player_control_case == 0 || player_control_case == 15) {
             EXP_WORK *extra = (EXP_WORK *)plp->exp0;
             assert(plp->pxb == 1 && plp->pyb == 2 && plp->pzb == 3 && plp->ayb == 123);
@@ -1148,7 +1181,7 @@ static void test_player_control(const char *directory, void *arena, size_t arena
         assert(recvxGameBootTick(&input) == -1);
         assert(strcmp(recvxGameBootFault(), callbacks[player_control_case - 20]) == 0);
     }
-    bhCtrPly_mode0[1] = original_action;
+    memcpy(bhCtrPly_mode0, original_callbacks, sizeof(original_callbacks));
     bhSysTaskJumpTab[0] = original_init;
     puts("PASS: original player update history, poison/death transitions, full mode dispatch, inactive/hidden state and bounded work/callback faults");
 }
@@ -1417,6 +1450,16 @@ static void test_loaded_player_interactions(void)
     bhCheckExmAtari(plp);
     assert((sys->cb_flg&0x101)==0x101&&(plp->stflg&0x80000000u)&&
         sys->door.stg_no==2&&sys->door.rom_no==7&&sys->door.pos_no==3&&sys->door.dor_tp==9);
+    sys->ddmd=0;sys->sp_flg=0x201;sys->ts_flg|=0x800;
+    sys->pad_ps=sys->pad_on=0x200;
+    bhStartDoorDemo();
+    assert(sys->ddmd==1&&sys->mn_mode0==2&&!sys->mn_mode1&&!sys->mn_mode2&&!sys->mn_mode3);
+    assert(sys->stg_no==2&&sys->rom_no==7&&sys->pos_no==3&&sys->door.dor_tp==9);
+    assert((sys->ts_flg&0x100800u)==0x100000u&&sys->sp_flg==0x248&&!sys->pad_ps&&!sys->pad_on);
+    assert(sys->fade_ap==255&&sys->fade_hkn==11&&sys->ef_ct==sys->ef_ctb&&!sys->error);
+    assert(!recvxAudioFault()&&!recvxAudioNativeError());
+    SYS_WORK *waiting=malloc(sizeof(*sys));assert(waiting);*waiting=*sys;
+    bhStartDoorDemo();assert(!memcmp(sys,waiting,sizeof(*sys)));free(waiting);
     *plp=player;sys->cb_flg=0;sys->st_flg&=~0x80u;
     record->type=3;record->attr=1;record->prm0=0;record->prm2=0;
     sys->pad_ps=0x200;
@@ -1429,7 +1472,225 @@ static void test_loaded_player_interactions(void)
     assert(sys->sb_id==34&&(sys->cb_flg&0x10));
     sys->itwp[0]=item;*plp=player;*sys=*saved;free(saved);
     rom->etcp=old_records;rom->etc_n=old_count;
-    puts("PASS: real loaded Claire expression/work and arena interaction records start door, examine and item transitions through original bhCheckExmAtari");
+    puts("PASS: real loaded Claire interactions and door-start handoff use original destination, native sound/fade, timer retention and unchanged waiting state");
+}
+
+/* Exercise the retail controllers against the real relocated player resources. */
+static void test_loaded_player_remaining(void)
+{
+    SYS_WORK *saved=malloc(sizeof(*sys)); assert(saved); *saved=*sys;
+    BH_PWORK player=*plp;
+    EXP_WORK expression=*(EXP_WORK *)plp->exp0;
+    unsigned char head[124]; memcpy(head,plp->exp1,sizeof(head));
+    CAM_WORK camera=cam;
+    O_WRK *effects=malloc(sizeof(eff)); assert(effects); memcpy(effects,eff,sizeof(eff));
+    unsigned int *old_inventory=swork.pip;
+    ATR_WORK *target=(ATR_WORK *)(((uintptr_t)sys->memp+3u)&~(uintptr_t)3u);
+    assert((unsigned char *)(target+1)<sys->endp);
+    memset(target,0,sizeof(*target)); target->flg=1; target->prm2=8;
+#define RESET_PLAYER() do { *sys=*saved; *plp=player; *(EXP_WORK *)plp->exp0=expression; \
+    memcpy(plp->exp1,head,sizeof(head)); cam=camera; plp->mode1=plp->mode2=plp->mode3=0; \
+    plp->flg&=~0x400000u; plp->frm_no=0; sys->pad_on=sys->pad_ps=0; } while(0)
+    for (int direction=0;direction<2;++direction) for (int level=0;level<4;++level) {
+        RESET_PLAYER(); plp->mode1=direction; plp->mode2=level;
+        bhCPM0_damage();
+        assert(plp->mode3==1 && plp->mtn_no==(unsigned int)(71+direction+level*2));
+        assert(plp->stflg&0x10000u);
+        plp->flg|=0x400000; bhCPM0_damage();
+        assert(plp->mode0==1 && !plp->mode1 && !plp->mode2 && !plp->mode3);
+        assert(!(plp->stflg&0x10000u));
+    }
+    for(int direction=0;direction<2;++direction) {
+        RESET_PLAYER(); plp->mode1=direction;
+        bhCPM0_die(); assert(plp->mode3==1 && plp->mtn_no==(unsigned int)(25+2*direction));
+        bhCPM0_die(); assert(plp->mode3==2 && plp->mtn_no==(unsigned int)(26+2*direction));
+    }
+    void (*enemy_modes[])(void)={bhCPM0_nage,bhCPM0_enedam,bhCPM0_enedie};
+    for(unsigned int i=0;i<3;++i) {
+        RESET_PLAYER(); *(int *)plp->exp1=4;
+        sys->gm_flg|=0x40; sys->st_flg|=0x800000;
+        enemy_modes[i]();
+        EXP_WORK *e=(EXP_WORK *)plp->exp0;
+        assert(e->spx==plp->px && e->spz==plp->pz && !e->arp);
+        assert((*(int *)plp->exp1&0x1e4)==0x1e0 && (sys->st_flg&4));
+        assert(!(sys->gm_flg&0x40) && (sys->gm_flg&0x800) && (sys->pt_flg&1));
+    }
+    for(unsigned int action=0;action<10;++action) {
+        RESET_PLAYER(); plp->mode2=action;
+        plp->mode1=action==5?0:1;
+        if(action==8) plp->mode1=42;
+        if(action==6 || action==7) plp->wpnr_no=0;
+        bhCPM0_event();
+        assert(plp->mode3>0 && plp->mtn_no<512 && !recvxGameBootFault());
+    }
+    void (*traversal[])(void)={bhCPM2_act_kdu,bhCPM2_act_kdd,bhCPM2_act_dnu,
+        bhCPM2_act_dnd,bhCPM2_act_psh,bhCPM2_act_hsu,bhCPM2_act_hsd,bhCPM2_act_rpsh};
+    for(unsigned int i=0;i<sizeof(traversal)/sizeof(traversal[0]);++i) {
+        RESET_PLAYER(); sys->pl_htp=target;
+        traversal[i](); assert(plp->mode3==1 || plp->mode3==2);
+        plp->ay=plp->ayp; traversal[i](); assert(plp->mode3==3);
+        traversal[i](); assert(plp->mode3>=4);
+        if (i==5 || i==6) {
+            traversal[i](); assert(plp->mode3==5);
+            plp->flg|=0x400000; plp->ct0=1; plp->frm_no=0;
+            traversal[i](); assert(plp->mode3==6);
+            plp->frm_no=0; traversal[i]();
+            assert(plp->mode0==1 && !plp->mode1 && !plp->mode2 && !plp->mode3);
+        }
+    }
+    RESET_PLAYER(); bhCPM2_act_cro(); assert(plp->mtn_no==45 && plp->mode3==1);
+    plp->flg|=0x400000; bhCPM2_act_cro();
+    assert(!plp->mtn_add && !(sys->st_flg&4) && (sys->cb_flg&0x10));
+    RESET_PLAYER(); sys->ewk_n=0;
+    GA_WORK knife={0}; knife.wpn_no=0; knife.px=knife.gx=100000;
+    knife.py=knife.gy=100000; knife.pz=knife.gz=100000; knife.vz=1; knife.r=0.1f;
+    bhCheckKnifeAtari(&knife); assert(!recvxGameBootFault());
+    /* A real capsule hit must choose a joint, apply knife damage once, and
+       play its hit sound through the actual compressed weapon bank. */
+    RequestArmsSoundBank(0); recvxGameBootSoundTick();
+    BH_PWORK original_enemy=ene[0]; ene[0]=player;
+    ene[0].mlwP=ene[0].mdl; ene[0].id=1; ene[0].flg=0x21; ene[0].stflg=0;
+    memset(ene[0].dam,0,sizeof(ene[0].dam)); ene[0].comb_flg=0;
+    ene[0].watr=(NJS_CAPSULE){{100000,99999,100001},{100000,100001,100001},1};
+    sys->ewk_n=1; sys->st_flg&=~0x40u;
+    knife.wpn_no=2; knife.gz=100002; knife.r=1;
+    bhCheckKnifeAtari(&knife);
+    int joint=ene[0].djnt_no;
+    assert((ene[0].flg&4) && joint>0 && joint<22 && ene[0].dam[joint]==10);
+    assert((ene[0].comb_flg&0x10) && !recvxAudioFault() && !recvxAudioNativeError());
+    bhCheckKnifeAtari(&knife); assert(ene[0].dam[joint]==10);
+    ene[0]=original_enemy;
+    RESET_PLAYER();
+    char route[]={0,1,-1}; NJS_POINT3 before={plp->px,plp->py,plp->pz},offset;
+    bhCalcFixOffset(plp,route,NULL,&offset); bhFixPositionXYZ(plp,route);
+    assert(fabsf(plp->px-(before.x-offset.x))<0.0001f);
+    assert(fabsf(plp->py-(before.y-offset.y))<0.0001f);
+    assert(fabsf(plp->pz-(before.z-offset.z))<0.0001f);
+    RESET_PLAYER();
+    bhSetWaterSplash(plp,17,0,1,1,1);
+    NJS_POINT3 splash={1,2,3}; bhSetWaterSplash3(&splash,1234,0,1,2,3);
+    assert(sys->ef.id==11 && sys->ef.type==0 && sys->ef.py==2 && sys->ef.sy==2);
+    assert(sys->ef.ay==1234-16384);
+    RESET_PLAYER(); cam.mode0=0; cam.ct0=rom->cutp[cam.ncut].cam[cam.camver].spd;
+    bhControlPlEyeCamera(0x4000); assert(cam.mode0==1 && cam.pers==11832);
+    assert(cam.px==plp->mlwP->owP[5].mtx[12]);
+    bhControlPlEyeCamera(0x4000); assert(cam.mode0==1);
+    bhControlPlEyeCamera(0); assert(cam.mode0==2 && !cam.ct0);
+    cam.ct0=rom->cutp[cam.ncut].cam[cam.camver].spd;
+    bhControlPlEyeCamera(0); assert(!(cam.flg&4));
+    CAM_WORK monitor=cam; bhControlMonitorCamera(); assert(!memcmp(&cam,&monitor,sizeof(cam)));
+    extern void *vpDummy;
+    NJS_MODEL dummy={0}; njDrawModel(&dummy); assert(vpDummy==&dummy); njDrawModel(NULL); assert(!vpDummy);
+    *sys=*saved; *plp=player; *(EXP_WORK *)plp->exp0=expression;
+    memcpy(plp->exp1,head,sizeof(head)); cam=camera; swork.pip=old_inventory;
+    memcpy(eff,effects,sizeof(eff)); free(effects); free(saved);
+#undef RESET_PLAYER
+    puts("PASS: real loaded damage/death, enemy-controlled states, ten scripted movement routes, eight traversal routes and both ladder exits, crouch, knife miss/hit/damage/sound, XYZ fix, water splashes and eye-camera handoffs");
+}
+
+
+static void test_remaining_game_services(void)
+{
+    SYS_WORK *saved=malloc(sizeof(*sys));assert(saved);*saved=*sys;
+    O_WRK *effects=malloc(sizeof(eff));assert(effects);memcpy(effects,eff,sizeof(eff));
+    BH_PWORK player=*plp,enemy=ene[127];CAM_WORK camera=cam;
+    NJS_CNK_OBJECT *objects=malloc(rom->mdl.obj_num*sizeof(*objects));assert(objects);
+    memcpy(objects,rom->mdl.objP,rom->mdl.obj_num*sizeof(*objects));
+    LGT_WORK *lights=malloc(rom->lgt_n*sizeof(*lights));assert(lights);
+    memcpy(lights,rom->lgtp,rom->lgt_n*sizeof(*lights));
+    /* Texture push/pop preserves RAM surfaces while restoring selection and
+       palette state across the original display-mode transition. */
+    njSetTexture(rom->mdl.texP);njSetTextureNum(0);
+    const RecvxBootTexture *original=recvxGameBootTextureGet(rom->mdl.texP,0);
+    uint32_t digest=texture_digest(original),palette=palbuf[0];
+    bhPushAllTexture();palbuf[0]^=0xffffffffu;njSetTextureNum(1);bhPopAllTexture();
+    assert(palbuf[0]==palette&&texture_digest(original)==digest);
+    memset(eff,0,sizeof(eff));
+    sys->evt_tim=0;sys->sp_flg=0x200;sys->gm_flg=0x20000000;
+    sys->ts_flg=0x15e00;sys->st_flg=0x200;sys->cb_flg=0;
+    sys->ev_flg[2]=0;bhStFlg(sys->ev_flg,69);
+    bhCheckEvtTimer();assert(plp->hp==-1&&(sys->cb_flg&0x2000));
+    assert(!bhCkFlg(sys->ev_flg,69));
+    O_WRK *expiry=NULL;
+    for(unsigned int i=0;i<512;++i)if((eff[i].flg&1)&&eff[i].id==26){expiry=&eff[i];break;}
+    assert(expiry);
+    for(int frame=0;frame<32;++frame){sys->ef_trs2dn=0;bhEff026(expiry);}
+    assert(!expiry->flg);
+    sys->ts_flg=0x15e00;sys->sp_flg=0x200;sys->cb_flg=0;bhStFlg(sys->ev_flg,67);
+    bhCheckEvtTimer();assert(sys->sp_flg==0x20&&(sys->gm_flg&0x400)&&!(sys->ts_flg&0x4000));
+    *sys=*saved;*plp=player;cam=camera;memset(eff,0,sizeof(eff));
+    plp->flg&=~4u;bhInitPlEyeCamera();
+    assert(cam.pers==11832&&(sys->gm_flg&0xe0)==0xe0&&!(sys->st_flg&1));
+    sys->st_flg|=0x800000;plp->wax=1024;cam.ppers=10000;
+    bhSetPlEyeCamera();assert(cam.ax==-1024&&cam.ay==-plp->ay&&cam.pers==11468);
+    bhSetEventFixedCut(0,0);
+    assert(cam.evc_no==0&&!cam.keyf_no&&(cam.flg&2)&&cam.pers==rom->evcp[0].keyf[0].pers);
+    *sys=*saved;*plp=player;cam=camera;
+    NJS_TEXNAME scope_names[3];for(int i=0;i<3;++i)scope_names[i]=rom->mdl.texP->textures[0];
+    NJS_TEXLIST scope_list={scope_names,3};ML_WORK *weapon_model=sys->obwp->mlwP;
+    NJS_TEXLIST *weapon_textures=weapon_model->texP;weapon_model->texP=&scope_list;
+    cam.flg&=~2u;cam.pers=11832;sys->obwp->type=13;
+    bhDrawScope();size_t overlays;recvxGameBootDraws(&overlays);assert(overlays>=17);
+    weapon_model->texP=weapon_textures;Ps2ClearOT();
+    *sys=*saved;*plp=player;cam=camera;sys->ewk_n=0;sys->en_objn=0;
+    ene[127]=player;BH_PWORK *ant=&ene[127];ant->id=71;ant->type=0;ant->flg=1;ant->stflg=0;
+    ant->mode0=ant->mode1=ant->mode2=ant->mode3=0;ant->exp0=NULL;
+    O_WORK *poses=bhGetFreeMemory(4*player.mdl[0].obj_num*sizeof(O_WORK),64);
+    for(int i=0;i<4;++i){ant->mdl[i]=player.mdl[0];ant->mdl[i].owP=poses+i*player.mdl[0].obj_num;}
+    ant->mlwP=ant->mdl;ant->mnwP=ant->mnwPb=player.mnwPb;
+    for(unsigned int frame=0;frame<13;++frame){
+        bhEne71(ant);
+        assert(ant->mode0==1&&ant->mode2==(frame+1)%3&&ant->mode3==((frame+1)/3)%4);
+        assert(ant->mlwP==&ant->mdl[ant->mode3]&&ant->exp0);
+    }
+    ene[127]=enemy;*sys=*saved;*plp=player;cam=camera;
+    sys->pt_flg=0x20;sys->gm_flg=0x80;sys->ewk_n=0;sys->en_objn=0;
+    bhEtcMirrorDrawModel();assert(!recvxGameBootFault());Ps2ClearOT();
+    /* Use owned real TIM2 sources to initialize both reserved capture IDs. */
+    NJS_TEXNAME monitor_name={0};NJS_TEXLIST monitor_list={&monitor_name,1};
+    sys->ren_tlist=(NJS_TEXLIST){sys->ren_tex,1};
+    recvxGameBootTextureInstall(&sys->ren_tlist,0,original->source,original->source_size,0,1,0,0);
+    recvxGameBootTextureInstall(&monitor_list,0,original->source,original->source_size,0,2,0,0);
+    for(int y=0;y<16;++y)for(int x=0;x<16;++x)
+        sys->rpb[y*16+x]=(NJS_TEXTUREH_VTX){.x=x*(640.0f/15),.y=y*(480.0f/15),.z=0.83f,
+            .u=x/15.0f,.v=y/15.0f*(480.0f/512),.bcol=0xffffffffu};
+    unsigned int before=scene_captures;
+    bhDrawFullScreenRenderTexture();assert(scene_captures==before+1);
+    const RecvxBootTexture *captured=recvxGameBootTextureGet(&sys->ren_tlist,0);
+    assert(captured->rgba8888&&captured->width==512&&captured->pixels[0]==0x7f);
+    assert(recvxGameBootRenderFrame()->vertex_count>=1350);Ps2ClearOT();
+    NJS_MATRIX inverse;njSetMatrix(&inverse,cam.mtx);assert(njInvertMatrix(&inverse));
+    NJS_POINT3 view_point={0,0,50};njCalcPoint(&inverse,&view_point,(NJS_POINT3 *)&eff[0].px);
+    eff[0].type=0;eff[0].stflg=0;sys->ren_idx[0]=0;
+    extern unsigned int Ps2_rendertex_initflag;Ps2_rendertex_initflag=1;
+    CAM_WORK before_camera=cam;NJS_MATRIX before_matrix;njSetMatrix(&before_matrix,cam.mtx);
+    bhDrawSmallScreenRenderTexture();assert(scene_captures==before+2);
+    assert(!memcmp(&cam,&before_camera,sizeof(cam))&&!memcmp(cam.mtx,before_matrix,sizeof(before_matrix)));
+    assert(recvxGameBootTextureGet(&monitor_list,0)->rgba8888);Ps2ClearOT();
+    njReleaseTexture(&sys->ren_tlist);njReleaseTexture(&monitor_list);
+    *sys=*saved;*plp=player;cam=camera;sys->pt_flg=0;sys->ewk_n=0;sys->en_objn=0;
+    /* Read/setup every packaged door type, then finish one complete demo. */
+    extern _door_wrk DoorWrk;
+    for(unsigned int type=0;type<86;++type){
+        sys->door.dor_tp=type;sys->door.flg=0;bhInitDoor();
+        int code=bhReadDoorData();
+        /* MRY/125 is the retail zero-filled placeholder for door type 54. */
+        if(type==54){assert(code==-2);continue;}
+        assert(code==2);
+        recvxGameBootSoundTick();assert(bhReadDoorData()==1);
+        bhSetDoor();assert(DoorWrk.objP&&DoorWrk.dmo_mode==2);
+        int frames=0;
+        do{bhControlDoor();Ps2DrawOTag();Ps2ClearOT();++frames;}
+        while(type==0&&!(DoorWrk.status&0x40)&&frames<2048);
+        if(type==0)assert((DoorWrk.status&0x40)&&frames>1&&frames<2048);
+        bhExitDoor();
+    }
+    memcpy(rom->mdl.objP,objects,rom->mdl.obj_num*sizeof(*objects));
+    memcpy(rom->lgtp,lights,rom->lgt_n*sizeof(*lights));
+    *sys=*saved;*plp=player;cam=camera;ene[127]=enemy;memcpy(eff,effects,sizeof(eff));
+    njSetTexture(rom->mdl.texP);njSetTextureNum(0);
+    free(objects);free(lights);free(effects);free(saved);
+    puts("PASS: texture state push/pop, timer expiry/effect lifetime, eye/fixed cameras, scope, ant variants, mirror submission, full/monitor captures and restoration; 85 real door packages, retail empty-slot rejection and one complete door demo");
 }
 
 static void test_loaded_arm_ik(void)
@@ -1920,6 +2181,7 @@ static void test_loaded_camera_reset(void)
 
 int main(int argc, char **argv)
 {
+    setvbuf(stdout,NULL,_IONBF,0);
     size_t arena_size = 12u * 1024u * 1024u;
     void *arena = mmap((void *)0x20000000u, arena_size, PROT_READ | PROT_WRITE,
         MAP_PRIVATE | MAP_ANONYMOUS
@@ -2193,6 +2455,7 @@ int main(int argc, char **argv)
     test_loaded_player_restore();
     test_loaded_arm_ik();
     test_loaded_player_interactions();
+    test_loaded_player_remaining();
     test_loaded_inventory_transition();
     test_loaded_camera_reset();
     test_camera_pause_task();
@@ -2207,6 +2470,7 @@ int main(int argc, char **argv)
     test_frame_check_task();
     test_easy_sound_task();
     test_common_control_task();
+    test_remaining_game_services();
     /* Casing cleanup must cover the entire pool, preserve inactive entries,
        and leave unrelated live effects and actor data intact. */
     for (i = 0; i < 512; ++i) {

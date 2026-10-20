@@ -10,6 +10,7 @@
 #include <pspdisplay.h>
 #include <pspkernel.h>
 #include "psp/game_boot_render.h"
+#include "psp/game_boot_game_remaining.h"
 
 typedef struct { float u, v; unsigned int color; float x, y, z; } SpriteVertex;
 typedef struct {
@@ -28,6 +29,8 @@ typedef struct {
     SpriteVertex sprite[6];
 } Submission;
 
+static int capture_active, capture_copies, capture_invalidates;
+int recvxGameBootCaptureActive(void){return capture_active;}
 static const uint32_t *movie_pixels;
 static unsigned int texture_environment;
 static int texture_function;
@@ -69,6 +72,8 @@ static jmp_buf fault;
 static const char *fault_name;
 static int expecting_fault;
 
+void sceKernelDcacheWritebackInvalidateRange(const void *pointer,unsigned int size)
+{assert(pointer&&size==512u*512u*4u&&!list_active);++capture_invalidates;}
 const uint32_t *recvxGameBootMovieGetFrame(void) { return movie_pixels; }
 void recvxGameBootMovieFrameConsumed(void) { assert(synchronized && !list_active && sync_at > finish_at); }
 
@@ -99,6 +104,12 @@ int sceGuSync(int mode, int what)
 {
     assert(mode == 0 && what == 0 && finished && list_active);
     list_active = 0; synchronized = 1; sync_at = ++calls; return 0;
+}
+void sceGuCopyImage(int format,int sx,int sy,int width,int height,int stride,void *source,int dx,int dy,int dest_stride,void *destination)
+{
+    assert(list_active&&format==GU_PSM_8888&&!sx&&!sy&&width==480&&height==272&&stride==512);
+    assert((uintptr_t)source==0x04000000u+context_draw_address&&!dx&&!dy&&dest_stride==512&&destination);
+    ++capture_copies;++calls;
 }
 void *sceGuSwapBuffers(void)
 {
@@ -635,6 +646,17 @@ int main(void)
     shadow_protocol(); /* Offscreen switches must preserve the swapped scene target. */
     recvxGameBootDisplaySwap(); assert(swaps==2 && context_draw_address==0);
     shadow_protocol(); gradient_overlays(); movie_display(); empty_and_capacity();
+    reset_frame(); capture_active=1;
+    frame.vertex_count=3;frame.batch_count=1;
+    texture.rgba8888=1;texture.capture_scale_u=480.0f/512;texture.capture_scale_v=272.0f/480;
+    texture.width=texture.height=texture.tile_width=512;
+    batches[0]=(RecvxBootRenderBatch){.count=3,.texture=&texture};
+    recvxGameBootPresent();
+    assert(submissions[0].texture_format==GU_PSM_8888&&!submissions[0].texture_swizzle&&!clut_loads);
+    assert(submissions[0].texture_component==GU_TCC_RGB);
+    capture_active=0;recvxGameBootCaptureCopy((unsigned char *)movie_surface);
+    assert(capture_copies==1&&capture_invalidates==1&&synchronized);
+    reset_frame();recvxGameBootPresent();assert(clear_count==1);
     recvxGameBootDisplayShutdown(); assert(terminated);
     puts("PASS: actual GU adapter viewport/VRAM/depth state, perspective matrix, external ABGR geometry/lines, materials, indexed textures, native geometry depth fog and authored constant half-fog isolation, screen triangle gradients/depth, modifier add/subtract mask passes/composite/bounded clears, swap target restoration, overlays and consume-after-sync lifetime");
     return 0;

@@ -275,3 +275,22 @@ void njSetBackColor(Uint32 color1, Uint32 color2, Uint32 color3)
     (void)color3;
     original_background_color = color1;
 }
+
+PS2_PLANE c_plane[5] = {{{0,0,1,1},{0,0,2,1}}};
+void Ps2CalcScreenCone(void)
+{
+    const float corners[4][3]={{-320,-240,0},{320,-240,0},{320,240,0},{-320,240,0}};
+    float distance=_nj_screen_.dist;
+    if(!isfinite(distance)||distance<=0){recvxEngineOriginalFaultSet("invalid screen cone distance");return;}
+    for(int i=0;i<4;++i){
+        const float *a=corners[(i+1)%4],*b=corners[i];
+        float x=a[1]*distance-distance*b[1],y=distance*b[0]-a[0]*distance,z=a[0]*b[1]-a[1]*b[0];
+        float length=sqrtf(x*x+y*y+z*z);
+        c_plane[i+1]=(PS2_PLANE){{x/length,y/length,z/length,1},{0,0,-distance,1}};
+    }
+}
+void njSetScreenProjection(float distance)
+{
+    NJS_SCREEN screen=_nj_screen_;screen.dist=distance;
+    recvxEngineOriginalViewSetScreen(&screen);Ps2CalcScreenCone();
+}

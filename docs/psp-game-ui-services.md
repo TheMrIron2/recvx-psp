@@ -243,3 +243,85 @@ Validation passes 443 sanitized renderer checks, the typed GU adapter checks
 (including doubled/ordinary modulation on the same texture without alpha-state
 leakage), and the 1,201-frame native game regression. Visual parity of the newly
 unblocked scene still needs real PSP testing.
+
+`bhStartDoorDemo` now uses the original two-state entry/handoff routine. Entry
+starts the ten-frame black fade and native sound fade-out, resets door counters
+and controller bytes, preserves the event-timer enable bit, clears input,
+selects the destination and switches to main mode 2. While waiting it leaves
+state unchanged. The room-ready flag starts the five-frame fade-in, clears the
+door request, restores update flags and forces the camera cut. Invalid entry
+states stop before mutation.
+
+The sanitized door fixture checks both event-timer settings, all reset fields,
+destination preservation, repeated waiting frames, completion callbacks and
+invalid/null state. The native harness checks the entry/handoff using loaded
+Claire, real arena interaction records and real sound/fade services, and still
+passes 1,201 game frames. This completes the door-start handler; animation
+initialization/loading/setup/exit (`bhInitDoor`, `bhReadDoorData`, `bhSetDoor`,
+`bhExitDoor`) remain explicit boundaries.
+
+## Player damage, scripted movement, traversal and attacks
+
+The game build now extracts the requested retail player controllers and their
+immediate dispatch dependencies with `tools/extract_original_player_remaining.py`:
+
+- Damage/death, enemy-controlled damage/throw/death, parked animation and all ten
+  event dispatch slots (nine original `pl_smove` routines).
+- Stair ascent/descent, ledges, pushing, crouching and both ladder directions,
+  including their alignment, motion, floor and exit phases.
+- Attack dispatch, weapon ready/aim/release/fire/reload/knife, pitched weapon and
+  scope controllers, targeting searches, ammunition and gun/knife collision.
+- XYZ pose compensation, joint/position water splashes and player-eye camera
+  interpolation, tracking and return to the active camera.
+
+The new runtime checks reject invalid dispatch phases, weapon/player selectors,
+model joints, motion frame counts, room floors/camera cuts, inventory banks,
+enemy counts and capsule lists. Scoped weapon control uses `plp->at_flg` for the
+retail alias at offset `0x3ec`, avoiding a cast through an unrelated system struct.
+`bhControlMonitorCamera` retains the original empty body. `njDrawModel` retains
+its original `vpDummy = model` bookkeeping; game geometry continues through the
+existing chunk renderer. Neither routine implies a new basic-model renderer or
+monitor-camera implementation beyond the supplied original behavior.
+
+Damage testing also exposed an inclusive sound-bank ID boundary: Sony program,
+sample-set, sample, waveform and MIDI tables store the highest ID, not the number
+of entries. Native bank validation and lookup now include that final ID. Tests
+play all four real Claire voice programs, including `0x403`, and the room's last
+MIDI sequence (`0x271`) through the SAS call model. Compressed ADPCM remains on
+the native hardware path.
+
+Validation includes a sanitized five-frame parked-animation fixture and 32
+malformed-work cases, the original action/collision regressions, real relocated
+player/controller checks in the native 32-bit full-game regression, the native
+SAS adapter regression, and the PSP game build. Scene-specific motion banks and
+weapon motions must be loaded before their corresponding controllers run.
+Remaining effect callbacks and other named unported services still report their
+existing boundaries when reached. Real PSP hardware playback and traversal need
+a device run.
+
+The remaining door lifecycle now extracts the retail package reader, parameter
+selection, animation callbacks, lights, fades and vibration scheduling. Package
+checks cover the reserved buffer, section extents, model tree, callback selectors
+and the light records actually read (unused trailing lights may be omitted).
+Sound commands 0 and 4 through 9 retain the supplied retail table's empty
+callbacks. Mounting `COMMON.MLT` also installs its embedded sequence bank at bank
+1, as `sdMultiUnitDownload` does; door SPQs supply the instruments for those
+shared sequences. Native SAS tests exercise all four shared sequences with a
+matching door instrument bank and playback after replacing that bank.
+
+The game-service extraction adds the supplied ant enemy controller, event timer,
+fixed/player-eye cameras, scope overlays and reflected model submission.
+`njMirror` uses a scalar plane reflection and the chunk renderer reverses winding
+for reflected transforms. Full-screen and monitor captures synchronize a GE copy
+of the PSP framebuffer into linear RGBA textures; capture projection and UV scales
+account for the PSP's 480 by 272 output. Texture push/pop preserves the selected
+list, palette and filter across display transitions. The timer's effect 26 is
+included so its expiry path can run. These paths have host fixtures and PSP builds;
+rendering appearance and sound output still require a real device run.
+
+The native 32-bit regression passes setup and the first animation frame for all
+85 populated door packages, preserves the retail rejection of the empty door
+slot, and runs one complete door demo. It also passes the camera, scope, enemy,
+timer/effect, reflection, capture/restoration and texture-state fixtures. The
+sanitized package guard suite rejects 18 malformed cases. The sound dispatcher
+and production SAS adapter suites pass, as do the PSP build/runtime checks.

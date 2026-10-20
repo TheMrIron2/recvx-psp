@@ -4,6 +4,7 @@
 #include <pspdisplay.h>
 #include <pspkernel.h>
 #include "psp/game_boot.h"
+#include "psp/game_boot_game_remaining.h"
 #include "psp/game_boot_render.h"
 #include "psp/game_boot_movie.h"
 #include "psp/engine_original_view.h"
@@ -195,12 +196,13 @@ static void models(const RecvxBootRenderFrame *frame)
             }
             sceGuEnable(GU_TEXTURE_2D);
             if(bound_texture!=texture){
-                sceGuTexMode(GU_PSM_T8,0,0,1);
-                sceGuClutMode(GU_PSM_8888,0,255,0);sceGuClutLoad(32,texture->palette);
+                sceGuTexMode(texture->rgba8888?GU_PSM_8888:GU_PSM_T8,0,0,!texture->rgba8888);
+                if(!texture->rgba8888){sceGuClutMode(GU_PSM_8888,0,255,0);sceGuClutLoad(32,texture->palette);}
                 sceGuTexImage(0,texture->width,texture->height,texture->tile_width,texture->pixels);
                 sceGuTexFlush();bound_texture=texture;
             }
-            sceGuTexScale(1, 1); sceGuTexOffset(0, 0);
+            sceGuTexScale(texture->rgba8888?texture->capture_scale_u:1, texture->rgba8888?texture->capture_scale_v:1); sceGuTexOffset(0, 0);
+            if(texture->rgba8888)sceGuTexFunc(GU_TFX_MODULATE,GU_TCC_RGB);
             sceGuTexWrap(batch->sampler & 1 ? GU_CLAMP : GU_REPEAT, batch->sampler & 2 ? GU_CLAMP : GU_REPEAT);
             sceGuTexFilter(batch->sampler & 4 ? GU_LINEAR : GU_NEAREST, batch->sampler & 4 ? GU_LINEAR : GU_NEAREST);
         } else sceGuDisable(GU_TEXTURE_2D);
@@ -270,7 +272,7 @@ void recvxGameBootPresent(void)
     sceGuStart(GU_DIRECT, display_list);
     sceGuClearColor(frame->vertex_count ? abgr(recvxEngineOriginalViewBackgroundColor()) : 0xff000000);
     sceGuClearDepth(0);
-    if (!frame_drawn) sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+    if (!frame_drawn || recvxGameBootCaptureActive()) sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
     frame_drawn = 1;
     const uint32_t *video = recvxGameBootMovieGetFrame();
     if (video) movie_frame(video);
@@ -291,8 +293,10 @@ void recvxGameBootPresent(void)
             unsigned int tile;
             float u1 = q->u1 * t->width, u2 = q->u2 * t->width;
             float v1 = q->v1 * t->height, v2 = q->v2 * t->height;
-            sceGuEnable(GU_TEXTURE_2D); sceGuTexMode(GU_PSM_T8, 0, 0, 1);
-            sceGuClutMode(GU_PSM_8888, 0, 255, 0); sceGuClutLoad(32, t->palette);
+            sceGuEnable(GU_TEXTURE_2D); sceGuTexMode(t->rgba8888?GU_PSM_8888:GU_PSM_T8, 0, 0, !t->rgba8888);
+            sceGuTexFunc(GU_TFX_MODULATE,t->rgba8888?GU_TCC_RGB:GU_TCC_RGBA);
+            sceGuTexScale(t->rgba8888?t->capture_scale_u:1,t->rgba8888?t->capture_scale_v:1);
+            if(!t->rgba8888){sceGuClutMode(GU_PSM_8888, 0, 255, 0); sceGuClutLoad(32, t->palette);}
             sceGuTexFilter(d->filter ? GU_LINEAR : GU_NEAREST, d->filter ? GU_LINEAR : GU_NEAREST);
             if (d->color_gradient) {
                 if (t->tile_count != 1) recvxGameBootUnsupported("tiled rotated UI sprite is not ported");
@@ -326,3 +330,12 @@ void recvxGameBootPresent(void)
 void recvxGameBootDisplayBeginFrame(void) { frame_drawn = 0; }
 void recvxGameBootDisplaySwap(void) { scene_buffer = sceGuSwapBuffers(); recvxGameBootDisplayBeginFrame(); }
 void recvxGameBootDisplayShutdown(void) { sceGuTerm(); }
+
+void recvxGameBootCaptureCopy(unsigned char *pixels)
+{
+    sceKernelDcacheWritebackInvalidateRange(pixels,512u*512u*4u);
+    sceGuStart(GU_DIRECT,display_list);
+    sceGuCopyImage(GU_PSM_8888,0,0,480,272,512,(void *)(0x04000000u+(uintptr_t)scene_buffer),0,0,512,pixels);
+    sceGuTexSync();sceGuTexFlush();sceGuFinish();sceGuSync(0,0);
+    frame_drawn=0;
+}

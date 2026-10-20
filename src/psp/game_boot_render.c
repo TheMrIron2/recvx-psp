@@ -19,6 +19,7 @@
 
 #define MAX_VERTICES 262144u
 #define MAX_BATCHES 16384u
+extern int recvxGameBootCaptureActive(void) __attribute__((weak));
 extern void recvxGameBootDrawDiscard(void) __attribute__((weak));
 extern unsigned int ulCnkCurrentDrawMode;
 static RecvxBootRenderVertex *vertices;
@@ -138,10 +139,12 @@ static void capture_projection(void)
     if (!isfinite(distance) || !(distance > 0) || !(near > 0) || !(far > near))
         recvxGameBootUnsupported("invalid original 3D projection");
     memset(frame.projection, 0, sizeof(frame.projection));
-    frame.projection[0] = 2.0f * distance * ax / 640.0f;
-    frame.projection[5] = 2.0f * distance * ay / 480.0f;
-    frame.projection[8] = (2048.0f - fNaViwOffsetX) / 320.0f;
-    frame.projection[9] = (fNaViwOffsetY - 2048.0f) / 240.0f;
+    int capture=recvxGameBootCaptureActive&&recvxGameBootCaptureActive();
+    float width=capture?512.0f:640.0f,height=capture?_nj_screen_.h:480.0f;
+    frame.projection[0] = 2.0f * distance * ax / width;
+    frame.projection[5] = 2.0f * distance * ay / height;
+    frame.projection[8] = (1728.0f + width*0.5f - fNaViwOffsetX) * 2 / width;
+    frame.projection[9] = (fNaViwOffsetY - 1808.0f - height*0.5f) * 2 / height;
     frame.projection[10] = -(far + near) / (far - near);
     frame.projection[11] = -1;
     frame.projection[14] = -(2.0f * far * near) / (far - near);
@@ -336,7 +339,7 @@ static unsigned int draw_serial;
 typedef struct DrawContext {
     NJS_MATRIX matrix, normals;
     int sprite, textured, trans, half_fog;
-    int custom_clip;
+    int custom_clip, reversed;
     unsigned int draw,material_serial;
     RecvxGameChunkMaterial material;
     int material_valid,lights_prepared;
@@ -631,6 +634,7 @@ static int emit(void *user, const RecvxGameChunkMaterial *material, const RecvxG
         if (!isfinite(output[i].x) || !isfinite(output[i].y) || !isfinite(output[i].z))
             recvxGameBootUnsupported("non-finite original model transform");
     }
+    if(context->reversed){RecvxBootRenderVertex swap=output[1];output[1]=output[2];output[2]=swap;}
     unsigned int flags = sampler.clamp_u | (sampler.clamp_v << 1) | (!!sampler.filter << 2);
     if(specular_enabled(context,material,attributes))flags|=RECVX_RENDER_COLOR_DOUBLE;
     int source = context->sprite ? context->state->polygon_blend_source : context->state->control_flags & 0x8000u ? context->state->blend_source : material->blend_source;
@@ -693,6 +697,8 @@ int njCnkDrawModelLocal(NJS_CNK_MODEL *model)
         recvxGameBootUnsupported("invalid original chunk model bounds");
     njGetMatrix(&context.matrix); checked_math();
     context.state = recvxGameBootRenderStateGet(); context.lighting = recvxEngineOriginalLightingGet();
+    const float *m=context.matrix;
+    context.reversed=m[0]*(m[5]*m[10]-m[9]*m[6])-m[4]*(m[1]*m[10]-m[9]*m[2])+m[8]*(m[1]*m[6]-m[5]*m[2])<0;
     if ((context.state->control_flags & 0x100u) && isfinite(model->r) && model->r > 0) {
         NJS_POINT3 center; float near, far;
         njCalcPoint(&context.matrix, &model->center, &center); checked_math();

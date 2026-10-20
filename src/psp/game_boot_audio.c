@@ -102,11 +102,12 @@ void recvxAudioSoundControl(int is_midi,int slot,unsigned int flags,int volume,i
         recvxAudioNativeVolume((unsigned int)i,native_volume(&voices[i]),native_pan(&voices[i]));
     recvxAudioUnlock();
 }
+/* Sony section headers store the highest ID, so ID zero is one entry. */
 static unsigned int record(const Bank *b, unsigned int base, unsigned int index, unsigned int minimum)
 {
     const unsigned char *h = b->data + b->hd;
     unsigned int offset;
-    if (!span(b->hs, base, 16) || index >= le32(h + base + 12) ||
+    if (!span(b->hs, base, 16) || index > le32(h + base + 12) ||
         !span(b->hs, base + 16, (index + 1u) * 4u)) return 0;
     offset = le32(h + base + 16 + index * 4u);
     if (offset < 16 || !span(b->hs, base, offset) || !span(b->hs, base + offset, minimum)) return 0;
@@ -131,12 +132,12 @@ static int install_bank(int kind, unsigned int id, const unsigned char *data, si
         base = offsets[i];
         if (!span(b.hs, base, 16) || memcmp(h + base, names[i], 8)) return fail("invalid sound bank section");
         n = le32(h + base + 12);
-        if (n > 512 || !span(b.hs, base + 16, n * 4u)) return fail("sound bank table exceeds header");
-        for (j = 0; j < n; ++j) if (le32(h + base + 16 + j * 4u) != 0xffffffffu &&
+        if (n >= 512 || !span(b.hs, base + 16, (n + 1u) * 4u)) return fail("sound bank table exceeds header");
+        for (j = 0; j <= n; ++j) if (le32(h + base + 16 + j * 4u) != 0xffffffffu &&
             !record(&b, base, j, i == 0 ? 36 : i == 1 ? 4 : i == 2 ? 24 : 8))
             return fail("sound bank record exceeds header");
     }
-    for (i = 0; i < le32(h + b.vagi + 12); ++i) {
+    for (i = 0; i <= le32(h + b.vagi + 12); ++i) {
         base = record(&b, b.vagi, i, 8);
         if (!base) continue; /* Sparse Sony tables use 0xffffffff for vacant records. */
         if (le32(h + base) > b.bs || !le16(h + base + 4) || le16(h + base + 4) > 48000)
@@ -150,6 +151,23 @@ static int install_bank(int kind, unsigned int id, const unsigned char *data, si
         (uintptr_t)voices[i].data - (uintptr_t)banks[kind][id].data < banks[kind][id].size) stop(&voices[i]);
     free(banks[kind][id].data); banks[kind][id] = b; return 0;
 }
+static int install_sequences(unsigned int bank, const unsigned char *data, size_t length)
+{
+    unsigned char *copy;
+    if (bank >= BANKS || length < 48 || memcmp(data, "IECSsreV", 8) ||
+        memcmp(data + 16, "IECSuqeS", 8))
+        return fail("invalid Sony sequence bank");
+    copy = memalign(64, length);
+    if (!copy) return fail("sequence allocation failed");
+    memcpy(copy, data, length);
+    for (int i = 0; i < MIDI_SLOTS; ++i) if (midi[i].bank == (int)bank) {
+        midi[i].active = 0;
+        /* Sequence events point into this allocation until replacement. */
+        midi[i].data = NULL;
+    }
+    free(sequences[bank]); sequences[bank] = copy; sequence_sizes[bank] = length;
+    return 0;
+}
 static int mount(void)
 {
     unsigned char *data;
@@ -158,6 +176,15 @@ static int mount(void)
     data = read_asset("files/COMMON.MLT", &size);
     if (!data) return -1;
     if (install_bank(0, 0, data, size)) { free(data); return -1; }
+    /* Retail sdMultiUnitDownload installs COMMON's shot bank at zero and
+       its embedded sequence bank at one. Door SPQs replace only the
+       instruments; their four shared sequences remain resident here. */
+    if (size < 24 || !span(size, le32(data + 16), le32(data + 20))) {
+        free(data); return fail("invalid common sequence extent");
+    }
+    if (install_sequences(1, data + le32(data + 16), le32(data + 20))) {
+        free(data); return -1;
+    }
     free(data);
     data = read_asset("files/MULTSPQ1.IDX", &size);
     if (!data) return -1;
@@ -221,15 +248,7 @@ void recvxAudioService(void)
         if (type == 1 || type == 2) {
             if (install_bank(type == 1, bank, data + offset, length)) break;
         } else if (type == 0) {
-            unsigned char *copy;
-            if (length < 48 || memcmp(data + offset, "IECSsreV", 8) || memcmp(data + offset + 16, "IECSuqeS", 8)) {
-                fail("invalid Sony sequence bank"); break;
-            }
-            copy = memalign(64, length);
-            if (!copy) { fail("sequence allocation failed"); break; }
-            memcpy(copy, data + offset, length);
-            for (i = 0; i < MIDI_SLOTS; ++i) if (midi[i].bank == (int)bank) midi[i].active = 0;
-            free(sequences[bank]); sequences[bank] = copy; sequence_sizes[bank] = length;
+            if (install_sequences(bank, data + offset, length)) break;
         } else if (type == 5) {
             if (length < 16) { fail("invalid room sound environment"); break; }
             memcpy(environment, data + offset, sizeof(environment));
@@ -359,7 +378,7 @@ static int play_note(int kind, int bank, int program, int key, int velocity, int
             wave = record(b, b->vagi, le16(h + sample), 8);
             if (!wave) return fail("invalid sound waveform");
             offset = le32(h + wave); end = b->bs;
-            for (unsigned int i = 0; i < le32(h + b->vagi + 12); ++i) {
+            for (unsigned int i = 0; i <= le32(h + b->vagi + 12); ++i) {
                 unsigned int w = record(b, b->vagi, i, 8), next;
                 if (!w) continue;
                 next = le32(h + w);
@@ -458,7 +477,8 @@ int recvxAudioPlayMidiFade(int slot, int sound, int volume, int pan, int frames)
     base = le32(data + 36);
     if (!span(size, base, 16) || memcmp(data + base, "IECSidiM", 8)) { recvxAudioUnlock(); return fail("invalid sequence section"); }
     count = le32(data + base + 12);
-    if ((unsigned int)(sound & 255) >= count || count > 512 || !span(size, base + 16, count * 4u)) { recvxAudioUnlock(); return fail("invalid sequence index"); }
+    if ((unsigned int)(sound & 255) > count || count >= 512 || !span(size, base + 16, (count + 1u) * 4u)) { recvxAudioUnlock(); return fail("invalid sequence index"); }
+    ++count; /* MIDI sections use the same inclusive highest-ID header. */
     offset = base + le32(data + base + 16 + (sound & 255) * 4u);
     end = (unsigned int)size;
     for (unsigned int i = 0; i < count; ++i) { unsigned int next = base + le32(data + base + 16 + i * 4u); if (next > offset && next < end) end = next; }

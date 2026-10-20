@@ -541,3 +541,25 @@ void njSetMatrixCN(NJS_MATRIX *matrix)
     (void)matrix;
     recvxEngineOriginalFaultSet("original cached VFPU matrix path is unsupported");
 }
+
+/* Reflect the current transform in a plane through p with normal v. The
+   closed form replaces the PS2 VU angle construction and also handles planes
+   through the origin without a special singular case. */
+void njMirror(NJS_MATRIX *matrix,NJS_PLANE *plane)
+{
+    if(!matrix)matrix=current_matrix();
+    if(!matrix||!plane)return;
+    double x=plane->vx,y=plane->vy,z=plane->vz;
+    double length=x*x+y*y+z*z;
+    if(!isfinite(length)||length<=0||!isfinite(plane->px)||!isfinite(plane->py)||!isfinite(plane->pz)){
+        recvxEngineOriginalFaultSet("invalid reflection plane");return;
+    }
+    double factor=2.0/length;
+    double normal[3]={x,y,z};
+    double distance=x*plane->px+y*plane->py+z*plane->pz;
+    NJS_MATRIX reflection;identity_matrix(reflection);
+    for(int column=0;column<3;++column)for(int row=0;row<3;++row)
+        reflection[column*4+row]-=(float)(factor*normal[column]*normal[row]);
+    for(int row=0;row<3;++row)reflection[12+row]=(float)(factor*distance*normal[row]);
+    multiply_matrix(*matrix,reflection);
+}
