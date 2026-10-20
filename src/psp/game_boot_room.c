@@ -1,5 +1,6 @@
 #include <limits.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 #include "psp/game_boot.h"
 #include "psp/expand.h"
@@ -15,13 +16,31 @@ int recvxGameBootExpand(char *source, unsigned char *destination)
     RecvxRoomInfo info;
     RecvxExpandResult result;
     /* The original monitor loads compressed input at the arena's upper end
-       and expands into the current low cursor. Stop before they can collide. */
+       and expands into the current low cursor. The first pass stops at the
+       input; a staged retry can then use the rest of the arena. */
     if (!source_size || p < first || p > end || source_size > end - p ||
         output < first || output >= p || destination != sys->memp || source != (char *)sys->rdtp)
         recvxGameBootUnsupported("invalid original room expansion buffers");
     result = recvxExpandBounded(source, source_size, destination, p - output, &consumed, &written);
-    if (result != RECVX_EXPAND_OK || consumed != source_size || !written || written > INT_MAX)
+    if (result == RECVX_EXPAND_OUTPUT_FULL) {
+        /* Large retail rooms fit expanded in the arena, but cannot coexist
+           there with their compressed input. The bounded first pass stops
+           before touching that input, so it is still safe to stage and retry.
+           Release the staging buffer before relocation/texture allocation. */
+        unsigned char *staged = malloc(source_size);
+        if (!staged) recvxGameBootUnsupported("room decompression staging allocation failed");
+        memcpy(staged, source, source_size);
+        recvxGameBootLog("room expansion staging: input=%u gap=%u capacity=%u",
+            (unsigned int)source_size, (unsigned int)(p - output), (unsigned int)(end - output));
+        result = recvxExpandBounded(staged, source_size, destination, end - output, &consumed, &written);
+        free(staged);
+    }
+    if (result != RECVX_EXPAND_OK || consumed != source_size || !written || written > INT_MAX) {
+        recvxGameBootLog("room expansion rejected: result=%d input=%u consumed=%u output=%u capacity=%u",
+            result, (unsigned int)source_size, (unsigned int)consumed,
+            (unsigned int)written, (unsigned int)(end - output));
         recvxGameBootUnsupported("invalid or oversized compressed room stream");
+    }
     if (recvxInspectRoom(destination, written, &info))
         recvxGameBootUnsupported("invalid expanded room header or arrays");
     recvxGameBootRegisterSource(destination, written);
@@ -122,6 +141,41 @@ static int enemy_models(const unsigned char *data, size_t size,
     }
 }
 
+/* Keep the retail ABI's 16-version table for its original range. Authored
+   zombie variants also include IDs 16..42; give those distinct cache keys
+   instead of indexing into the next enemy's entries in SYS_WORK. */
+static struct {
+    unsigned int enemy, version;
+    NJS_TEXLIST *textures[16];
+} extended_enemy_textures[128];
+static unsigned int extended_enemy_texture_count;
+void recvxGameBootEnemyTextureReset(void)
+{
+    memset(extended_enemy_textures,0,sizeof(extended_enemy_textures));
+    extended_enemy_texture_count=0;
+}
+NJS_TEXLIST **recvxGameBootEnemyTextureSlot(unsigned int enemy,unsigned int version,unsigned int texture)
+{
+    if(enemy>=100||version>=256||texture>=16)
+        recvxGameBootUnsupported("invalid enemy texture sharing key");
+    if(version<16)return &sys->et_lp[enemy][version][texture];
+    unsigned int i;
+    for(i=0;i<extended_enemy_texture_count;++i)
+        if(extended_enemy_textures[i].enemy==enemy&&extended_enemy_textures[i].version==version)break;
+    if(i==extended_enemy_texture_count){
+        if(i>=128)recvxGameBootUnsupported("enemy texture sharing capacity exceeded");
+        extended_enemy_textures[i].enemy=enemy;extended_enemy_textures[i].version=version;
+        ++extended_enemy_texture_count;
+    }
+    return &extended_enemy_textures[i].textures[texture];
+}
+
+static int room_source_invalid(const char *reason)
+{
+    recvxGameBootLog("room relocation validation failed: %s", reason);
+    return -1;
+}
+
 int recvxGameBootValidateRoomSource(const void *source, size_t size)
 {
     const unsigned char *data = source, *room;
@@ -130,58 +184,65 @@ int recvxGameBootValidateRoomSource(const void *source, size_t size)
     unsigned int textures[256], count = 0, refs, model_dir, motion_dir, texture_dir;
     unsigned int i, cursor, models, enemies, objects, object_models, items, effects;
     unsigned char object_seen[1300] = {0}, item_seen[200] = {0}, effect_seen[450] = {0};
-    uint16_t enemy_seen[100][16] = {{0}};
+    struct { unsigned int enemy,version; uint16_t textures; } enemy_seen[128] = {{0}};
+    unsigned int enemy_keys=0;
     if (!data || ((uintptr_t)data & 3) || recvxInspectRoom(data, size, &info) ||
-        recvxEventDataInspect(data, size, &events)) return -1;
+        recvxEventDataInspect(data, size, &events)) return room_source_invalid("header or event directory");
     room = data + info.rom_offset;
     enemies = info.counts[RECVX_ROOM_COUNT_ENEMY]; objects = info.counts[RECVX_ROOM_COUNT_OBJECT];
     items = info.counts[RECVX_ROOM_COUNT_ITEM]; effects = info.counts[RECVX_ROOM_COUNT_EFFECT];
-    if (enemies > 128 || objects > 32 || items > 32 || effects > 256) return -1;
+    if (enemies > 128 || objects > 32 || items > 32 || effects > 256) return room_source_invalid("placement capacity");
     object_models = objects > 4 ? objects - 4 : 0;
     /* bhSetRoom replaces evtp with the header's event directory; the retail
        ROM prefix contains an authored address in that unused field. */
     for (i = 0; i < 16; ++i)
         if (i != RECVX_ROOM_ARRAY_EVENT && word(room + i * 4u) != UINT32_MAX && word(room + i * 4u) >= size)
-            return -1;
+            return room_source_invalid("room array offset");
     for (i = 0; i < 32; ++i) {
         float height;
         memcpy(&height, room + 0x120 + i * 4, 4);
-        if (!isfinite(height)) return -1;
+        if (!isfinite(height)) return room_source_invalid("floor height");
     }
     for (i = 0; i < info.counts[RECVX_ROOM_COUNT_CUT]; ++i) {
         const unsigned char *cut = data + word(room) + i * sizeof(RecvxRoomDiskCutWorkPrefix);
-        if (!span(size, word(cut + 4), cut[3] * sizeof(CUT_WRK))) return -1;
+        if (!span(size, word(cut + 4), cut[3] * sizeof(CUT_WRK))) return room_source_invalid("cut attributes");
     }
     models = 1 + object_models + items;
     for (i = 0; i < enemies; ++i) if (word(data + word(room + 8) + i * 36u) & 1) ++models;
     model_dir = word(data + 20); motion_dir = word(data + 24); texture_dir = word(data + 32);
     if (model_dir < 36 || model_dir >= motion_dir || motion_dir > size ||
-        !span(motion_dir, model_dir, models * 4u)) return -1;
+        !span(motion_dir, model_dir, models * 4u)) return room_source_invalid("model directory");
     refs = model_dir;
     for (i = 0; i < models; ++i) {
         unsigned int offset = word(data + refs + i * 4u);
         unsigned int end = i + 1 < models ? word(data + refs + (i + 1) * 4u) : motion_dir;
-        if ((offset & 3) || offset < model_dir + models * 4u || offset >= end || end > motion_dir) return -1;
+        if ((offset & 3) || offset < model_dir + models * 4u || offset >= end || end > motion_dir) return room_source_invalid("model extent");
     }
     cursor = 0;
     {
         unsigned int offset = word(data + refs), end = models > 1 ? word(data + refs + 4) : motion_dir;
         if (end - offset < 16 || !half(data + offset + 6) ||
             queue_model(data + offset, end - offset, NULL, 0, textures, &count) ||
-            flat_chunks(data + offset, end - offset)) return -1;
+            flat_chunks(data + offset, end - offset)) return room_source_invalid("room geometry");
         ++cursor;
     }
     for (i = 0; i < enemies; ++i) {
         const unsigned char *placement = data + word(room + 8) + i * 36u;
         unsigned int offset, end;
         if (!(word(placement) & 1)) continue;
-        if (half(placement + 4) >= 100 || placement[9] >= 16) return -1;
+        if (half(placement + 4) >= 100) return room_source_invalid("enemy selector");
+        unsigned int key;
+        for(key=0;key<enemy_keys;++key)
+            if(enemy_seen[key].enemy==half(placement+4)&&enemy_seen[key].version==placement[9])break;
+        if(key==enemy_keys){
+            enemy_seen[key].enemy=half(placement+4);enemy_seen[key].version=placement[9];++enemy_keys;
+        }
         offset = word(data + refs + cursor * 4u); ++cursor;
         end = cursor < models ? word(data + refs + cursor * 4u) : motion_dir;
         /* Each authored enemy stream is validated separately before the
            original texture-sharing table can expose its relocated pointers. */
         if (enemy_models(data + offset, end - offset, textures, &count,
-                         &enemy_seen[half(placement + 4)][placement[9]])) return -1;
+                         &enemy_seen[key].textures)) return room_source_invalid("enemy model stream");
     }
     for (i = 0; i < object_models + items; ++i) {
         unsigned int item = i >= object_models, index = item ? i - object_models : i + 4;
@@ -190,37 +251,37 @@ int recvxGameBootValidateRoomSource(const void *source, size_t size)
         const unsigned char *model, *skin = NULL;
         size_t skin_size = 0, model_size;
         unsigned char *seen = item ? item_seen : object_seen;
-        if (id >= (item ? 200u : 1300u)) return -1;
+        if (id >= (item ? 200u : 1300u)) return room_source_invalid("object or item identity");
         offset = word(data + refs + cursor * 4u); ++cursor;
         end = cursor < models ? word(data + refs + cursor * 4u) : motion_dir;
         model = data + offset; model_size = end - offset;
         if (memcmp(model, "MDL", 3)) {
             unsigned int length;
-            if (item || model_size < 12 || word(model + 4) != 0x4e494b53u) return -1;
+            if (item || model_size < 12 || word(model + 4) != 0x4e494b53u) return room_source_invalid("object skin marker");
             length = word(model);
-            if (length < 4 || (length & 3) || !span(model_size, 4, length) || model_size - length - 4 < 4) return -1;
+            if (length < 4 || (length & 3) || !span(model_size, 4, length) || model_size - length - 4 < 4) return room_source_invalid("object skin extent");
             skin = model + 8; skin_size = length - 4;
             model += length + 8; model_size -= length + 8;
         }
-        if (queue_model(model, model_size, skin, skin_size, textures, &count)) return -1;
+        if (queue_model(model, model_size, skin, skin_size, textures, &count)) return room_source_invalid("object or item model");
         if (seen[id]) count = old_count;
         else seen[id] = 1;
     }
-    if (cursor != models || texture_dir < motion_dir || !span(size, texture_dir, 4)) return -1;
+    if (cursor != models || texture_dir < motion_dir || !span(size, texture_dir, 4)) return room_source_invalid("texture directory");
     for (i = 0; i < effects; ++i) {
         unsigned int id = half(data + word(room + 20) + i * 68u + 4);
-        if (id >= 450) return -1;
+        if (id >= 450) return room_source_invalid("effect identity");
         if (((id >= 30 && id < 100) || id >= 400) && !effect_seen[id]) {
-            if (count >= 256) return -1;
+            if (count >= 256) return room_source_invalid("texture capacity");
             effect_seen[id] = 1; textures[count++] = UINT32_MAX;
         }
     }
-    if (word(data + texture_dir) != count || !span(size, texture_dir + 4u, count * 4u)) return -1;
+    if (word(data + texture_dir) != count || !span(size, texture_dir + 4u, count * 4u)) return room_source_invalid("texture count");
     for (i = 0; i < count; ++i) {
         unsigned int offset = word(data + texture_dir + 4u + i * 4u);
         unsigned int end = i + 1 < count ? word(data + texture_dir + 8u + i * 4u) : (unsigned int)size;
         if (offset < texture_dir + 4u + count * 4u || offset >= end || end > size ||
-            recvxGameBootValidatePvp(data + offset, end - offset, textures[i])) return -1;
+            recvxGameBootValidatePvp(data + offset, end - offset, textures[i])) return room_source_invalid("texture payload");
     }
     return 0;
 }
@@ -231,6 +292,7 @@ void recvxGameBootRoomPrepare(void)
     if (sys->rdtsz <= 0 || size != (size_t)sys->rdtsz ||
         sys->memp != sys->rdtp + size || recvxGameBootValidateRoomSource(sys->rdtp, size))
         recvxGameBootUnsupported("invalid original room relocation records");
+    recvxGameBootEnemyTextureReset();
 #if UINTPTR_MAX > UINT32_MAX
     recvxGameBootUnsupported("room relocation requires the original 32-bit ABI");
 #else

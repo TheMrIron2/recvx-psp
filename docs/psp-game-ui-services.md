@@ -325,3 +325,28 @@ slot, and runs one complete door demo. It also passes the camera, scope, enemy,
 timer/effect, reflection, capture/restoration and texture-state fixtures. The
 sanitized package guard suite rejects 18 malformed cases. The sound dispatcher
 and production SAS adapter suites pass, as do the PSP build/runtime checks.
+
+Large-room decompression no longer requires the compressed and expanded copies
+to coexist in the 12 MiB game arena. If the bounded decode reaches the compressed
+input, it stops without overwriting it, copies that input to temporary heap
+storage, and retries using the remaining arena capacity. The temporary copy is
+freed before room validation and relocation. Malformed streams, extra trailing
+input, and output exceeding the actual arena still stop with diagnostics showing
+the decode result and byte counts. This leaves the permanent arena size unchanged.
+The regression decodes all four packaged rooms above a reserved 1152 KiB prefix,
+checks their exact output sizes/CRCs and arena guards, and exercises the staged
+path for RM_0020 and RM_0030.
+
+The PSP input bridge maps Up/Down/Left/Right to the retail peripheral bits
+`0x1000/0x4000/0x8000/0x2000`. Analog axes account for the negation in `bhSetPad`,
+so the stick and D-pad produce matching logical directions. The regression checks
+both through the original pad mapper for all four control presets, including
+press/release, diagonals and neutral.
+
+Room validation keys enemy texture sharing by the full authored model-version
+byte. RM_0020 includes zombie variant 32, which exceeds the retail SYS_WORK
+table's 16-version dimension. Versions below 16 retain that table; higher versions
+use a bounded PSP cache keyed by enemy ID and version, reset on room relocation
+and game initialization. The extracted model loader uses the same cache accessor,
+avoiding an index into another enemy's table entries. Validation failures also log
+the rejected record category before the room-relocation boundary.

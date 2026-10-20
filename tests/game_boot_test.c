@@ -1028,6 +1028,108 @@ static void test_room_read_and_expand(const char *directory, void *arena, size_t
     puts("PASS: original room reset, file names, bounded decompression and malformed room records");
 }
 
+/* Stairs lead from the small corridor to rooms whose compressed and expanded
+   copies cannot coexist above the game's permanent allocations in 12 MiB. */
+static void test_game_direction_mapping(const char *directory,void *arena,size_t arena_size)
+{
+    static const uint32_t buttons[]={RECVX_BUTTON_UP,RECVX_BUTTON_DOWN,RECVX_BUTTON_LEFT,RECVX_BUTTON_RIGHT};
+    static const unsigned int raw[]={0x1000,0x4000,0x8000,0x2000};
+    static const unsigned int logical[]={0x21,0x42,0x4,0x8};
+    RecvxInputState input={.analog_x=128,.analog_y=128};
+    extern void recvxGameBootReadKeys(const RecvxInputState *);
+    extern void bhSetPad(void);
+    assert(!recvxGameBootInit(directory,arena,arena_size));
+    /* Test the production bridge through the retail pad mapper and all four
+       control presets, including edges, release and diagonal directions. */
+    for(int preset=0;preset<4;++preset){
+        sys->keytype=preset;
+        for(unsigned int i=0;i<4;++i){
+            input=(RecvxInputState){.analog_x=128,.analog_y=128};
+            recvxGameBootReadKeys(&input);bhSetPad();
+            input.buttons=buttons[i];recvxGameBootReadKeys(&input);bhSetPad();
+            assert(sys->p1per->on==raw[i]);
+            assert((sys->pad_on&0x6f)==logical[i]&&(sys->pad_ps&0xf)==(logical[i]&0xf));
+            input.buttons=0;recvxGameBootReadKeys(&input);bhSetPad();
+            assert(!(sys->pad_on&0x6f)&&sys->p1per->release==raw[i]);
+            if(i<2)input.analog_y=i==0?0:255;else input.analog_x=i==2?0:255;
+            recvxGameBootReadKeys(&input);bhSetPad();
+            assert((sys->pad_on&0x6f)==logical[i]);
+        }
+    }
+    input=(RecvxInputState){.buttons=RECVX_BUTTON_UP|RECVX_BUTTON_RIGHT,.analog_x=128,.analog_y=128};
+    recvxGameBootReadKeys(&input);bhSetPad();assert((sys->pad_on&0x6f)==0x29);
+    input=(RecvxInputState){.analog_x=128,.analog_y=128};recvxGameBootReadKeys(&input);bhSetPad();
+    assert(!sys->pad_on&&!sys->pad_ax&&!sys->pad_ay);
+    puts("PASS: PSP D-pad and analog directions through retail pad mapping, all four presets, edges, releases, diagonal and neutral");
+}
+
+static unsigned int room_stream_test;
+static void room_stream_task(void)
+{
+    static const char *names[]={"RM_0000.RDX","RM_0010.RDX","RM_0020.RDX","RM_0030.RDX"};
+    static const unsigned int lengths[]={5392084,1829316,8105744,8931872};
+    static const uint32_t crcs[]={0xaf78e4c2u,0x778dd089u,0x82cab019u,0x0ab1cff7u};
+    unsigned int index=room_stream_test;
+#if UINTPTR_MAX == UINT32_MAX
+    bhInitSystem();
+    /* Room relocation uses the object/item pools normally reserved by
+       bhFirstGameStart and the texture descriptor pool from bhInitEffect. */
+    sys->obwp=(O_WRK *)bhGetFreeMemory(39936,32);
+    sys->itwp=(O_WRK *)bhGetFreeMemory(39936,32);
+    sys->ef_tlist.textures=sys->ef_tex;
+#endif
+    bhInitReadRDT();
+    /* Keep a permanent prefix and a tail guard outside the decoder capacity. */
+    unsigned char *arena_end=sys->endp;
+    sys->endp-=64;memset(sys->endp,0xa5,64);
+    unsigned char *output=freemem+1152*1024;
+    memset(output-64,0x5a,64);
+    int size=GetFileSize((char *)names[index]);
+    unsigned char *source=(unsigned char *)(((uintptr_t)sys->endp-size)&~(uintptr_t)63u);
+    assert(!RequestReadIsoFile((char *)names[index],source));
+    sys->memp=output;sys->rdtp=source;
+    if(index>=2)assert(lengths[index]>(uintptr_t)source-(uintptr_t)output);
+    int written=Expand((char *)source,output);
+    assert(written==(int)lengths[index]);
+    assert(recvxRoomCrc32(output,written)==crcs[index]);
+    int valid=recvxGameBootValidateRoomSource(output,written);
+    if(valid)fprintf(stderr,"room relocation validation failed: %s\n",names[index]);
+    assert(!valid);
+    assert(recvxGameBootSourceRemaining(output)==lengths[index]);
+    for(unsigned int i=0;i<64;++i)assert(output[-64+(int)i]==0x5a&&sys->endp[i]==0xa5);
+#if UINTPTR_MAX == UINT32_MAX
+    sys->rdtp=output;sys->rdtsz=written;sys->memp=output+written;
+    bhSetRDT();
+    assert(rom->mdl.objP&&rom->mdl.obj_num>0&&sys->txr_n>0);
+    if(index==2){
+        assert(ene[0].mdlver==9&&ene[3].mdlver==32);
+        assert(ene[0].mdl[0].texP&&ene[3].mdl[0].texP);
+        assert(ene[0].mdl[0].texP==ene[1].mdl[0].texP);
+        assert(ene[0].mdl[0].texP!=ene[3].mdl[0].texP);
+        assert(*recvxGameBootEnemyTextureSlot(1,32,0)==ene[3].mdl[0].texP);
+        assert(recvxGameBootEnemyTextureSlot(1,32,0)!=recvxGameBootEnemyTextureSlot(3,0,0));
+        recvxGameBootEnemyTextureReset();
+        assert(!*recvxGameBootEnemyTextureSlot(1,32,0));
+    }
+    for(unsigned int i=0;i<64;++i)assert(output[-64+(int)i]==0x5a&&sys->endp[i]==0xa5);
+#endif
+    sys->endp=arena_end;
+}
+static void test_large_room_streams(const char *directory,void *arena,size_t arena_size)
+{
+    RecvxLiveTaskProc saved=bhSysTaskJumpTab[0];
+    RecvxInputState input={.analog_x=128,.analog_y=128};
+    bhSysTaskJumpTab[0]=room_stream_task;
+    for(room_stream_test=0;room_stream_test<4;++room_stream_test){
+        assert(!recvxGameBootInit(directory,arena,arena_size));tick(&input);
+    }
+    bhSysTaskJumpTab[0]=saved;
+#if UINTPTR_MAX == UINT32_MAX
+    puts("PASS: all four room/model relocations; zombie variant 32 cache isolation, same-variant sharing and cache reset");
+#endif
+    puts("PASS: all four packaged room streams with permanent allocations in 12 MiB, staged stair/large-room expansion, source validation, exact CRCs and arena guards");
+}
+
 static int checkpoint_case;
 static size_t checkpoint_bytes;
 static unsigned char *checkpoint_original_base, *checkpoint_original_limit;
@@ -2227,6 +2329,8 @@ int main(int argc, char **argv)
         test_weapon_motions_and_replacement(argv[1], arena, arena_size);
 #endif
         test_room_read_and_expand(argv[1], arena, arena_size);
+        test_game_direction_mapping(argv[1],arena,arena_size);
+        test_large_room_streams(argv[1], arena, arena_size);
     }
     assert(recvxGameBootInit(argv[1], arena, arena_size) == 0);
     assert(sys->tk_flg == 1);

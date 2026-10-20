@@ -43,6 +43,8 @@ int recvxGameBootPvpTextureCount(const unsigned char *data, size_t size);
 void recvxGameBootInventoryTexturePrepare(void);
 int recvxGameBootValidateRoomSource(const void *data, size_t size);
 void recvxGameBootRoomPrepare(void);
+void recvxGameBootEnemyTextureReset(void);
+NJS_TEXLIST **recvxGameBootEnemyTextureSlot(unsigned int enemy,unsigned int version,unsigned int texture);
 void recvxGameBootRoomFinishPrepare(void);
 int recvxGameBootValidateMotionStream(const unsigned char *data, size_t size);
 int recvxGameBootValidateMaskSource(const unsigned char *data, size_t size,

@@ -139,6 +139,9 @@ if __name__ == '__main__':
         source = path.read_text()
         for name in names:
             line, function = extract(source, name)
+            if name == 'bhSetEneMdl':
+                function = function.replace('sys->et_lp[ep->id][mdlno][mdlver]',
+                    '(*recvxGameBootEnemyTextureSlot(ep->id, mdlno, mdlver))')
             if filename == 'effsub1.c':
                 # Bound writes into the original effect render queues.
                 function = re.sub(r'(sys->ef_(\w+)\[sys->ef_(\w+)\+\+\] = op;)',

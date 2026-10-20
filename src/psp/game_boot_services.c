@@ -47,10 +47,10 @@ void recvxGameBootReadKeys(const RecvxInputState *input)
     if (!input) recvxGameBootUnsupported("missing engine input sample");
     if (input->buttons & RECVX_BUTTON_START) on |= 0x800;
     if (input->buttons & RECVX_BUTTON_SELECT) on |= 0x100;
-    if (input->buttons & RECVX_BUTTON_UP) on |= 0x4000;
-    if (input->buttons & RECVX_BUTTON_DOWN) on |= 0x1000;
-    if (input->buttons & RECVX_BUTTON_LEFT) on |= 0x2000;
-    if (input->buttons & RECVX_BUTTON_RIGHT) on |= 0x8000;
+    if (input->buttons & RECVX_BUTTON_UP) on |= 0x1000;
+    if (input->buttons & RECVX_BUTTON_DOWN) on |= 0x4000;
+    if (input->buttons & RECVX_BUTTON_LEFT) on |= 0x8000;
+    if (input->buttons & RECVX_BUTTON_RIGHT) on |= 0x2000;
     if (input->buttons & RECVX_BUTTON_CROSS) on |= 0x40;
     if (input->buttons & RECVX_BUTTON_CIRCLE) on |= 0x20;
     if (input->buttons & RECVX_BUTTON_SQUARE) on |= 0x80;
@@ -59,8 +59,10 @@ void recvxGameBootReadKeys(const RecvxInputState *input)
     if (input->buttons & RECVX_BUTTON_RTRIGGER) on |= 8;
     peripheral.on = on; peripheral.old = previous; peripheral.off = ~on;
     peripheral.press = on & ~previous; peripheral.release = previous & ~on;
-    peripheral.x1 = (int)input->analog_x - 128;
-    peripheral.y1 = (int)input->analog_y - 128;
+    /* bhSetPad negates these axes before applying its direction thresholds.
+       Match the corrected D-pad directions, with an exact neutral at 128. */
+    peripheral.x1 = 128 - (int)input->analog_x;
+    peripheral.y1 = 128 - (int)input->analog_y;
     Pad[0].on = Pad[0].Flag ? 0 : on;
     Pad[0].press = Pad[0].Flag ? 0 : peripheral.press;
     Pad[0].x1 = peripheral.x1; Pad[0].y1 = peripheral.y1;

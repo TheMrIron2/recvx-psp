@@ -71,6 +71,7 @@ int recvxGameBootInit(const char *directory, void *arena, size_t size)
     sys = &sysp; plp = &ply;
     freemem = (unsigned char *)start; njpmemp = (unsigned char *)end;
     sys->memp = freemem; sys->endp = njpmemp;
+    recvxGameBootEnemyTextureReset();
     recvxGameBootCheckpointReset();
     recvxGameBootRenderReset();
     Init_PS2_SAVE_TEX();
