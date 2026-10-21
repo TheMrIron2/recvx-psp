@@ -21,6 +21,7 @@ static RecvxBootTexture texture;
 const RecvxBootRenderFrame *recvxGameBootRenderFrame(void) { return &frame; }
 const RecvxBootDraw *recvxGameBootDraws(size_t *count) { *count=0; return NULL; }
 unsigned int recvxEngineOriginalViewBackgroundColor(void) { return 0; }
+void recvxEngineOriginalViewClipPlanes(float *near,float *far) { *near=-1; *far=-1000; }
 const uint32_t *recvxGameBootMovieGetFrame(void) { return NULL; }
 void recvxGameBootMovieFrameConsumed(void) { }
 /* The fixture reuses its static scene after every synchronized submission. */

@@ -20,6 +20,11 @@ typedef struct Voice {
     unsigned int rate, position;
     int active, paused, codec, slot, owner, key, volume, target, fade, pan, sample_gain, stop_frames;
 } Voice;
+typedef struct SequenceLoop {
+    size_t pc;
+    int running, immediate;
+    unsigned int passes;
+} SequenceLoop;
 typedef struct Sequence {
     const unsigned char *data;
     size_t size, pc;
@@ -27,6 +32,8 @@ typedef struct Sequence {
     unsigned int ticks, tempo, division;
     uint64_t phase;
     int master, target, fade, stop_when_done;
+    unsigned char loop_command[16], loop_number[16];
+    SequenceLoop loops[128];
 } Sequence;
 static Bank banks[2][BANKS];
 static unsigned char *sequences[BANKS];
@@ -55,7 +62,20 @@ static int span(size_t size, size_t offset, size_t length) { return offset <= si
 static int fail(const char *reason) { if (!fault[0]) snprintf(fault, sizeof(fault), "%s", reason); return -1; }
 const char *recvxAudioFault(void)
 { const char *result; recvxAudioLock(); result = fault[0] ? fault : NULL; recvxAudioUnlock(); return result; }
-static int gain(int volume) { return volume <= -127 ? 0 : volume >= 0 ? 4096 : (int)(4096.0 * pow(10.0, volume / 40.0)); }
+/* sdShotSetVol/sdMidiSetVol use the Sony 0..127 level, not dB. */
+static int gain(int volume)
+{ return volume <= -127 ? 0 : volume >= -1 ? 4096 : 4096 * (volume + 128) / 127; }
+/* adxwrap.c::AdxVolTbl maps the script level to tenths of a decibel.
+   Music and dialogue must follow this separate curve. */
+static int stream_gain(int volume)
+{
+    if (volume <= -127) return 0;
+    if (volume >= 0) return 4096;
+    int level = -volume;
+    int attenuation = level <= 32 ? level * 2 : level <= 64 ? 64 + (level - 32) * 6 :
+        level <= 96 ? 256 + (level - 64) * 8 : 512 + (level - 96) * 16;
+    return (int)(4096.0 * pow(10.0, -attenuation / 200.0));
+}
 static unsigned char *read_asset(const char *relative, size_t *size)
 {
     char path[768];
@@ -309,7 +329,7 @@ void recvxAudioVolume(unsigned int slot, int volume, int frames)
 {
     recvxAudioLock();
     if (slot < 2) {
-        stream_volume[slot] = gain(volume);
+        stream_volume[slot] = stream_gain(volume);
         for (unsigned int i = slot * 2; i < slot * 2 + 2; ++i) {
             Voice *v = &voices[i]; v->target = stream_volume[slot]; v->fade = frames > 0 ? frames : 0;
             if (!frames) { v->volume = v->target; recvxAudioNativeVolume(i, v->volume, v->pan); }
@@ -390,11 +410,11 @@ static int play_note(int kind, int bank, int program, int key, int velocity, int
             v->rate = (unsigned int)(le16(h + wave + 4) * pow(2, (key - h[sample + 11]) / 12.0));
             if (!v->rate || v->rate > 192000) return fail("invalid sound pitch");
             v->codec = 1;
-            v->sample_gain = 4096 * velocity / 127 * h[p + 6] / 127 * h[sample + 4] / 127;
-            v->volume = v->target = gain(volume) * velocity / 127 * h[p + 6] / 127 * h[sample + 4] / 127;
+            v->sample_gain = 4096 * velocity / 127 * h[p + 6] / 127 * h[sample + 16] / 127;
+            v->volume = v->target = gain(volume) * velocity / 127 * h[p + 6] / 127 * h[sample + 16] / 127;
             v->pan = pan; v->slot = slot; v->owner = owner; v->key = key;
             if ((v->size & 15) || recvxAudioNativeStart((unsigned int)(v - voices), v->data, v->size,
-                v->rate, h[wave + 6] & 1, le16(h + sample + 19), le16(h + sample + 21), native_volume(v), native_pan(v)))
+                v->rate, h[wave + 6] & 1, le16(h + sample + 18), le16(h + sample + 20), native_volume(v), native_pan(v)))
                 return fail("native bank sample start failed");
             v->active = 1; ++started;
         }
@@ -457,8 +477,39 @@ static int sequence_event(int slot)
         case 0xb0:
             if (a == 7) s->cv[channel] = (int)b;
             else if (a == 10) s->cp[channel] = (int)b;
+            /* Sony compact MIDI uses NRPN/data entry for numbered loops,
+               rather than the general MIDI synthesizer parameter protocol. */
+            else if (a == 99) {
+                if (b > 1) return fail("invalid Sony sequence loop command");
+                s->loop_command[channel] = (unsigned char)b;
+                s->loop_number[channel] = 128;
+            } else if (a == 6) {
+                if (s->loop_command[channel] > 1)
+                    return fail("Sony sequence loop number has no command");
+                s->loop_number[channel] = (unsigned char)b;
+                if (!s->loop_command[channel])
+                    s->loops[b] = (SequenceLoop){s->pc, s->running, s->immediate, 0};
+            } else if (a == 38) {
+                unsigned int number = s->loop_number[channel];
+                if (s->loop_command[channel] != 1 || number >= 128 || !s->loops[number].pc)
+                    return fail("Sony sequence loop end has no start");
+                SequenceLoop *loop = &s->loops[number];
+                if (loop->pc >= s->size) return fail("Sony sequence loop start exceeds stream");
+                /* Zero repeats forever. Positive counts include the first
+                   traversal; retain the marker for enclosing/repeated loops. */
+                if (!b || ++loop->passes < b) {
+                    s->pc = loop->pc;
+                    s->running = loop->running;
+                    s->immediate = loop->immediate;
+                } else loop->passes = 0;
+            }
             else if (a == 120 || a == 123) for (int i = 4; i < VOICES; ++i) { if (voices[i].owner == slot) stop(&voices[i]); }
-            else return fail("unsupported Sony sequence controller");
+            else {
+                if (!fault[0]) snprintf(fault, sizeof(fault),
+                    "unsupported Sony sequence controller %u value=%u slot=%d channel=%u pc=%lu",
+                    a, b, slot, channel, (unsigned long)s->pc);
+                return -1;
+            }
             break;
         default: return fail("unsupported Sony sequence event");
         }
@@ -486,7 +537,10 @@ int recvxAudioPlayMidiFade(int slot, int sound, int volume, int pan, int frames)
     s.data = data + offset; s.size = end - offset; s.pc = 6; s.division = le16(data + offset + 4);
     s.bank = (int)bank; s.volume = volume; s.pan = pan; s.tempo = 500000; s.active = 1;
     s.master = frames > 0 ? 0 : 4096; s.target = 4096; s.fade = frames > 0 ? frames : 0;
-    for (int i = 0; i < 16; ++i) { s.cv[i] = 127; s.cp[i] = 64; }
+    for (int i = 0; i < 16; ++i) {
+        s.cv[i] = 127; s.cp[i] = 64;
+        s.loop_command[i] = s.loop_number[i] = 128;
+    }
     variable(&s, &s.ticks);
     for (int i = 4; i < VOICES; ++i) if (voices[i].active && voices[i].owner == slot) stop(&voices[i]);
     midi[slot] = s;
@@ -516,7 +570,7 @@ void recvxAudioUpdateSe(int slot, int volume, int pan, int pitch)
 {
     recvxAudioLock();
     for (int i = 4; i < VOICES; ++i) if (voices[i].active && voices[i].owner == -1 && voices[i].slot == slot) {
-        voices[i].volume = voices[i].target = gain(volume); voices[i].pan = pan;
+        voices[i].volume = voices[i].target = voices[i].sample_gain * gain(volume) / 4096; voices[i].pan = pan;
         recvxAudioNativeVolume((unsigned int)i, native_volume(&voices[i]), native_pan(&voices[i]));
         if (pitch) recvxAudioNativePitch((unsigned int)i, (unsigned int)(voices[i].rate * pow(2, pitch / 4096.0)));
     }

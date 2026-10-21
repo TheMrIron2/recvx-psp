@@ -44,7 +44,8 @@ static size_t overlay_count;
 static RecvxBootTexture texture, wide;
 static unsigned char pixels[1024 * 32] __attribute__((aligned(16)));
 static unsigned char memory[32768] __attribute__((aligned(16)));
-static Submission submissions[64];
+static Submission submissions[64], ui_depth_submissions[64];
+static size_t ui_depth_count;
 static size_t submission_count, memory_used;
 static int enabled[32], list_active, finished, synchronized, consumed, cache_flushed;
 static int wraps[2], filters[2], blend_source, blend_destination, matrix_mode;
@@ -90,6 +91,7 @@ void recvxGameBootRenderConsume(void)
     consumed = 1; consume_at = ++calls;
 }
 unsigned int recvxEngineOriginalViewBackgroundColor(void) { return 0xff112233u; }
+void recvxEngineOriginalViewClipPlanes(float *near,float *far) { *near=-1; *far=-99; }
 
 int sceGuInit(void) { ++calls; return 0; }
 void sceGuTerm(void) { terminated = 1; ++calls; }
@@ -213,7 +215,11 @@ static Submission *submission(int primitive, int format, int count, const void *
     Submission *s;
     assert(list_active && !finished && cache_flushed && !consumed && !indices);
     assert(submission_count < sizeof(submissions) / sizeof(submissions[0]));
-    s = &submissions[submission_count++]; memset(s, 0, sizeof(*s));
+    uintptr_t address=(uintptr_t)data;
+    if(color_mask==0xffffffffu&&address>=(uintptr_t)memory&&address<(uintptr_t)memory+sizeof(memory)){
+        assert(ui_depth_count<64);s=&ui_depth_submissions[ui_depth_count++];
+    }else s = &submissions[submission_count++];
+    memset(s, 0, sizeof(*s));
     s->primitive = primitive; s->format = format; s->count = count; s->pointer = data;
     s->depth = enabled[GU_DEPTH_TEST]; s->cull = enabled[GU_CULL_FACE]; s->blend = enabled[GU_BLEND];
     s->alpha = enabled[GU_ALPHA_TEST]; s->textured = enabled[GU_TEXTURE_2D];
@@ -264,7 +270,7 @@ static void reset_frame(void)
     memset(vertices, 0, sizeof(vertices)); memset(batches, 0, sizeof(batches)); memset(overlays, 0, sizeof(overlays));
     memset(submissions, 0, sizeof(submissions)); memset(&frame, 0, sizeof(frame));
     movie_pixels = NULL;
-    submission_count = memory_used = overlay_count = 0; consumed = cache_flushed = 0;
+    submission_count = ui_depth_count = memory_used = overlay_count = 0; consumed = cache_flushed = 0;
     clear_count = texsync_at = texflush_at = clut_loads = 0;
     first_sprite_at = last_model_at = consume_at = 0;
     memset(matrix_loaded, 0, sizeof(matrix_loaded)); memset(identities, 0, sizeof(identities));
@@ -316,8 +322,8 @@ static void models_then_overlays(void)
     assert(consumed && sync_at < consume_at && start_at < last_model_at && last_model_at < first_sprite_at && first_sprite_at < finish_at);
     assert(!memcmp(projection, frame.projection, sizeof(projection)));
     assert(clear_color == 0xff332211u && clear_depth == 0 && clear_flags == (GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT));
-    assert(submission_count == 6 && memory_used == 3 * 48 && depth_mask == GU_FALSE);
-    assert(alpha_func == GU_GREATER && alpha_value == 0 && alpha_mask == 255);
+    assert(submission_count == 6 && memory_used == 6 * 48 && depth_mask == GU_FALSE);
+    assert(alpha_func == GU_EQUAL && alpha_value == 255 && alpha_mask == 255);
     assert(submissions[0].depth && !submissions[0].cull && !submissions[0].blend && submissions[0].alpha);
     assert(submissions[0].textured && submissions[0].pixels == pixels && submissions[0].palette == texture.palette);
     assert(submissions[0].wrap_u == GU_CLAMP && submissions[0].wrap_v == GU_REPEAT && submissions[0].filter_min == GU_NEAREST);
@@ -326,7 +332,7 @@ static void models_then_overlays(void)
     assert(submissions[1].source == GU_FIX && submissions[1].source_fixed == 0xffffff && submissions[1].destination == GU_FIX && !submissions[1].destination_fixed);
     assert(submissions[2].filter_min == GU_LINEAR && submissions[2].filter_mag == GU_LINEAR && submissions[2].pointer == vertices + 6);
     assert(submissions[0].shade == GU_SMOOTH && submissions[2].shade == GU_FLAT);
-    for (unsigned int i = 3; i < 6; ++i) assert(!submissions[i].depth && !submissions[i].cull && !submissions[i].alpha && submissions[i].blend);
+    for (unsigned int i = 3; i < 6; ++i) assert(submissions[i].depth && submissions[i].depth_mask==GU_TRUE && !submissions[i].cull && !submissions[i].alpha && submissions[i].blend);
     assert(submissions[3].sprite[0].color == 0x7f332211 && submissions[3].sprite[0].x == 7.5f);
     assert(fabsf(submissions[3].sprite[0].y - 20 * 272.0f / 480) < 0.0001f);
     assert(submissions[4].pixels == pixels && submissions[5].pixels == pixels + 512 * 32);
@@ -335,6 +341,59 @@ static void models_then_overlays(void)
     assert(submissions[4].sprite[1].u == 512 && submissions[5].sprite[0].u == 0);
     assert(submissions[4].wrap_u == GU_CLAMP && submissions[4].wrap_v == GU_CLAMP);
     assert(scales[0] == 1 && scales[1] == 1 && offsets[0] == 0 && offsets[1] == 0);
+}
+
+static void inventory_preview_layers(void)
+{
+    reset_frame();frame.vertex_count=3;frame.batch_count=1;
+    frame.projection[10]=-100.0f/98;frame.projection[14]=-198.0f/98;
+    batches[0]=(RecvxBootRenderBatch){.count=3,.attributes=0x18,.blend_source=8,.blend_destination=6};
+    recvxGameBootPresent();
+    unsigned int prior_clears=clear_count;
+    /* StatusMain flushes and clears the OT after drawing the item, then
+       submits background panels and controls in a separate native pass. */
+    frame.vertex_count=frame.batch_count=0;consumed=0;
+    overlays[0]=(RecvxBootDraw){.depth=21,.color=0xff102030};
+    overlays[1]=(RecvxBootDraw){.depth=2,.color_gradient=1,
+        .points={{0,0},{10,0},{10,10},{0,10}},
+        .vertex_color={~0u,~0u,~0u,~0u}};
+    overlay_count=2;recvxGameBootPresent();
+    assert(clear_count==prior_clears&&submission_count==3);
+    const Submission *background=&submissions[1],*control=&submissions[2];
+    float item_depth=32767.5f*(1+frame.projection[10]-frame.projection[14]/8);
+    assert(background->depth&&control->depth&&background->depth_mask==GU_TRUE&&control->depth_mask==GU_TRUE);
+    assert(background->sprite[0].z<item_depth&&control->sprite[0].z>item_depth);
+    assert(background->sprite[0].z>0&&control->sprite[0].z<65535);
+    assert(ui_depth_count==2);
+    for(size_t i=0;i<ui_depth_count;++i){
+        const Submission *z=&ui_depth_submissions[i];
+        assert(z->depth&&z->depth_mask==GU_FALSE&&z->alpha&&z->alpha_function==GU_EQUAL&&z->alpha_reference==255&&z->color_mask==~0u);
+    }
+    /* Blue first, then model, then a farther black panel: opaque UI must
+       write Z before the model pass, while translucent UI writes no Z. */
+    reset_frame();overlays[0]=(RecvxBootDraw){.depth=31,.color_gradient=1,
+        .points={{60,128},{60,312},{412,312},{412,128}},
+        .vertex_color={0xff000030,0xff000030,0xff000030,0xff000030}};
+    overlay_count=1;recvxGameBootPresent();
+    assert(ui_depth_count==1&&ui_depth_submissions[0].sprite[0].z>0);
+    float blue_depth=ui_depth_submissions[0].sprite[0].z;
+    frame.vertex_count=3;frame.batch_count=1;consumed=0;overlay_count=0;
+    frame.projection[10]=-100.0f/98;frame.projection[14]=-198.0f/98;
+    batches[0]=(RecvxBootRenderBatch){.count=3,.attributes=0x18,.blend_source=8,.blend_destination=6};
+    recvxGameBootPresent();
+    frame.vertex_count=frame.batch_count=0;consumed=0;
+    overlays[0]=(RecvxBootDraw){.depth=132,.color=0xff000000};overlay_count=1;
+    recvxGameBootPresent();
+    assert(submissions[2].sprite[0].z<blue_depth&&blue_depth<item_depth);
+
+    reset_frame();overlays[0]=(RecvxBootDraw){.depth=21,.color=~0u};overlay_count=1;
+    recvxGameBootPresent();assert(submissions[0].depth&&submissions[0].sprite[0].z>0);
+    reset_frame();
+    overlays[0]=(RecvxBootDraw){.depth=-1000,.color=0xc0000000};
+    overlays[1]=(RecvxBootDraw){.depth=65535,.color=~0u};overlay_count=2;
+    recvxGameBootPresent();
+    assert(submission_count==2&&submissions[0].sprite[0].z==0&&submissions[1].sprite[0].z==0);
+    puts("PASS: signed title shadow depth, blue panel/model/late-background ordering, opaque-only UI depth writes and display reset");
 }
 
 static void empty_and_capacity(void)
@@ -438,7 +497,7 @@ static void shadow_protocol(void)
     assert(submissions[10].primitive==GU_TRIANGLES && submissions[10].target==scene_target &&
         submissions[10].depth && submissions[10].depth_mask==GU_FALSE && submissions[10].alpha && submissions[10].texture_format==GU_PSM_T8);
     assert(submissions[11].primitive==GU_SPRITES && submissions[11].target==scene_target &&
-        !submissions[11].depth && !submissions[11].alpha && submissions[11].operation==GU_ADD);
+        submissions[11].depth && !submissions[11].alpha && submissions[11].operation==GU_ADD);
     assert(draw_buffer_mode==GU_PSM_8888 && draw_address==scene_target && context_draw_address==scene_target);
     assert(depth_address==2u*512u*272u*4u && depth_stride==512);
     assert(mask_target+512u*512u*2u<=2u*1024u*1024u);
@@ -546,7 +605,7 @@ static void screen_gradient_triangles(void)
     assert(submissions[3].primitive==GU_TRIANGLES&&submissions[3].format==
         (GU_TEXTURE_32BITF|GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_3D));
     assert(submissions[3].depth&&submissions[3].depth_mask==GU_FALSE&&submissions[3].cull&&submissions[3].shade==GU_FLAT&&!submissions[3].fog);
-    assert(submissions[6].primitive==GU_SPRITES&&!submissions[6].depth&&!submissions[6].alpha&&!submissions[6].fog&&
+    assert(submissions[6].primitive==GU_SPRITES&&submissions[6].depth&&!submissions[6].alpha&&!submissions[6].fog&&
         submissions[6].blend&&submissions[6].operation==GU_ADD&&submissions[6].wrap_u==GU_CLAMP&&submissions[6].wrap_v==GU_CLAMP);
     for(unsigned int i=2;i<=5;i+=3){
         const Submission *depth=&submissions[i],*color=&submissions[i-1];
@@ -582,7 +641,7 @@ static void gradient_overlays(void)
     assert(submission_count==2 && consumed);
     const Submission *gradient=&submissions[0], *fade=&submissions[1];
     assert(gradient->primitive==GU_TRIANGLES && gradient->count==6 && !gradient->textured);
-    assert(gradient->shade==GU_SMOOTH && !gradient->depth && !gradient->alpha && !gradient->cull);
+    assert(gradient->shade==GU_SMOOTH && gradient->depth && !gradient->alpha && !gradient->cull);
     assert(gradient->blend && gradient->source==GU_SRC_ALPHA && gradient->destination==GU_ONE_MINUS_SRC_ALPHA);
     static const unsigned int order[6]={0,1,2,0,2,3};
     for(unsigned int i=0;i<6;++i) {
@@ -590,7 +649,7 @@ static void gradient_overlays(void)
         assert(gradient->sprite[i].color==((color&0xff00ff00u)|((color>>16)&255u)|((color&255u)<<16)));
         assert(gradient->sprite[i].x==overlays[0].points[corner].x*0.75f);
         assert(gradient->sprite[i].y==overlays[0].points[corner].y*(272.0f/480));
-        assert(gradient->sprite[i].z==0);
+        assert(gradient->sprite[i].z==65534);
     }
     assert(fade->primitive==GU_SPRITES && fade->sprite[0].color==0x80000000);
     assert(gradient->at<fade->at && fade->at<finish_at && sync_at<consume_at);
@@ -645,7 +704,7 @@ int main(void)
     recvxGameBootDisplaySwap(); assert(swaps==1 && context_draw_address==512u*272u*4u);
     shadow_protocol(); /* Offscreen switches must preserve the swapped scene target. */
     recvxGameBootDisplaySwap(); assert(swaps==2 && context_draw_address==0);
-    shadow_protocol(); gradient_overlays(); movie_display(); empty_and_capacity();
+    shadow_protocol(); gradient_overlays(); inventory_preview_layers(); movie_display(); empty_and_capacity();
     reset_frame(); capture_active=1;
     frame.vertex_count=3;frame.batch_count=1;
     texture.rgba8888=1;texture.capture_scale_u=480.0f/512;texture.capture_scale_v=272.0f/480;

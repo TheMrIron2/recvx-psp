@@ -104,8 +104,9 @@ void PlayAdx(unsigned int slot, unsigned int partition, unsigned int file)
 void PlayAdxEx(unsigned int slot, unsigned int partition, unsigned int file, int pause)
 { PlayAdx(slot, partition, file); if (pause) recvxAudioPause(slot, 1); }
 int GetAdxStatus(unsigned int slot) { return recvxAudioStatus(slot) ? 3 : 5; }
-int CheckPlayEndAdx(int slot) { return !recvxAudioStatus((unsigned int)slot); }
-int GetTimeAdx(int slot) { return (int)recvxAudioTime((unsigned int)slot); }
+/* Retail returns AdxPlayFlag: scripts wait while a stream is playing. */
+int CheckPlayEndAdx(int slot) { return recvxAudioStatus((unsigned int)slot); }
+int GetTimeAdx(int slot) { return (int)(recvxAudioTime((unsigned int)slot) / 10); }
 void PlayBgmEx2(unsigned int partition, int bgm, int fade, int volume)
 {
     if (sys->ss_flg & 0x4000000) return;
@@ -145,20 +146,11 @@ static void se(int slot, int sound, int volume, int pan)
 { recvxAudioPlaySe(slot, sound, volume, pan); check(); }
 static void spatial(const NJS_POINT3 *position, int field, int *volume, int *pan)
 {
-    float x, y, z;
-    unsigned int angle, index;
-    int distance;
-    *volume = recvxAudioEnvironment((unsigned int)field); *pan = 0;
-    if (!position || (sys->gm_flg & 0x01000000)) { *volume = 0; return; }
-    x = position->x - cam.wpx; y = position->y - cam.wpy; z = position->z - cam.wpz;
-    distance = (int)sqrtf(x*x + y*y + z*z);
-    if (distance > 509) distance = 509;
-    angle = (unsigned int)(cam.ay + (int)(10430.381f * atan2f(x, z))) & 65535u;
-    index = (unsigned int)(0.005493164f * angle / 5.0f);
-    /* Original tables cover 68 bins; bound rear-angle lookups. */
-    if (index >= 68) index = 67;
-    *pan = PanTbl360[index];
-    *volume += ThreeDVolTbl[distance] + PanTbl360Vol[index] - recvxAudioEnvironment(9) / 12;
+    if (!position || (sys->gm_flg & 0x01000000)) {
+        *volume = 0; *pan = 0; return;
+    }
+    original_spatial(position, 1, volume, pan);
+    *volume += recvxAudioEnvironment((unsigned int)field);
 }
 static void original_spatial(const NJS_POINT3 *position, int room_fx, int *volume, int *pan)
 {

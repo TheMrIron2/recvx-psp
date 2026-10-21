@@ -11,7 +11,8 @@
 
 #define SHADOW_OFFSET (5u * 512u * 272u * 2u)
 static void *scene_buffer;
-static int frame_drawn;
+static int frame_drawn, model_depth_drawn;
+static float model_depth_a, model_depth_b;
 static RecvxBootGuStats gu_stats;
 RecvxBootGuStats recvxGameBootGuStats(void){return gu_stats;}
 static unsigned int microseconds(void)
@@ -57,15 +58,28 @@ int recvxGameBootDisplayInit(void)
 }
 
 static void sprite(float x1, float y1, float x2, float y2,
-                   float u1, float v1, float u2, float v2, unsigned int color)
+                   float u1, float v1, float u2, float v2, unsigned int color, float depth)
 {
     Vertex *v = sceGuGetMemory(2 * sizeof(*v));
-    v[0] = (Vertex){u1, v1, abgr(color), x1 * 0.75f, y1 * (272.0f / 480), 0};
-    v[1] = (Vertex){u2, v2, abgr(color), x2 * 0.75f, y2 * (272.0f / 480), 0};
+    v[0] = (Vertex){u1, v1, abgr(color), x1 * 0.75f, y1 * (272.0f / 480), depth};
+    v[1] = (Vertex){u2, v2, abgr(color), x2 * 0.75f, y2 * (272.0f / 480), depth};
     sceGuDrawArray(GU_SPRITES, GU_TEXTURE_32BITF | GU_COLOR_8888 |
         GU_VERTEX_32BITF | GU_TRANSFORM_2D, 2, NULL, v);
 }
 
+/* UI priorities are view-space distances. Opaque UI and models share this
+   reversed GE depth across ordering-table flushes. */
+static float overlay_depth(float distance)
+{
+
+    if (!isfinite(distance))
+        recvxGameBootUnsupported("invalid UI overlay depth");
+    if (!distance) return 65534;
+    /* The title's pulsing plate starts at reciprocal Z zero; its shadow
+       subtracts .001 and legitimately produces a signed distance. Map it
+       through the same projection and clamp the result to the GE range. */
+    return fmaxf(0, fminf(65534, 32767.5f * (1 + model_depth_a - model_depth_b / distance)));
+}
 static void gradient_polygon(const RecvxBootDraw *draw)
 {
     static const unsigned int order[6] = {0, 1, 2, 0, 2, 3};
@@ -73,7 +87,7 @@ static void gradient_polygon(const RecvxBootDraw *draw)
     for (unsigned int i = 0; i < 6; ++i) {
         unsigned int corner = order[i];
         vertices[i] = (Vertex){draw->uv[corner].x, draw->uv[corner].y, abgr(draw->vertex_color[corner]),
-            draw->points[corner].x * 0.75f, draw->points[corner].y * (272.0f / 480), 0};
+            draw->points[corner].x * 0.75f, draw->points[corner].y * (272.0f / 480), overlay_depth(draw->depth)};
     }
     sceGuShadeModel(GU_SMOOTH);
     sceGuDrawArray(GU_TRIANGLES, GU_TEXTURE_32BITF | GU_COLOR_8888 |
@@ -147,6 +161,9 @@ static void shadow(const RecvxBootRenderFrame *frame, const RecvxBootRenderBatch
 static void models(const RecvxBootRenderFrame *frame)
 {
     if (!frame->vertex_count) return;
+    model_depth_drawn = 1;
+    model_depth_a = frame->projection[10];
+    model_depth_b = frame->projection[14];
     sceGumMatrixMode(GU_PROJECTION);
     sceGumLoadMatrix((const ScePspFMatrix4 *)frame->projection);
     sceGumMatrixMode(GU_VIEW); sceGumLoadIdentity();
@@ -266,59 +283,82 @@ void recvxGameBootPresent(void)
     size_t count, i;
     const RecvxBootDraw *draws = recvxGameBootDraws(&count);
     const RecvxBootRenderFrame *frame = recvxGameBootRenderFrame();
-    if (65536u + frame->batch_count * 512u + count * 512u > sizeof(display_list))
+    if (65536u + frame->batch_count * 512u + count * 1024u > sizeof(display_list))
         recvxGameBootUnsupported("original GU command list exceeds capacity");
     sceKernelDcacheWritebackAll();
     sceGuStart(GU_DIRECT, display_list);
     sceGuClearColor(frame->vertex_count ? abgr(recvxEngineOriginalViewBackgroundColor()) : 0xff000000);
     sceGuClearDepth(0);
-    if (!frame_drawn || recvxGameBootCaptureActive()) sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+    if (!frame_drawn || recvxGameBootCaptureActive()) {
+        sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+        model_depth_drawn = 0;
+    }
     frame_drawn = 1;
     const uint32_t *video = recvxGameBootMovieGetFrame();
     if (video) movie_frame(video);
     else models(frame);
     sceGuScissor(0, 0, 480, 272);
+    if (!model_depth_drawn) {
+        float near, far;
+        recvxEngineOriginalViewClipPlanes(&near, &far);
+        near=-near;far=-far;
+        if (!isfinite(near)||!isfinite(far)||near<=0||far<=near)
+            recvxGameBootUnsupported("invalid UI depth projection");
+        model_depth_a=-(far+near)/(far-near);
+        model_depth_b=-2*far*near/(far-near);
+        model_depth_drawn=1;
+    }
+    sceGuEnable(GU_DEPTH_TEST);
+    sceGuDepthMask(GU_TRUE);
     sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
     sceGuTexWrap(GU_CLAMP, GU_CLAMP);
     sceGuTexScale(1, 1); sceGuTexOffset(0, 0);
-    for (i = 0; i < count; ++i) {
-        const RecvxBootDraw *d = &draws[i];
-        const QUAD *q = &d->quad;
-        const RecvxBootTexture *t = d->texture;
-        if (!t) {
-            sceGuDisable(GU_TEXTURE_2D);
-            if (d->color_gradient) gradient_polygon(d);
-            else sprite(q->x1, q->y1, q->x2, q->y2, 0, 0, 0, 0, d->color);
-        } else {
-            unsigned int tile;
-            float u1 = q->u1 * t->width, u2 = q->u2 * t->width;
-            float v1 = q->v1 * t->height, v2 = q->v2 * t->height;
-            sceGuEnable(GU_TEXTURE_2D); sceGuTexMode(t->rgba8888?GU_PSM_8888:GU_PSM_T8, 0, 0, !t->rgba8888);
-            sceGuTexFunc(GU_TFX_MODULATE,t->rgba8888?GU_TCC_RGB:GU_TCC_RGBA);
-            sceGuTexScale(t->rgba8888?t->capture_scale_u:1,t->rgba8888?t->capture_scale_v:1);
-            if(!t->rgba8888){sceGuClutMode(GU_PSM_8888, 0, 255, 0); sceGuClutLoad(32, t->palette);}
-            sceGuTexFilter(d->filter ? GU_LINEAR : GU_NEAREST, d->filter ? GU_LINEAR : GU_NEAREST);
-            if (d->color_gradient) {
-                if (t->tile_count != 1) recvxGameBootUnsupported("tiled rotated UI sprite is not ported");
-                sceGuTexImage(0,t->width,t->height,t->tile_width,t->pixels);
-                gradient_polygon(d);
-                continue;
-            }
-            /* PSP textures stop at 512 pixels. Split the original 1024-wide
-               artwork at the tile boundary, preserving authored screen UVs. */
-            for (tile = 0; tile < t->tile_count; ++tile) {
-                float left = tile * t->tile_width, right = left + t->tile_width;
-                float a = fmaxf(u1, left), b = fminf(u2, right);
-                float x1, x2;
-                if (b <= a || u2 <= u1) continue;
-                x1 = q->x1 + (q->x2 - q->x1) * (a - u1) / (u2 - u1);
-                x2 = q->x1 + (q->x2 - q->x1) * (b - u1) / (u2 - u1);
-                sceGuTexImage(0, t->tile_width, t->height, t->tile_width,
-                    t->pixels + tile * t->tile_width * t->height);
-                sprite(x1, q->y1, x2, q->y2, a - left, v1, b - left, v2, d->color);
+    /* Retail alpha-fail FB_ONLY writes color for translucent pixels and
+       depth only for opaque pixels. The second pass masks color writes. */
+    for (unsigned int pass=0;pass<2;++pass) {
+        sceGuDepthMask(pass ? GU_FALSE : GU_TRUE);
+        if(pass){sceGuEnable(GU_ALPHA_TEST);sceGuAlphaFunc(GU_EQUAL,255,255);sceGuPixelMask(0xffffffffu);}
+        else {sceGuDisable(GU_ALPHA_TEST);sceGuPixelMask(0);}
+        for (i = 0; i < count; ++i) {
+            const RecvxBootDraw *d = &draws[i];
+            const QUAD *q = &d->quad;
+            const RecvxBootTexture *t = d->texture;
+            if (!t) {
+                sceGuDisable(GU_TEXTURE_2D);
+                if (d->color_gradient) gradient_polygon(d);
+                else sprite(q->x1, q->y1, q->x2, q->y2, 0, 0, 0, 0, d->color, overlay_depth(d->depth));
+            } else {
+                unsigned int tile;
+                float u1 = q->u1 * t->width, u2 = q->u2 * t->width;
+                float v1 = q->v1 * t->height, v2 = q->v2 * t->height;
+                sceGuEnable(GU_TEXTURE_2D); sceGuTexMode(t->rgba8888?GU_PSM_8888:GU_PSM_T8, 0, 0, !t->rgba8888);
+                sceGuTexFunc(GU_TFX_MODULATE,t->rgba8888?GU_TCC_RGB:GU_TCC_RGBA);
+                sceGuTexScale(t->rgba8888?t->capture_scale_u:1,t->rgba8888?t->capture_scale_v:1);
+                if(!t->rgba8888){sceGuClutMode(GU_PSM_8888, 0, 255, 0); sceGuClutLoad(32, t->palette);}
+                sceGuTexFilter(d->filter ? GU_LINEAR : GU_NEAREST, d->filter ? GU_LINEAR : GU_NEAREST);
+                if (d->color_gradient) {
+                    if (t->tile_count != 1) recvxGameBootUnsupported("tiled rotated UI sprite is not ported");
+                    sceGuTexImage(0,t->width,t->height,t->tile_width,t->pixels);
+                    gradient_polygon(d);
+                    continue;
+                }
+                /* PSP textures stop at 512 pixels. Split the original 1024-wide
+                   artwork at the tile boundary, preserving authored screen UVs. */
+                for (tile = 0; tile < t->tile_count; ++tile) {
+                    float left = tile * t->tile_width, right = left + t->tile_width;
+                    float a = fmaxf(u1, left), b = fminf(u2, right);
+                    float x1, x2;
+                    if (b <= a || u2 <= u1) continue;
+                    x1 = q->x1 + (q->x2 - q->x1) * (a - u1) / (u2 - u1);
+                    x2 = q->x1 + (q->x2 - q->x1) * (b - u1) / (u2 - u1);
+                    sceGuTexImage(0, t->tile_width, t->height, t->tile_width,
+                        t->pixels + tile * t->tile_width * t->height);
+                    sprite(x1, q->y1, x2, q->y2, a - left, v1, b - left, v2, d->color, overlay_depth(d->depth));
+                }
             }
         }
     }
+    sceGuPixelMask(0);sceGuDisable(GU_ALPHA_TEST);sceGuDepthMask(GU_FALSE);
     sceGuFinish();
     unsigned int submitted=microseconds();
     sceGuSync(0,0);
@@ -327,7 +367,7 @@ void recvxGameBootPresent(void)
     recvxGameBootMovieFrameConsumed();
     recvxGameBootRenderConsume();
 }
-void recvxGameBootDisplayBeginFrame(void) { frame_drawn = 0; }
+void recvxGameBootDisplayBeginFrame(void) { frame_drawn = model_depth_drawn = 0; }
 void recvxGameBootDisplaySwap(void) { scene_buffer = sceGuSwapBuffers(); recvxGameBootDisplayBeginFrame(); }
 void recvxGameBootDisplayShutdown(void) { sceGuTerm(); }
 

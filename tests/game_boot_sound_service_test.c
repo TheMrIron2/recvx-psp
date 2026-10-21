@@ -10,6 +10,8 @@
 #include "ps2/veronica/prog/sdfunc.h"
 
 static SYS_WORK work;
+static BH_PWORK player;
+BH_PWORK *plp = &player;
 SYS_WORK *sys = &work;
 CAM_WORK cam;
 int PatId[4] = {0, 1, 2, 3};
@@ -35,6 +37,12 @@ const char *recvxAudioFault(void) { return NULL; }
 int recvxAudioNativeError(void) { return 0; }
 const char *recvxAudioNativeErrorCall(void) { return NULL; }
 int recvxAudioEnvironment(unsigned int field) { return field == 9 ? 24 : -(int)field - 10; }
+static int se_starts, se_slot, se_volume, se_pan;
+int recvxAudioPlaySe(int slot, int sound, int volume, int pan)
+{ se_slot=slot; sound_seen=sound; se_volume=volume; se_pan=pan; ++se_starts; return 1; }
+void recvxAudioUpdateSe(int slot, int volume, int pan, int pitch)
+{ assert(slot==se_slot&&volume==se_volume&&pan==se_pan); (void)pitch; }
+unsigned int recvxAudioTime(unsigned int slot) { assert(slot==1); return 2345; }
 int recvxAudioPlayMidiFade(int slot, int sound, int volume, int pan, int frames)
 {
     slot_seen = slot; sound_seen = sound; volume_seen = volume; pan_seen = pan;
@@ -65,6 +73,17 @@ int main(void)
     for (int i = 0; i < 68; ++i) { PanTbl360[i] = (char)(i - 34); PanTbl360Vol[i] = -3; }
     ThreeDVolTbl[10] = -20;
     NJS_POINT3 p = {10, 0, 0};
+    /* The listener-to-emitter direction must match voices/event sounds.
+       A camera looking at an actor must not treat it as behind the listener. */
+    player.px=10;
+    CallPlayerFootStepSe(0,0,1);
+    assert(se_starts==1&&se_slot==12&&sound_seen==0x200&&se_pan==20&&se_volume==-36);
+    CallPlayerFootStepSeEx(4,1,1,2,&p);
+    assert(se_starts==2&&se_slot==16&&sound_seen==0x204&&se_pan==20&&se_volume==-36);
+    CallPlayerVoice(0x400);
+    assert(se_slot==7&&sound_seen==0x400&&se_pan==20&&se_volume==-35);
+    assert(!CheckPlayEndAdx(1)&&GetTimeAdx(1)==234);
+
     assert(CallNativeEventSe(0, &p, 0x123, 0) == 0);
     assert(slot_seen == 7 && sound_seen == 0x223 && pan_seen == 20 && volume_seen == -25);
     assert(CallNativeEventSe(4, &p, 0x456, 1) == 0);
@@ -89,6 +108,11 @@ int main(void)
 
     PlayVoiceEx2(1, 19, &p, 0, 50, 0);
     assert(partition_seen == 1 && sound_seen == 19 && pan_seen == 20 && volume_seen == -23 && fade_seen == 0);
+    assert(CheckPlayEndAdx(1)==1); /* Retail AdxPlayFlag, not its inverse. */
+    StopVoice(0); assert(!CheckPlayEndAdx(1));
+    adx_stops=0;
+    PlayVoiceEx2(1,19,&p,0,0,0);
+
     before = adx_starts;
     PlayVoiceEx2(1, 20, &p, 1, 60, 1);
     assert(adx_starts == before + 1 && adx_stops == 1 && pan_seen == 0 && volume_seen == 0 && fade_seen == 60);

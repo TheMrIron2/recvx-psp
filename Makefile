@@ -1623,3 +1623,11 @@ $(HOST_ENEMY_SOURCES): build/host/enemy/%.c: tools/extract_original_enemies.py t
 	python3 $< $* $@
 $(BUILD_DIR)/enemy/%.o: $(BUILD_DIR)/enemy/%.c include/psp/game_boot_enemy.h Makefile
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Wno-error -c $< -o $@
+
+.PHONY: game-boot-event-remaining-test
+game-boot-event-remaining-test: build/host/game-boot-event-remaining-test
+	ASAN_OPTIONS=detect_leaks=0 $<
+build/host/game-boot-event-remaining-test: tests/game_boot_event_remaining_test.c src/psp/game_boot_event_remaining.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
+	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_GAME_BOOT_HOST_TEST \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
+		-ffunction-sections -fdata-sections $(filter %.c,$^) -Wl,--gc-sections -lm -o $@

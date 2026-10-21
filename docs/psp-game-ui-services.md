@@ -486,3 +486,130 @@ child lifetime propagation, one-shot and periodic emission, full-pool allocation
 failure and moving-emitter restoration. The existing owned fixture textures exercise
 the sprite submission path; visual verification with these effects' actual room
 atlases still requires the relevant scenes and PSP hardware.
+
+## Linked eye/drop effects and debris 145, 147–154
+
+Callbacks 145, 147–154 now run with the original eye-spawn helper and effect 146,
+custom sprite drawing and effect 264's native particle submission. The eye helper
+checks allocation success before indexing the pool; the reconstructed OR test
+could otherwise write to `eff[-1]`. UV frame/pointer selectors and manual render
+queue writes are bounded. The fire sprite retains its wake/grow/hold/fade/reset
+phases and spawns the original 16-particle fire-spark effect.
+
+Regression fixtures cover eye color/fade and pool exhaustion, full/hidden queues,
+drop gravity/reset, custom fire drawing and spark-context release, debris variant
+switching, all twelve impact frames at three alpha levels, phased line emission
+and alternating spark bursts. These paths are also included in the full-game
+native regression.
+
+## Sony compact sequence loop controllers
+
+The stairs-room sequence parser now implements CC 99 (loop start/end selection),
+CC 6 (loop number) and CC 38 (repeat count) instead of stopping on these controller
+messages. The controller identities and zero-count continuous loop convention
+are documented in [VGMTrans's Sony PS2 reader](https://github.com/vgmtrans/vgmtrans/blob/master/src/main/formats/SonyPS2/SonyPS2Seq.cpp).
+Each sequence owns its loop markers. Jumps restore the stream position, running
+status and compressed immediate/delta state. New playback starts with fresh loop
+state; stopping or replacing a sequence prevents further loop events. Invalid
+commands, missing markers and zero-time infinite loops produce bounded faults.
+Unsupported-controller diagnostics now include the controller/value, slot, channel
+and stream position.
+
+The native SAS adapter regression plays bank key 0x14, sequence 0x203 beyond the
+first loop and after stop/restart. Isolated fixture packs verify numbered loops
+on channel 3 with loop ID 127, finite and continuous playback, immediate timing,
+invalid loop markers and the existing event watchdog. Compressed sample playback
+still uses the production SAS adapter; no software ADPCM decoder was added.
+
+## Shared actor model work during drawing
+
+The draw guard accepts model descriptors in any registered player, enemy, effect,
+object or item model table, in addition to the shared effect-model table. The
+original linked-zombie and fragment controllers borrow their parent's `mdl`
+entries; requiring every actor to point into its own table incorrectly stopped
+room 0/2 after the stairs transition. Model-pointer alignment, object counts and
+owned node/pose spans are still checked before drawing. Rejections log the actor,
+model pointer, ownership result, node count and pose pointers for diagnosis.
+
+Focused draw tests cover parent/child sharing, enemy-model fragments, player and
+object/item model reuse, and malformed pointers/counts/spans. The real RM_0020
+zombie fixture now initializes the normal camera pass and draws enemies and
+linked objects after their scheduler updates.
+
+## In-game sound levels and dialogue waits
+
+The native sound bridge now uses the original listener-to-emitter direction for
+player, footstep, weapon and enemy sounds. The former reversed vector applied
+rear attenuation to sounds in front of the camera. Sound-bank gain follows the
+linear Sony level used by `sdShotSetVol` / `sdMidiSetVol`; compressed music and
+dialogue use the separate `adxwrap.c::AdxVolTbl` curve. Opening music entry 114 at
+script volume -45 now receives -14.2 dB attenuation instead of -22.5 dB.
+Footstep spatial updates retain the sample/program gain instead of replacing it.
+
+`CheckPlayEndAdx` returns the retail playback flag (one while playing), and
+`GetTimeAdx` reports hundredths of a second as `GetAdxPlayTime` originally did.
+The previous inverted flag could release scenario waits before dialogue ended.
+Focused tests cover both playback states, clock units, positioned footsteps,
+player voices, exact native music/dialogue gain and music fade-in after muting.
+The full native game regression passes through the opening scenario. Audible
+mix balance still requires listening on PSP hardware; all runtime sample
+playback remains native SAS ADPCM.
+
+## Zombie companion checks in scenario commands
+
+Opcode 142 (`bhZombieUpDieCk`) reads the linked zombie actor's flags through
+`exp1`. That actor is allocated in the global `ene[128]` pool by
+`bhEne01_SetLinkEnemy`, outside the room arena. Its guard now accepts exact
+actor entries in that registered pool, along with complete owned actor records.
+The same correction covers motion-pause opcodes 45 and 48. Null, interior,
+out-of-pool and truncated pointers still stop before the original dereference.
+
+The focused event-remaining sanitizer test covers all 128 pool entries and the
+invalid-pointer cases. The real stairs-room fixture invokes the original
+opcode 142 handler with both companion flag states and checks the room flag,
+then invokes both motion-pause handlers and checks parent/child state updates.
+
+## Inventory 3D preview composition
+
+The inventory submits its item model between separate ordering-table flushes,
+then submits the remaining menu panels and controls. The GU adapter previously
+disabled depth testing for every later 2D draw, allowing those panels to paint
+over a correctly loaded and drawn item. It now preserves the model projection's
+depth mapping across flushes and converts each UI priority to the corresponding
+reversed GE depth. Panels behind the item fail its depth test; foreground
+controls still pass. Opaque UI pixels write depth; translucent pixels only
+write color. A new display frame resets
+this composition state, preserving the existing path for screens without 3D.
+
+The production GU adapter test checks model/background/control depth ordering
+across separate submissions and reset on the next display frame. The native
+inventory regression now services the original item-read monitor, opens the
+lighter context, reads ITEM1 entry 54, and verifies textured geometry, nonzero
+alpha, projected visible bounds and the preview scissor before closing and
+restoring the room textures and palette. Hardware appearance remains to be
+verified on PSP.
+
+## Native bank envelopes, blue-panel retention and title shadow depth
+
+Sony sample volume is byte 16, with ADSR1/2 at bytes 18/20, as recorded by
+[VGMTrans's Sony PS2 instrument reader](https://github.com/vgmtrans/vgmtrans/blob/master/src/main/formats/SonyPS2/SonyPS2InstrSet.cpp).
+The bridge previously read velocity-high as volume and read both ADSR words
+one byte late. COMMON menu samples and the five floor sounds actually use
+`80ff/5fe6`; the old shifted `e680/005f` gives SAS an extremely slow attack.
+The production adapter tests now check all eleven COMMON programs and five
+floor programs, native envelope words, nonzero volume and unpaused key-on.
+ADPCM remains compressed and is played by native SAS.
+
+The blue inventory panel is submitted before the item model, with farther
+menu artwork submitted afterward. The GU adapter now establishes the UI depth
+projection before the first model and uses a color pass followed by an
+opaque-only depth pass, retaining the original alpha-fail FB_ONLY behavior.
+This keeps both the opaque blue panel and the model above later far artwork,
+while translucent UI cannot hide models with depth writes. The command-list
+capacity estimate includes both passes.
+
+The title's pulsing plate calls its shadow at reciprocal Z minus .001, which
+can legitimately be negative at the start of its fade. Finite signed overlay
+distances now pass through the projection and clamp to the GE depth range;
+non-finite values still stop. GU regressions cover signed title shadows,
+blue-panel/model/far-panel ordering and opaque-only alpha/depth state.

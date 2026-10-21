@@ -33,6 +33,7 @@ static unsigned int multi, easy, simple, simple_multi, fog;
 static jmp_buf failure;
 static const char *fault;
 static int expecting_fault;
+void recvxGameBootLog(const char *format,...) { (void)format; }
 void recvxGameBootUnsupported(const char *name)
 { if(!expecting_fault){fprintf(stderr,"Unexpected draw fault: %s\n",name);assert(!"unexpected draw fault");}
   fault=name; longjmp(failure,1); }
@@ -79,7 +80,6 @@ void npCalcMorphing(NJS_CNK_OBJECT *a,NJS_CNK_OBJECT *b,float rate,int n)
 { (void)a;(void)b;(void)rate;(void)n;recvxGameBootUnsupported("npCalcMorphing"); }
 unsigned int npGetMatColor(NJS_CNK_OBJECT *object,int n) { (void)object;(void)n;recvxGameBootUnsupported("npGetMatColor"); }
 void njDrawModel(NJS_MODEL *model) { (void)model;recvxGameBootUnsupported("njDrawModel"); }
-void njMirror(NJS_MATRIX *matrix,NJS_PLANE *plane) { (void)matrix;(void)plane;recvxGameBootUnsupported("njMirror"); }
 #define REJECT(call,message) do { fault=NULL;expecting_fault=1; if (!setjmp(failure)) {call;assert(!"expected draw fault");} \
     expecting_fault=0;assert(fault && strcmp(fault,message)==0); } while(0)
 
@@ -132,6 +132,20 @@ int main(void)
     plp->draw_tp=3;bhPutModel(plp);assert(simple==1);
     setup();sys->efm[2]=plp->mdl[0];eff[0].mlwP=&sys->efm[2];
     bhPutModel((BH_PWORK *)&eff[0]);assert(count==1 && events[0]==70);
+    /* Original linked body/fragment controllers borrow their parent's work. */
+    setup();ene[1].flg=1;ene[1].mlwP=ene[0].mdl;ene[1].mdflg=0x21;
+    memset(ene[1].clp_jno,-1,sizeof(ene[1].clp_jno));sys->ewk_n=2;
+    bhDrawEnemy();assert(count==1&&events[0]==60);
+    setup();ene[0].mdl[3]=ene[0].mdl[0];plp->mlwP=&ene[0].mdl[3];
+    bhPutModel(plp);assert(count==1&&events[0]==60);
+    setup();eff[0].mlwP=ene[0].mdl;
+    bhPutModel((BH_PWORK *)&eff[0]);assert(count==1&&events[0]==60);
+    setup();ene[0].mlwP=plp->mdl;
+    bhPutModel(&ene[0]);assert(count==1&&events[0]==70);
+    setup();plp->mlwP=sys->obwp->mdl;
+    bhPutModel(plp);assert(count==1&&events[0]==40);
+    setup();plp->mlwP=sys->itwp->mdl;
+    bhPutModel(plp);assert(count==1&&events[0]==50);
     setup();plp->mlwP->objP->evalflags=8;bhPutModel(plp);assert(count==0);
     setup();sys->st_flg=2;sys->obwp->mdflg=0x10;bhDrawObject(sys->obwp);assert(!fog && count==1);
     setup();plp->skp[0]=(int *)(arena+40000);
@@ -144,6 +158,14 @@ int main(void)
     setup();plp->clp_jno[0]=1;REJECT(bhCheckClipModel(plp),"invalid original model clip joint");
     setup();plp->draw_tp=4;REJECT(bhPutModel(plp),"invalid original model draw selector");
     setup();plp->mlwP=(ML_WORK *)1;REJECT(bhPutModel(plp),"invalid original draw model work");
+    setup();plp->mlwP=(ML_WORK *)((unsigned char *)ene[0].mdl+1);
+    REJECT(bhPutModel(plp),"invalid original draw model work");
+    setup();plp->mlwP=(ML_WORK *)(arena+50000);*plp->mlwP=ene[0].mdl[0];
+    REJECT(bhPutModel(plp),"invalid original draw model work");
+    setup();plp->mlwP=ene[0].mdl;plp->mlwP->obj_num=513;
+    REJECT(bhPutModel(plp),"invalid original draw model work");
+    setup();plp->mlwP=ene[0].mdl;plp->mlwP->owP=(O_WORK *)(sys->endp-4);
+    REJECT(bhPutModel(plp),"invalid original draw model work");
     puts("original full-game draw order, visibility, draw modes and named boundaries pass");
     return 0;
 }

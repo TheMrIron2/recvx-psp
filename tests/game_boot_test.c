@@ -1,4 +1,5 @@
 #include "ps2/veronica/prog/MdlPut.h"
+#include "ps2/veronica/prog/camera.h"
 #define PT_WORK RecvxDoorParameterRecord
 #include "ps2/veronica/prog/door.h"
 #undef PT_WORK
@@ -75,6 +76,7 @@ extern RecvxLiveTaskProc bhSysTaskJumpTab[23];
 extern unsigned char NowLoadDisp;
 static unsigned int presentations, textured_frames, game_frames, movie_presentations;
 static unsigned int audio_samples_due;
+static unsigned int inventory_model_frames, inventory_visible_vertices;
 static int capture;
 static const char *capture_path;
 static int loading_captured;
@@ -127,6 +129,40 @@ void recvxGameBootPresent(void)
             total += draw->count;
         }
         assert(total == scene->vertex_count);
+        if((sys->ts_flg&0x80)&&(swork.statusflg&0x10)){
+            ++inventory_model_frames;
+            if(inventory_model_frames==1){
+                float xmin=1e9f,xmax=-1e9f,ymin=1e9f,ymax=-1e9f;
+                unsigned int opaque=0;
+                for(size_t v=0;v<scene->vertex_count;++v){
+                    const RecvxBootRenderVertex *p=&scene->vertices[v];
+                    float w=-p->z;
+                    if(w>0){
+                        float x=(scene->projection[0]*p->x+scene->projection[8]*p->z)/w;
+                        float y=(scene->projection[5]*p->y+scene->projection[9]*p->z)/w;
+                        x=240*(1+x);y=136*(1-y);
+                        xmin=fminf(xmin,x);xmax=fmaxf(xmax,x);ymin=fminf(ymin,y);ymax=fmaxf(ymax,y);
+                    }
+                    if(p->color>>24)++opaque;
+                }
+                const RecvxBootRenderBatch *b=&scene->batches[0];
+                unsigned int palette_alpha=0;
+                if(b->texture)for(unsigned int c=0;c<256;++c)if(b->texture->palette[c]>>24)++palette_alpha;
+                fprintf(stderr,"Preview geometry: bbox=%g,%g..%g,%g scissor=%d,%d..%d,%d alpha=%u palette=%u\n",
+                    xmin,ymin,xmax,ymax,b->scissor[0],b->scissor[1],b->scissor[2],b->scissor[3],opaque,palette_alpha);
+                assert(opaque&&xmax>b->scissor[0]&&xmin<b->scissor[2]&&ymax>b->scissor[1]&&ymin<b->scissor[3]);
+            }
+
+            for(size_t v=0;v<scene->vertex_count;++v){
+                const RecvxBootRenderVertex *p=&scene->vertices[v];
+                float w=-p->z;
+                float x=scene->projection[0]*p->x+scene->projection[8]*p->z;
+                float y=scene->projection[5]*p->y+scene->projection[9]*p->z;
+                float z=scene->projection[10]*p->z+scene->projection[14];
+                if(w>0&&fabsf(x)<w&&fabsf(y)<w&&fabsf(z)<w)++inventory_visible_vertices;
+            }
+        }
+
         if (!game_frames) fprintf(stderr, "Original opening room submitted: %u triangles (%u modifier), %u composites, %u batches\n",
             (unsigned int)triangles, (unsigned int)shadow_triangles, (unsigned int)composites,
             (unsigned int)scene->batch_count);
@@ -1237,6 +1273,46 @@ static void room_stream_task(void)
         assert(sys->ewk_n>rom->ene_n);
         for(int frame=0;frame<8;++frame){bhControlEnemy();recvxGameBootSoundTick();}
         assert(isfinite(ene[0].px)&&isfinite(ene[0].py)&&isfinite(ene[0].pz));
+        BH_PWORK *linked=(BH_PWORK *)ene[0].exp1;
+        assert(linked->mlwP==ene[0].mdl);
+        /* Opcode 142 checks the linked actor's live bit in the global pool,
+           rather than an arena-allocated zombie extension. */
+        extern unsigned int bhZombieUpDieCk(void);
+        extern unsigned int bhInitMotionPause(void);
+        extern unsigned int bhInitMotionPauseEx(void);
+        unsigned char damage_command[]={142,0,23,0};
+        unsigned char *saved_script=bhScePtr;
+        unsigned int saved_room_flags=sys->rm_flg,saved_link_flags=linked->flg;
+        sys->rm_flg=0x80000000u;linked->flg&=~2u;bhScePtr=damage_command;
+        assert(bhZombieUpDieCk()==1&&sys->rm_flg==0x80000000u&&bhScePtr==damage_command+4);
+        linked->flg|=2u;bhScePtr=damage_command;
+        assert(bhZombieUpDieCk()==1&&sys->rm_flg==(0x80000000u|(1u<<8)));
+        sys->rm_flg=saved_room_flags;linked->flg=saved_link_flags;
+        unsigned char pause_command[]={45,0,0,0};
+        unsigned char parent_mode=ene[0].mode0,parent_submode=ene[0].mode3;
+        unsigned char linked_mode=linked->mode0,linked_submode=linked->mode3;
+        int parent_frame=ene[0].frm_no,linked_frame=linked->frm_no;
+        unsigned int parent_motion=ene[0].mtn_no,linked_motion=linked->mtn_no;
+        MN_WORK *parent_motion_work=ene[0].mnwP;
+        bhScePtr=pause_command;assert(bhInitMotionPause()==1);
+        assert(ene[0].mode0==5&&ene[0].mode3==4&&linked->mode0==5&&linked->mode3==4);
+        pause_command[0]=48;bhScePtr=pause_command;assert(bhInitMotionPauseEx()==1);
+        assert(!ene[0].frm_no&&!linked->frm_no&&!ene[0].mtn_no&&!linked->mtn_no);
+        ene[0].mode0=parent_mode;ene[0].mode3=parent_submode;ene[0].frm_no=parent_frame;
+        ene[0].mtn_no=parent_motion;ene[0].mnwP=parent_motion_work;
+        linked->mode0=linked_mode;linked->mode3=linked_submode;
+        linked->frm_no=linked_frame;linked->mtn_no=linked_motion;bhScePtr=saved_script;
+
+        /* This fixture calls the enemy scheduler directly, so initialize the
+           camera pass normally run by the full gameplay frame before drawing. */
+        bhInitCamera();cam.px=ene[0].px;cam.py=ene[0].py+2;cam.pz=ene[0].pz+10;
+        bhControlCamera();
+        recvxGameBootRenderBeginFrame();bhDrawEnemy();bhDrawEneObject();
+        assert(!recvxEngineOriginalFault());
+        assert(recvxGameBootRenderFrame()->vertex_count>0);
+        /* This isolated actor pass has no room/modifier-shadow composition;
+           consume it before the full-frame presentation assertions resume. */
+        recvxGameBootRenderConsume();
         NJS_POINT3 sound_position={plp->px,plp->py,plp->pz};
         RequestEnemySe(0,&sound_position,0x2300);recvxGameBootSoundTick();
         assert(ChechPlayEnemySe(0,0x2300));
@@ -1561,7 +1637,7 @@ static void inventory_resource_task(void)
 
 static void inventory_transition_task(void) { bhSysCallMonitor(); }
 static void inventory_close_task(void) { ItemTaskCheck(); }
-static void inventory_ui_task(void) { StatusMain(); }
+static void inventory_ui_task(void) { bhSysCallMonitor(); StatusMain(); }
 
 static void test_inventory_resource(const char *directory, void *arena, size_t size)
 {
@@ -2024,6 +2100,16 @@ static void test_loaded_inventory_transition(void)
         tick(&input);
         assert(!recvxGameBootFault());
     }
+    /* Use the retail pickup/context entry to load and draw the lighter. */
+    sys->cb_flg|=0x10;sys->sb_id=55;swork.subscreenmode=1;
+    inventory_model_frames=inventory_visible_vertices=0;
+    for(unsigned int frame=0;frame<80;++frame){
+        tick(&input);
+        assert(!recvxGameBootFault());
+    }
+    fprintf(stderr,"Inventory preview: flags=%08x model=%u frames=%u visible=%u monitor=%u/%u\n",
+        swork.statusflg,sitem.mw.rdid,inventory_model_frames,inventory_visible_vertices,sys->mn_md0,sys->mn_md1);
+    assert((swork.statusflg&0x10)&&sitem.mw.rdid==55&&sitem.mdl.objP&&inventory_model_frames>0&&inventory_visible_vertices>0);
     bhSysTaskJumpTab[0] = inventory_close_task;
     swork.statusflg |= 0x80000;
     for (unsigned int phase = 1; phase <= 4; ++phase) {
@@ -2037,7 +2123,7 @@ static void test_loaded_inventory_transition(void)
     for (unsigned int i = 0; i < list->nbTexture; ++i)
         assert(texture_digest(recvxGameBootTextureGet(list, i)) == digests[i]);
     bhSysTaskJumpTab[0] = original;
-    puts("PASS: original inventory entry loads five UI textures; original ItemTaskCheck close phases restore gameplay, room textures, palette and memory cursor");
+    puts("PASS: original inventory entry loads five UI textures; real lighter context loads textured geometry with visible bounds/alpha and preview scissor; original ItemTaskCheck close phases restore gameplay, room textures, palette and memory cursor");
 }
 #endif
 

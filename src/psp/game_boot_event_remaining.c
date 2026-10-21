@@ -35,6 +35,14 @@ unsigned int recvxEventEffectId(unsigned int index)
 }
 BH_SCEWORK *recvxEventTask(unsigned int index)
 {require(index<16,"invalid event task index");return &bhEtask[index];}
+/* Zombie exp1 points to a linked actor in the global enemy pool. Those
+   actors are registered work, outside the room allocation arena. */
+static int companion(const void *pointer)
+{
+    uintptr_t p=(uintptr_t)pointer,first=(uintptr_t)ene;
+    return (p>=first&&p-first<sizeof(ene)&&!((p-first)%sizeof(*ene)))||
+        owned(pointer,sizeof(BH_PWORK));
+}
 static void task(int work)
 {
     uintptr_t p=(uintptr_t)bhCetask,b=(uintptr_t)bhEtask;
@@ -72,7 +80,7 @@ void recvxGameBootEventRemainingPrepare(unsigned int opcode)
     case 30:require(p[1]<2&&p[4]<=5,"invalid ADX time comparison");break;
     case 42:require(p[1]<=1,"invalid fixed camera selector");if(!p[1])attributes(rom->cutp,rom->cut_n,p[2],sizeof(CUT_WORK));break;
     case 44:require(p[1]<=1,"invalid effect start selector");break;
-    case 45:case 48:{BH_PWORK *a=&ene[recvxEventEnemyRecord(p[1])->wrk_no];if(a->id==1)require(owned(a->exp1,sizeof(BH_PWORK)),"invalid motion pause companion");break;}
+    case 45:case 48:{BH_PWORK *a=&ene[recvxEventEnemyRecord(p[1])->wrk_no];if(a->id==1)require(companion(a->exp1),"invalid motion pause companion");break;}
     case 57:attributes(rom->cutp,rom->cut_n,p[2],sizeof(CUT_WORK));break;
     case 61:case 63:facial(&ene[recvxEventEnemyRecord(p[2])->wrk_no]);break;
     case 143:case 144:facial(&ene[recvxEventEnemyRecord(p[1])->wrk_no]);break;
@@ -104,7 +112,7 @@ void recvxGameBootEventRemainingPrepare(unsigned int opcode)
     case 130:require(cam.evc_no>=0&&cam.evc_no<rom->evc_n,"invalid event camera loop");break;
     case 137:require(p[1]<4,"invalid player-change selector");break;
     case 140:require(recvxEventRead16(p+4)>=recvxEventRead16(p+2),"invalid random-test range");break;
-    case 142:{BH_PWORK *a=&ene[recvxEventEnemyRecord(p[1])->wrk_no];if(a->id==1)require(owned(a->exp1,4),"invalid zombie damage context");break;}
+    case 142:{BH_PWORK *a=&ene[recvxEventEnemyRecord(p[1])->wrk_no];if(a->id==1)require(companion(a->exp1),"invalid zombie damage context");break;}
     case 151:task(0);model(recvxEventTask(p[1])->work,0);break;
     case 153:case 165:case 204:case 208:recvxEventEnemyRecord(p[1]);break;
     case 160:require(p[1]<=1,"invalid map system selector");break;

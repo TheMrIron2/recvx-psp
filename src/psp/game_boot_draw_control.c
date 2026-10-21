@@ -17,6 +17,29 @@ static int member(const void *pointer, const void *base, size_t count, size_t st
     return base && pointer && p >= first && p-first < count*stride && !((p-first)%stride);
 }
 
+/* Linked enemies and effect fragments select entries in another actor's mdl
+   array. Recognize those fixed tables without accepting arbitrary arena data
+   as a model descriptor. O_WRK and BH_PWORK share this part of their layout. */
+_Static_assert(offsetof(O_WRK,mdl)==offsetof(BH_PWORK,mdl),"shared actor model table layout");
+static int model_array(const ML_WORK *model,const void *base,size_t count,size_t stride)
+{
+    if(!base||!model)return 0;
+    uintptr_t p=(uintptr_t)model,first=(uintptr_t)base+offsetof(O_WRK,mdl);
+    if(p<first)return 0;
+    uintptr_t offset=p-first;
+    return offset/stride<count && offset%stride<sizeof(((O_WRK *)0)->mdl) &&
+        !((offset%stride)%sizeof(ML_WORK));
+}
+static int registered_model(const ML_WORK *model)
+{
+    return (plp&&member(model,plp->mdl,16,sizeof(*model))) ||
+        model_array(model,ene,128,sizeof(*ene)) ||
+        model_array(model,eff,512,sizeof(*eff)) ||
+        member(model,sys->efm,450,sizeof(*model)) ||
+        ((model_array(model,sys->obwp,39936u/sizeof(O_WRK),sizeof(O_WRK)) ||
+          model_array(model,sys->itwp,39936u/sizeof(O_WRK),sizeof(O_WRK))) && arena(model,sizeof(*model)));
+}
+
 static void actor(const O_WRK *work)
 {
     if (!work || (work != (const O_WRK *)plp && !member(work, ene, 128, sizeof(*ene)) &&
@@ -43,12 +66,16 @@ void recvxGameBootDrawActorPrepare(BH_PWORK *work, int drawing)
 {
     base(); actor((const O_WRK *)work);
     const ML_WORK *model = work->mlwP;
-    int local = member(model, work->mdl, 16, sizeof(*model));
-    int effect = member(work, eff, 512, sizeof(*eff)) && member(model,sys->efm,450,sizeof(*model));
-    if ((!local && !effect) || model->obj_num > 512 ||
+    int registered=registered_model(model);
+    if (!registered || model->obj_num > 512 ||
         (model->obj_num && (!arena(model->objP, model->obj_num*sizeof(*model->objP)) ||
-         !arena(model->owP, model->obj_num*sizeof(*model->owP)))))
+         !arena(model->owP, model->obj_num*sizeof(*model->owP))))) {
+        recvxGameBootLog("draw model rejected: actor=%p id=%u type=%u model=%p registered=%d objects=%u nodes=%p poses=%p drawing=%d",
+            (void *)work,work->id,work->type,(const void *)model,registered,
+            registered?model->obj_num:0,registered?(void *)model->objP:NULL,
+            registered?(void *)model->owP:NULL,drawing);
         recvxGameBootUnsupported("invalid original draw model work");
+    }
     if (drawing && (work->draw_tp<0 || work->draw_tp>=4 || work->mdl_no>=16))
         recvxGameBootUnsupported("invalid original model draw selector");
     if (!drawing) {
