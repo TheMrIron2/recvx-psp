@@ -265,6 +265,13 @@ static int parse_motion(const uint8_t *data, uint32_t size,
     return 0;
 }
 
+int recvxPlayerMotionAssetParse(const void *data,size_t size,RecvxPlayerMotionAsset *motion)
+{
+    if(!data||!motion||size>UINT32_MAX)return -1;
+    memset(motion,0,sizeof(*motion));
+    return parse_motion(data,(uint32_t)size,motion);
+}
+
 static int parse_motion_stream(const uint8_t *data, size_t size,
                                RecvxPlayerAssets *assets)
 {

@@ -29,6 +29,8 @@ int recvxAudioPlaySe(int slot, int sound, int volume, int pan);
 int recvxAudioPlayMidi(int slot, int sound, int volume, int pan);
 int recvxAudioPlayMidiFade(int slot, int sound, int volume, int pan, int frames);
 void recvxAudioStopSe(int slot);
+int recvxAudioSePlaying(int slot);
+void recvxAudioSeVolume(int slot,int volume,int frames);
 /* Script overrides: flag 2 controls gain, flag 4 controls pan; MIDI=1. */
 void recvxAudioSoundControl(int is_midi, int slot, unsigned int flags, int volume, int pan);
 void recvxAudioUpdateSe(int slot, int volume, int pan, int pitch);

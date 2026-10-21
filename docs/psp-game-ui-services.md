@@ -350,3 +350,139 @@ use a bounded PSP cache keyed by enemy ID and version, reset on room relocation
 and game initialization. The extracted model loader uses the same cache accessor,
 avoiding an index into another enemy's table entries. Validation failures also log
 the rejected record category before the room-relocation boundary.
+
+Enemy/room motion validation now uses the retail 512-slot MN_WORK capacity,
+independently of the 128-slot player asset container. RM_0020 and RM_0030 contain
+476-slot zombie banks. Each populated MTN record still passes the shared record
+parser and alignment checks; streams exceeding 512 slots, truncated records and
+invalid terminators remain rejected. Validation no longer allocates an entire
+player asset container on the room-loading stack.
+
+The native regression now loads queued textures and runs `bhFinishRoom` for all
+four packaged rooms, exercising motion relocation, actor matrix allocation,
+facial masks, lights, effect placement and spawn initialization. It retains the
+arena guards, output CRCs, variant-32 texture-cache sharing/isolation checks and
+checks the exact 512/513-slot boundary. Independent fixtures release their texture
+ownership between rooms. The title check preserves existing workspace saves and
+uses the corrected directional controls to choose New Game when Load is enabled.
+
+The game profile now links all requested enemy entry points (`bhEne00` through
+`bhEne30`, plus `bhEne53` through `bhEne56`) from the available retail source.
+The enemy extractor retains their state tables and shared zombie, collision,
+route, blood/splash, particle and material helpers, and reuses helpers already
+ported elsewhere. Callback-table calls check the selector and callback before
+invocation. Entry guards check actor ownership, model/motion work, phases and
+finite positions; callback registration checks the 100-entry enemy table.
+
+Adaptations include indexed XYZ key reads for spider controllers, the missing
+linked-zombie allocator return, explicit no-action returns in state checks, a
+bounded fallback wall direction, and the correct matrix-pointer type for Steve's
+particles. Enemy sound requests use the retail six-slot request manager, native
+SAS voice status and gain fades. ADPCM stays compressed throughout playback.
+
+Native regression coverage includes a real RM_0020 zombie group, initialization
+of linked actors through the original enemy scheduler, subsequent movement,
+shared texture variants, positional enemy sound requests/fades/stops, and knight
+idle/damage state transitions using owned fixture models and motions. Six malformed
+actor/work/dispatch cases are rejected. All four room finalizations, the existing
+full-game regression, native SAS adapter and sound-service tests pass. Only the
+packaged room assets can be exercised here; boss-specific encounters and real PSP
+behavior still need device coverage. The supplied source contains 88 empty void
+bodies across the generated modules, including the unused `bhEne28` entry point;
+these retain their original behavior rather than inventing missing enemy logic.
+
+
+## Effect callbacks and timer display
+
+The PSP now links the original `bhDispTime` and effect callbacks 003–006, 008,
+010–014, 016–019, 022–025, 027–029, 085, 100–105 and 107–110. Their weapon,
+explosion trail/particle and rain drawing routines are included, together with
+bomb/projectile collision helpers and emitted effects 119 and 132. Effects 004
+and 028 have empty bodies in the supplied original source and retain that behavior.
+
+UV animation reads check the original local tables and frame bounds. Auxiliary
+work remains in the bounded effect pool; custom drawing validates particle frames
+and emission indices. Queue writes use the existing capacity checks. Weapon flash
+variants, linked wall/actor selectors, water ripple buffers and texture swaps are
+checked before use. Stopping the persistent rain effect releases its auxiliary slot.
+
+Effect 110 uses an owned 512×512 RGBA render target for the existing GE capture
+path, rather than treating its empty PS2 render surface as a TIM2 file. Texture
+swap restore and arena alignment use pointer-width arithmetic. Timer drawing
+preserves the original 60 Hz conversion, field flags, separators and game-mode clamp.
+
+Native coverage exercises animation expiry/looping, the custom drawing paths,
+rain movement, wind state, render-target creation, timer glyph order and the
+59:59.99 clamp, plus malformed callback state and existing full-game fixtures.
+Visual appearance of these additional effects still needs real PSP coverage.
+
+## Monitor, debris, linked flame and gas effects
+
+Callbacks 111–114, 116–118, 120–123 and 127–129 now use their original update
+bodies in the PSP game runtime. `bhDraw114` submits the original debris lighting
+through the half-lit texture backend. Its first 15 atlas tiles use zero-based
+coordinates; the reconstructed subtraction produced negative UVs. The original
+empty `bhEff129` body remains empty.
+
+Effect 111 registers an owned capture surface in the effect texture list, using
+the same GE framebuffer transfer as the other monitor/render-texture paths. Raw
+capture descriptors retain their owned source marker for texture garbage checks.
+Model UV scrolling uses a scalar `npSetOffsetUV`: it checks command sizes, strip
+lengths and per-triangle attribute words, validates the whole stream before
+mutation, and preserves 16-bit UV wrap. Linked-model selectors, animation tables,
+debris slow-motion divisors and monitor/particle state are checked before use.
+
+Effect 118 counts successful child allocations, skips failed allocations and
+retires lost or finished child indices once. A full effect pool therefore cannot
+turn an allocation failure into `eff[-1]` or leave the shutdown counter waiting
+for nonexistent children.
+
+Regression fixtures cover all 55 debris atlas selections and their draw/update
+paths, the four emitter burst counts, monitor allocation/capture/fade, linked flame
+shutdown and pool exhaustion, looping/selected animations, timed sparks, gas
+particle lifetimes, mirror activation, gas/smoke spawning and reversible UV edits
+with attribute-bearing strips. Malformed-state coverage now includes 35 callback
+fault cases. Visual verification of these effects on PSP hardware remains needed.
+
+## Spark, explosion and bubble effects 155–168
+
+The original callbacks 155–168 and their `setentry`, `effinit`, `effset` and
+`getuv` helpers now run in the PSP runtime. Effect 169 is included because 168
+spawns it. These effects use the existing textured 3D sprite renderer and matrix
+backend; moving sprites preserve their rotated velocity, gravity, explosion
+texture-bank changes, countdowns and saved transform restoration.
+
+Local UV-table identity and frame bounds are checked before reads, including the
+second lookup after bubble animation control commands. The bubble commands retain
+repeat, pause, restart and termination behavior. Helper texture/color/orientation
+selectors and emitter countdowns are checked, and render queue writes retain
+capacity guards. A failed child allocation preserves the original emitter state
+transition without dereferencing the failed slot.
+
+Regression fixtures exercise all sprite variants and their texture-bank timing,
+rotated quad orientation, finite and looping bubble animation, one-shot/burst/
+periodic spawning, full-pool behavior and moving emitter restoration. Sprite draw
+checks use owned font pages as fixture atlases where these effects' textures are
+absent from the opening room. Hardware appearance still needs device validation.
+
+## Repeated sprites, blends and smoke effects 170–182
+
+The PSP now links original callbacks 170–182. They preserve the moving emitter's
+saved transform and accumulated displacement, repeated sprite animations,
+configurable source/destination blending, a static full-atlas sprite, timed
+moving sprites, periodic emitters and smoke. `bhEff174` is empty in the supplied
+original source and retains that behavior.
+
+Smoke keeps all ten atlas selections and ten color presets, using the original
+fractional part of its speed parameter. Timed child allocation carries the
+parent's lifetime selector. UV reads use the bounded local-table checks; blend
+and smoke selectors, counters and float-to-integer emission intervals are checked
+before use. Shared helper validation uses its own reserved kind so effect 170's
+countdown checks cannot accidentally apply to every sprite helper call.
+
+Regression fixtures cover all 100 blend combinations and 100 smoke style/color
+combinations, repeat counts including continuous repetition, static/timed sprites,
+child lifetime propagation, one-shot and periodic emission, full-pool allocation
+failure and moving-emitter restoration. The existing owned fixture textures exercise
+the sprite submission path; visual verification with these effects' actual room
+atlases still requires the relevant scenes and PSP hardware.

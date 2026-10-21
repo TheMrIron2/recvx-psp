@@ -10,6 +10,7 @@
 #define _GNU_SOURCE
 #define u_long recvx_host_u_long
 #include <assert.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,8 +20,11 @@
 #include <unistd.h>
 #undef u_long
 #include "psp/game_boot.h"
+#include "psp/game_boot_enemy.h"
+#include "psp/game_boot_save_storage.h"
 #include "psp/game_boot_render.h"
 #include "psp/game_boot_effect_callbacks.h"
+#include "ps2/veronica/prog/effsub0.h"
 #include "ps2/veronica/prog/effsub1.h"
 #include "ps2/veronica/prog/effsub2.h"
 #include "ps2/veronica/prog/effsub3.h"
@@ -846,7 +850,7 @@ static void effect_control_task(void)
         eff[0].lkwkp = effect_fixture_case == 1 ? (unsigned char *)1 : (unsigned char *)plp;
         eff[0].lkono = 2;
     } else if (effect_fixture_case == 3) {
-        eff[0].flg = 1; eff[0].id = 149;
+        eff[0].flg = 1; eff[0].id = 144;
     } else if (effect_fixture_case == 4) {
         eff[0].flg = 1; eff[0].id = 20; eff[0].type = 450;
     } else if (effect_fixture_case == 5) {
@@ -903,15 +907,87 @@ static void callback_fault_task(void)
     case 10:bhEff302(e);sys->ef_fncn=512;bhEff302(e);break;
     case 11:e->type=7;bhEff301(e);break;
     case 12:e->flr_no=1;sys->yk_ct=0;e->lkwkp=NULL;bhEff000(e);break;
+    case 13:e->type=6;bhEff003(e);break;
+    case 14:e->type=3;bhEff005(e);break;
+    case 15:e->type=1;e->flr_no=8;bhEff006(e);break;
+    case 16:e->mode0=1;e->ct1=128;bhEff013(e);break;
+    case 17:e->lkwkp=NULL;bhEff029(e);break;
+    case 18:e->mode0=1;e->mode1=1;e->type=255;rom->eff_n=0;bhEff085(e);break;
+    case 19:sys->st_flg|=0x40;sys->gm_flg&=~1u;sys->wt_wvp=NULL;bhEff108(e);break;
+    case 20:e->mode0=1;e->exp0=(unsigned char *)1;bhEff008(e);break;
+    case 21:e->mode0=1;e->exp0=(unsigned char *)1;bhEff100(e);break;
+    case 22:e->type=3;bhEff113(e);break;
+    case 23:e->mdlver=55;e->pvp=e->pv;bhEff114(e);break;
+    case 24:sys->st_flg|=0x2000000u;sys->ef_slow=0;e->pvp=e->pv;bhEff114(e);break;
+    case 25:e->mode0=3;bhEff117(e);break;
+    case 26:e->mode0=1;e->ct3=9;bhEff118(e);break;
+    case 27:e->mode1=3;bhEff122(e);break;
+    case 28:e->mdlver=2;bhEff128(e);break;
+    case 29:e->mode0=4;e->pvp=e->pv;sys->ef_flg=0;bhEff111(e);break;
+    case 30:e->mode0=1;e->ct3=1;((short *)e->pv)[0]=512;bhEff118(e);break;
+    case 31:e->lkwkp=NULL;bhEff120(e);break;
+    case 32:npSetOffsetUV(NULL,0,0);break;
+    case 33:{
+        NJS_CNK_MODEL *model=(NJS_CNK_MODEL *)(sys->endp-128);
+        short *stream=(short *)(sys->endp-16);memset(model,0,sizeof(*model));
+        model->plist=stream;stream[0]=65;stream[1]=-1;
+        npSetOffsetUV(model,1,1);break;}
+    case 34:e->mode0=1;e->exp0=(unsigned char *)1;bhEff117(e);break;
+    case 35:e->mode0=2;bhEff155(e);break;
+    case 36:e->mode0=1;e->exp0=(unsigned char *)1;bhEff157(e);break;
+    case 37:bhEff155(e);e->ct0=-1;bhEff155(e);break;
+    case 38:e->type=1;bhEff159(e);e->ct0=25;e->type=0;bhEff159(e);break;
+    case 39:e->sz=NAN;bhEff163(e);break;
+    case 40:e->ct1=-32768;bhEff163(e);break;
+    case 41:e->ct0=-1;bhEff164(e);break;
+    case 42:e->ct0=65536;bhEff165(e);break;
+    case 43:e->tex_id=-1;effinit(e);break;
+    case 44:getuv(2,e);break;
+    case 45:{UV_WORK uv={0};effset(e,&uv,10);break;}
+    case 46:setentry(450,0,e);break;
+    case 47:e->mode0=1;e->exp0=(unsigned char *)1;bhEff167(e);break;
+    case 48:sys->ef_trsn=512;bhEff161(e);break;
+    case 49:e->mode0=1;e->ct0=999;e->exp0=(unsigned char *)1;bhEff169(e);break;
+    case 50:e->mode0=1;e->exp0=(unsigned char *)1;bhEff171(e);break;
+    case 51:e->mode0=1;e->ct1=INT_MIN;bhEff171(e);break;
+    case 52:e->type=100;bhEff173(e);break;
+    case 53:e->mode0=2;bhEff176(e);break;
+    case 54:bhEff176(e);e->ct0=1;bhEff176(e);break;
+    case 55:e->ct1=INT_MAX;bhEff178(e);break;
+    case 56:e->sz=NAN;bhEff179(e);break;
+    case 57:e->sz=-1;bhEff179(e);break;
+    case 58:e->sz=INFINITY;bhEff181(e);break;
+    case 59:e->type=100;bhEff182(e);break;
+    case 60:e->sz=NAN;bhEff182(e);break;
+    case 61:e->mode0=1;e->exp0=(unsigned char *)1;bhEff182(e);break;
+    case 62:e->ct0=-1;bhEff170(e);break;
+    case 63:sys->ef_trsn=512;bhEff180(e);break;
+    case 64:e->mode0=1;e->exp0=(unsigned char *)1;bhEff173(e);break;
+    case 65:bhEff182(e);e->ct0=999;bhEff182(e);break;
+    case 66:e->mode0=2;bhEff145(e);break;
+    case 67:e->mode1=3;bhEff148(e);break;
+    case 68:e->mtx=NULL;bhEff148(e);break;
+    case 69:e->mode0=1;e->frm_no=9;bhEff149(e);break;
+    case 70:e->mode0=7;bhEff149(e);break;
+    case 71:e->mode0=1;e->exp0=(unsigned char *)1;bhEff151(e);break;
+    case 72:e->ct1=12;bhEff152(e);break;
+    case 73:e->type=12;bhEff153(e);break;
+    case 74:e->mode0=1;e->exp0=(unsigned char *)1;bhEff153(e);break;
+    case 75:e->mode0=1;e->exp0=(unsigned char *)1;bhEff_E12_FireSpark(e);break;
+    case 76:((P_WRK *)e->exp0)->num=49;bhEff_E00_DrawParticleSpr(e);break;
+    case 77:sys->ef_trsn=-1;bhEff147(e);break;
+    case 78:e->mtx=(NJS_MATRIX *)e->mtxbuf;bhEff148(e);e->mode1=1;sys->ef_trsn=512;bhEff148(e);break;
+    case 79:e->mtx=NULL;bhEff146_Init(e);break;
+    case 80:e->ct3=INT_MIN;bhEff_Sub146(e);break;
     }
     assert(0);
 }
 static void test_effect_callback_faults(const char *directory,void *arena,size_t arena_size)
 {
-    static const char *messages[]={"mode/type","auxiliary context","overlapping","mode/type","counts","buffers","vertex index","sand particle state","sand dust animation","UV table/frame","render queue is full","blood pool effect state","links an invalid actor"};
+    static const char *messages[]={"mode/type","auxiliary context","overlapping","mode/type","counts","buffers","vertex index","sand particle state","sand dust animation","UV table/frame","render queue is full","blood pool effect state","links an invalid actor","weapon effect state","explosion animation state","flame UV selector","projectile target","completion link","swap effect placement","water ripple buffer","UV table/frame","auxiliary context","debris emitter type","debris effect state","debris effect state","linked flame mode","linked flame emitter state","selector effect UV frame","gas particle color selector","monitor effect state","linked flame slot","links an invalid actor","UV scroll model","UV scroll command exceeds stream","UV table/frame","sprite animation mode","UV table/frame","UV table/frame","texture bank frame","bubble animation repeat count","bubble animation repeat count","emitter countdown","emitter countdown","initialization texture","quad orientation","UV/color parameters","entry id","UV table/frame","render queue is full","UV table/frame","UV table/frame","sprite repeat counter","sprite blend selector","sprite animation mode","UV table/frame","timed sprite lifetime","emitter interval","emitter interval","emitter interval","smoke color or velocity selector","smoke color or velocity selector","UV table/frame","emitter countdown","render queue is full","UV table/frame","UV table/frame","linked eye/drop effect mode","linked eye/drop effect mode","linked eye/drop matrix","fire sprite state","fire sprite state","UV table/frame","impact emitter phase","impact sprite frame","impact sprite UV pointer","auxiliary context","fire spark particle count","render queue is full","render queue is full","linked eye/drop matrix","eye particle state"};
     RecvxLiveTaskProc saved=bhSysTaskJumpTab[0];
     RecvxInputState input={.analog_x=128,.analog_y=128};bhSysTaskJumpTab[0]=callback_fault_task;
-    for(callback_fault_case=0;callback_fault_case<13;++callback_fault_case){
+    for(callback_fault_case=0;callback_fault_case<81;++callback_fault_case){
         assert(!recvxGameBootInit(directory,arena,arena_size));
         assert(recvxGameBootTick(&input)==-1&&recvxGameBootFault());
         if(!strstr(recvxGameBootFault(),messages[callback_fault_case]))
@@ -919,13 +995,13 @@ static void test_effect_callback_faults(const char *directory,void *arena,size_t
         assert(strstr(recvxGameBootFault(),messages[callback_fault_case]));
     }
     bhSysTaskJumpTab[0]=saved;
-    puts("PASS: 13 effect callback fault paths reject invalid modes/types, auxiliary contexts, overlaps, stage/buffer/vertex indices, UV pointers, parents and full queues");
+    puts("PASS: 81 effect callback fault paths reject invalid modes/types, auxiliary contexts, overlaps, stage/buffer/vertex indices, UV pointers, parents and full queues");
 }
 
 static void test_effect_control(const char *directory, void *arena, size_t arena_size)
 {
     const char *faults[] = {NULL, "effect links an invalid actor", "effect links an invalid actor joint",
-        "bhEff149", "invalid original effect texture mapping", "original effect render queue is full"};
+        "bhEff144", "invalid original effect texture mapping", "original effect render queue is full"};
     RecvxLiveTaskProc saved = bhSysTaskJumpTab[0];
     RecvxInputState input = {.analog_x = 128, .analog_y = 128};
     bhSysTaskJumpTab[0] = effect_control_task;
@@ -1063,6 +1139,35 @@ static void test_game_direction_mapping(const char *directory,void *arena,size_t
     puts("PASS: PSP D-pad and analog directions through retail pad mapping, all four presets, edges, releases, diagonal and neutral");
 }
 
+static unsigned int enemy_invalid_case;
+static void invalid_enemy_task(void)
+{
+    extern void bhEne54(BH_PWORK *);
+    BH_PWORK *actor=&ene[0];memset(actor,0,sizeof(*actor));actor->id=54;
+    switch(enemy_invalid_case){
+    case 0:bhEne54((BH_PWORK *)(uintptr_t)64);break;
+    case 1:actor->mode0=255;bhEne54(actor);break;
+    case 2:actor->px=NAN;bhEne54(actor);break;
+    case 3:actor->mdl_n=1;actor->mdl[0].obj_num=129;bhEne54(actor);break;
+    case 4:actor->mnwP=(MN_WORK *)(uintptr_t)64;bhEne54(actor);break;
+    case 5:actor->mode0=1;actor->type=255;bhEne54(actor);break;
+    }
+    assert(!"invalid enemy must reject before using its work");
+}
+static void test_invalid_enemy_work(const char *directory,void *arena,size_t arena_size)
+{
+    RecvxLiveTaskProc saved=bhSysTaskJumpTab[0];
+    RecvxInputState input={.analog_x=128,.analog_y=128};
+    bhSysTaskJumpTab[0]=invalid_enemy_task;
+    for(enemy_invalid_case=0;enemy_invalid_case<6;++enemy_invalid_case){
+        assert(!recvxGameBootInit(directory,arena,arena_size));
+        assert(recvxGameBootTick(&input)==-1);
+        assert(strstr(recvxGameBootFault(),enemy_invalid_case==5?"invalid enemy callback":"invalid original enemy"));
+    }
+    bhSysTaskJumpTab[0]=saved;
+    puts("PASS: malformed enemy pointers, phases, positions, model/motion ownership and type dispatch rejected");
+}
+
 static unsigned int room_stream_test;
 static void room_stream_task(void)
 {
@@ -1076,7 +1181,13 @@ static void room_stream_task(void)
        bhFirstGameStart and the texture descriptor pool from bhInitEffect. */
     sys->obwp=(O_WRK *)bhGetFreeMemory(39936,32);
     sys->itwp=(O_WRK *)bhGetFreeMemory(39936,32);
+    bhInitPlayer();
+    sys->ss_flg|=0x100; /* Use the initial spawn path with these fixture pools. */
     sys->ef_tlist.textures=sys->ef_tex;
+    if(index==2){
+        RequestReadInsideFile(6,10,sys->memp);
+        bhReadPlayerData();bhCalcModel(plp);
+    }
 #endif
     bhInitReadRDT();
     /* Keep a permanent prefix and a tail guard outside the decoder capacity. */
@@ -1111,6 +1222,48 @@ static void room_stream_task(void)
         recvxGameBootEnemyTextureReset();
         assert(!*recvxGameBootEnemyTextureSlot(1,32,0));
     }
+    while(sys->txr_ct<sys->txr_n){
+        unsigned int i=sys->txr_ct;
+        bhSetMemPvpTexture(sys->txlp[i],sys->txdp[i],sys->txloff[i]);++sys->txr_ct;
+    }
+    bhFinishRoom();
+    if(index==2){
+        for(int i=0;i<rom->ene_n;++i)if(ene[i].id!=1)ene[i].stflg|=0x41000000u;
+        RequestRoomSoundBank(0,2,0);recvxGameBootSoundTick();
+        sys->sp_flg|=2;
+        bhControlEnemy();
+        assert(ene[0].exp0&&ene[0].mode0==1&&ene[0].hp>0);
+        assert(ene[0].exp1&&((BH_PWORK *)ene[0].exp1)->lkwkp==(unsigned char *)&ene[0]);
+        assert(sys->ewk_n>rom->ene_n);
+        for(int frame=0;frame<8;++frame){bhControlEnemy();recvxGameBootSoundTick();}
+        assert(isfinite(ene[0].px)&&isfinite(ene[0].py)&&isfinite(ene[0].pz));
+        NJS_POINT3 sound_position={plp->px,plp->py,plp->pz};
+        RequestEnemySe(0,&sound_position,0x2300);recvxGameBootSoundTick();
+        assert(ChechPlayEnemySe(0,0x2300));
+        int native_slots=0;for(int i=0;i<6;++i)native_slots+=recvxAudioSePlaying(i);
+        assert(native_slots>0);
+        RequestEnemySeEx(0,&sound_position,0x2301,4);recvxGameBootSoundTick();
+        for(int i=0;i<4;++i)recvxGameBootSoundTick();
+        RequestEnemySe(0,&sound_position,0x2300);
+        AllStopEnemySe();recvxGameBootSoundTick();assert(!ChechPlayEnemySe(0,0x2300));
+        for(int i=0;i<6;++i)assert(!recvxAudioSePlaying(i));
+        /* Exercise the knight controllers with owned relocated fixture poses
+           and motion data; boss-specific assets are not packaged here. */
+        extern void bhEne54(BH_PWORK *),bhEne55(BH_PWORK *);
+        void (*knights[])(BH_PWORK *)={bhEne54,bhEne55};
+        for(unsigned int k=0;k<2;++k){
+            ene[127]=*plp;BH_PWORK *knight=&ene[127];
+            knight->mdl_n=1;knight->mdl[0]=plp->mdl[0];knight->mlwP=knight->mdl;
+            knight->id=54+k;knight->type=0;knight->mode0=knight->mode1=knight->mode2=knight->mode3=0;
+            knights[k](knight);assert(knight->hp==250&&knight->mode0==1);
+            knights[k](knight);assert(knight->mode3==1&&knight->mtn_add==0);
+            knight->mode0=3;knight->mode2=knight->mode3=0;
+            knights[k](knight);assert(knight->mode3>=1);
+            memset(knight,0,sizeof(*knight));
+        }
+    }
+    assert(sys->rmthp&&sys->memp<=sys->endp);
+    for(int i=0;i<rom->ene_n;++i)assert(ene[i].mnwP&&ene[i].mdl[0].owP);
     for(unsigned int i=0;i<64;++i)assert(output[-64+(int)i]==0x5a&&sys->endp[i]==0xa5);
 #endif
     sys->endp=arena_end;
@@ -1119,13 +1272,21 @@ static void test_large_room_streams(const char *directory,void *arena,size_t are
 {
     RecvxLiveTaskProc saved=bhSysTaskJumpTab[0];
     RecvxInputState input={.analog_x=128,.analog_y=128};
+    unsigned int empty_motions[514]={0};
+    empty_motions[512]=UINT32_MAX;
+    assert(!recvxGameBootValidateMotionStream((unsigned char *)empty_motions,513*4));
+    empty_motions[512]=0;empty_motions[513]=UINT32_MAX;
+    assert(recvxGameBootValidateMotionStream((unsigned char *)empty_motions,sizeof(empty_motions))==-1);
     bhSysTaskJumpTab[0]=room_stream_task;
     for(room_stream_test=0;room_stream_test<4;++room_stream_test){
         assert(!recvxGameBootInit(directory,arena,arena_size));tick(&input);
+        /* Each fixture represents a fresh room load, with independent RAM
+           texture ownership rather than accumulating all rooms at once. */
+        recvxGameBootTexturesShutdown();
     }
     bhSysTaskJumpTab[0]=saved;
 #if UINTPTR_MAX == UINT32_MAX
-    puts("PASS: all four room/model relocations; zombie variant 32 cache isolation, same-variant sharing and cache reset");
+    puts("PASS: all four room/model/motion relocations and finalizations; real zombie initialization, linked actors and movement, native enemy sounds, knight idle/damage controllers; zombie variant 32 cache isolation, same-variant sharing and cache reset");
 #endif
     puts("PASS: all four packaged room streams with permanent allocations in 12 MiB, staged stair/large-room expansion, source validation, exact CRCs and arena guards");
 }
@@ -2178,6 +2339,468 @@ static void test_effect_callback_lifetimes(void)
     puts("PASS: all 19 staged-particle presets release actor and auxiliary slots; sand gravity, six dust animations and emitter timing; 11 muzzle-flash lifetimes; blood mesh/pool and both casing initializations");
 }
 
+static void test_effect_batch(void)
+{
+    O_WRK *saved=malloc(sizeof(eff));SYS_WORK *old=malloc(sizeof(*sys));
+    assert(saved&&old);memcpy(saved,eff,sizeof(eff));*old=*sys;
+    static const struct {void (*update)(O_WRK *);int types;} animations[]={
+        {bhEff005,3},{bhEff008,3},{bhEff010,1},{bhEff014,4},
+        {bhEff019,4},{bhEff023,1},{bhEff119,2},{bhEff132,4}};
+    unsigned int variants=0;
+    for(size_t a=0;a<sizeof(animations)/sizeof(*animations);++a)
+        for(int type=0;type<animations[a].types;++type){
+            memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];
+            e->flg=1;e->type=type;e->sxb=e->syb=e->szb=1;e->sx=e->sy=e->sz=1;
+            e->pvp=e->pv;e->tvp=e->tv;
+            int frames=0;
+            while(e->flg&&frames++<200){
+                sys->ef_trsn=sys->ef_ntxn=sys->ef_fncn=0;animations[a].update(e);
+                assert(isfinite(e->sx)&&isfinite(e->sy));
+            }
+            if(animations[a].update==bhEff008 || (animations[a].update==bhEff010&&type==0))
+                assert(e->flg&&frames==201&&e->ct0<12);
+            else assert(!e->flg&&frames>1&&frames<200);
+            ++variants;
+        }
+    memset(eff,0,sizeof(eff));O_WRK *rain=&eff[0];rain->flg=1;
+    bhEff100(rain);assert(rain->mode0==1&&rain->exp0&&rain->func);
+    ER_WORK *drops=(ER_WORK *)(rain->exp0+4);
+    assert(((O_WRK *)rain->exp0)->flg==2);
+    drops[0].py=30;sys->sp_flg|=8;sys->winds=0;
+    recvxGameBootRenderBeginFrame();bhEff106(rain);
+    assert(drops[0].py==25);
+    sys->ef_fncn=0;bhEff100(rain);assert(sys->ef_fncn==1);
+    rain->stflg|=0x1000000;bhEff100(rain);assert(!rain->flg);
+    static void (*const custom[])(O_WRK *)={bhEff022,bhEff024,bhEff025,bhEff027,bhEff107};
+    for(size_t k=0;k<sizeof(custom)/sizeof(*custom);++k){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;
+        e->sx=e->sy=e->sz=1;e->lox=1;e->pvp=e->pv;e->tvp=e->tv;
+        custom[k](e);assert(e->exp0&&e->func);
+        e->ct0=1;recvxGameBootRenderBeginFrame();e->func(e);
+        assert(!recvxEngineOriginalFault());
+    }
+    for(int type=0;type<6;++type){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;e->type=type;
+        e->sx=e->sy=e->sz=1;e->pn=4;e->pvp=e->pv;e->tvp=e->tv;
+        e->mtx=(NJS_MATRIX *)e->mtxbuf;e->flr_no=2;
+        sys->ef_fncn=0;bhEff003(e);assert(e->func&&e->ct0==1);
+        recvxGameBootRenderBeginFrame();e->func(e);assert(!recvxEngineOriginalFault());
+    }
+    memset(eff,0,sizeof(eff));O_WRK *wind=&eff[0];wind->flg=1;wind->sx=2;wind->sy=1;
+    wind->type=1;wind->ay=16384;bhEff102(wind);
+    assert(sys->windr==16384&&sys->winds==2&&wind->ct0==256);
+    /* The capture target is allocated by effect 110, then populated by the
+       existing framebuffer transfer service rather than decoded as TIM2. */
+    memset(eff,0,sizeof(eff));O_WRK *distortion=&eff[0];distortion->flg=1;
+    sys->gm_flg&=~1u;sys->ef_flg&=~1u;bhEff110(distortion);
+    assert(distortion->mode0==1&&sys->ren_tlist.nbTexture==1);
+    const RecvxBootTexture *target=recvxGameBootTextureGet(&sys->ren_tlist,0);
+    assert(target->rgba8888&&target->width==512&&target->height==512);
+    njReleaseTexture(&sys->ren_tlist);
+    NJS_POINT2 timer_pos={10,20};size_t glyph_count;
+    recvxGameBootDrawDiscard();sys->gm_mode=0;
+    bhDispTime(&timer_pos,15,216000+2*3600+3*60+30,0,1);
+    const RecvxBootDraw *glyphs=recvxGameBootDraws(&glyph_count);
+    static const unsigned int timer_codes[]={16,17,26,16,18,26,16,19,21,16};
+    assert(glyph_count==10);
+    for(size_t i=0;i<glyph_count;++i){
+        assert(glyphs[i].quad.u1==((timer_codes[i]%18)*14.0f+0.5f)/256);
+        assert(glyphs[i].quad.v1==((timer_codes[i]/18)*14.0f+0.5f)/256);
+    }
+    recvxGameBootDrawDiscard();sys->gm_mode=3;
+    bhDispTime(&timer_pos,7,216000,0,1);
+    glyphs=recvxGameBootDraws(&glyph_count);assert(glyph_count==8);
+    assert(glyphs[0].quad.u1==((21%18)*14.0f+0.5f)/256); /* 59:59.99 clamp */
+    assert(glyphs[7].quad.u1==((25%18)*14.0f+0.5f)/256);
+    recvxGameBootDrawDiscard();
+    memcpy(eff,saved,sizeof(eff));*sys=*old;free(saved);free(old);
+    printf("PASS: %u effect animation variants expire or loop, native rain draw updates, wind control and distortion render target allocation\n",variants);
+}
+
+static void test_effect_next_batch(void)
+{
+    O_WRK *saved=malloc(sizeof(eff));SYS_WORK *old=malloc(sizeof(*sys));
+    assert(saved&&old);memcpy(saved,eff,sizeof(eff));*old=*sys;
+    for(int kind=0;kind<2;++kind){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;
+        for(int frame=0;frame<100;++frame){
+            sys->ef_trsn=0;if(kind)bhEff121(e);else bhEff117(e);
+            assert(e->flg&&e->ct0>0&&e->ct0<=(kind?8:3)&&sys->ef_trsn==1);
+        }
+        if(!kind){e->mode0=2;bhEff117(e);assert(!e->flg);}
+    }
+    for(int selector=0;selector<3;++selector){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;e->mode1=selector;
+        sys->ef_trsn=0;bhEff122(e);assert(e->tv[0].u==selector*0.125f&&sys->ef_trsn==1);
+    }
+    for(int color=0;color<6;++color){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;e->type=color;
+        int visible=0,waiting=0;
+        for(int frame=0;frame<100;++frame){
+            sys->ef_trsn=0;bhEff123(e);visible+=sys->ef_trsn;waiting+=sys->ef_trsn==0;
+        }
+        assert(visible>=8&&waiting>0&&e->flg);
+    }
+    for(int type=0;type<3;++type)for(int color=0;color<2;++color){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;e->type=type;e->mdlver=color;
+        e->sx=e->sz=1;e->flr_no=type;
+        int frames=0;while(e->flg&&frames++<70){sys->ef_trsn=0;bhEff128(e);}
+        assert(!e->flg&&frames==(type?64:48));
+    }
+    sys->st_flg&=~0x2000000u;
+    for(int tile=0;tile<55;++tile){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;e->mdlver=tile;
+        e->sxb=e->syb=e->szb=1;e->pvp=e->pv;e->pn=4;e->lox=1;
+        sys->ef_fncn=0;bhEff114(e);assert(e->func&&sys->ef_fncn==1);
+        NJS_TEXTUREH_VTX *v=(NJS_TEXTUREH_VTX *)e->tvp;
+        assert(isfinite(v[0].u)&&v[0].u>=0&&v[0].v>=0);
+        if(tile==0)assert(v[0].u==0&&v[0].v==0);
+        recvxGameBootRenderBeginFrame();e->func(e);assert(!recvxEngineOriginalFault());
+        int frames=0;while(e->flg&&frames++<100){sys->ef_fncn=0;bhEff114(e);}
+        assert(!e->flg&&frames<100);
+    }
+    for(int emitter=0;emitter<4;++emitter){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;e->type=emitter==3?1:emitter;
+        sys->stg_no=emitter==3?1:0;sys->rom_no=9;
+        bhEff113(e);assert(!e->flg);
+        int count=0;for(int i=1;i<512;++i)if(eff[i].flg&1u){assert(eff[i].id==114);++count;}
+        assert(count==(emitter==0?64:emitter==1?225:emitter==2?128:196));
+    }
+    memset(eff,0,sizeof(eff));O_WRK *emitter=&eff[0];emitter->flg=1;emitter->id=118;
+    emitter->sx=1;emitter->sy=2;bhEff118(emitter);assert(emitter->ct3==8);
+    emitter->mode1=1;
+    for(int frame=0;frame<100&&emitter->mode0;++frame){
+        sys->ef_trsn=0;
+        for(int i=1;i<512;++i)if(eff[i].flg&1u)bhEff117(&eff[i]);
+        bhEff118(emitter);
+    }
+    assert(!emitter->mode0&&!emitter->ct3&&(emitter->stflg&0x1000000u));
+    memset(eff,0,sizeof(eff));emitter=&eff[0];emitter->flg=1;
+    for(int i=1;i<512;++i)eff[i].flg=2;
+    bhEff118(emitter);assert(emitter->ct3==0);
+    emitter->mode1=1;bhEff118(emitter);assert(!emitter->mode0);
+    memset(eff,0,sizeof(eff));O_WRK *mirror=&eff[0];mirror->flg=1;mirror->px=3;
+    sys->stg_no=2;bhEff112(mirror);assert((sys->st_flg&0x100u)&&sys->mr_pl.px==3);
+    mirror->mdflg=1;bhEff112(mirror);assert(!(sys->st_flg&0x100u));
+    memset(eff,0,sizeof(eff));O_WRK *smoke=&eff[0];smoke->flg=1;
+    for(int frame=0;frame<4;++frame)bhEff116(smoke);
+    assert(eff[1].flg&&eff[1].id==15&&eff[1].type==5);
+    memset(eff,0,sizeof(eff));O_WRK *gas=&eff[0];gas->flg=1;gas->type=2;gas->py=2;
+    bhEff127(gas);assert(gas->mode0==1);
+    gas->ct0=15;bhEff127(gas);assert(eff[1].flg&&eff[1].id==128);
+    /* Two strips with per-triangle attribute words, signed UV wrap and an
+       inverse scroll. Nodes are in the same owned arena as loaded models. */
+    unsigned char *scratch=(unsigned char *)(((uintptr_t)sys->memp+15u)&~(uintptr_t)15u);
+    assert(scratch+4096<=sys->endp);memset(scratch,0,4096);
+    NJS_CNK_MODEL *model=(NJS_CNK_MODEL *)scratch;
+    uint16_t *stream=(uint16_t *)(scratch+256);
+    static const uint16_t polygon[]={8,0,65,23,0x4002,
+        3,0,10,20,1,30,40,2,50,60,0xabcd,
+        0xfffd,0,70,80,1,90,100,2,110,120,0xbeef,255};
+    memcpy(stream,polygon,sizeof(polygon));model->plist=(short *)stream;
+    npSetOffsetUV(model,5,-30);
+    assert(stream[7]==15&&stream[8]==65526&&stream[15]==0xabcd&&stream[26]==0xbeef);
+    npSetOffsetUV(model,-5,30);assert(!memcmp(stream,polygon,sizeof(polygon)));
+    NJS_CNK_OBJECT *nodes=(NJS_CNK_OBJECT *)(scratch+512);
+    for(int i=0;i<12;++i)nodes[i].model=model;
+    BH_PWORK saved_actor=ene[127];
+    O_WRK *actor=(O_WRK *)&ene[127];memset(actor,0,sizeof(*actor));actor->mlwP=actor->mdl;
+    actor->mdl[0].objP=nodes;actor->mdl[0].obj_num=12;
+    memset(eff,0,sizeof(eff));O_WRK *scroll=&eff[0];scroll->flg=1;
+    scroll->lkwkp=(unsigned char *)actor;sys->gm_flg&=~1u;
+    bhEff120(scroll);assert(scroll->mode0==1&&scroll->ct1==1024);
+    nodes[11].ang[2]=64;bhEff120(scroll);assert(scroll->ct0==-2&&scroll->ct1==1022);
+    sys->gm_flg|=1;bhEff120(scroll);assert(!scroll->mode0&&!memcmp(stream,polygon,sizeof(polygon)));
+    ene[127]=saved_actor;
+    memset(eff,0,sizeof(eff));O_WRK *monitor=&eff[0];monitor->flg=1;monitor->id=111;
+    monitor->pvp=monitor->pv;monitor->pn=4;monitor->lkono=1;
+    sys->gm_flg&=~1u;sys->ef_flg&=~1u;sys->ren_n=0;
+    int texture=sys->ef_ct;bhEff111(monitor);
+    assert(monitor->mode0==1&&sys->ren_n==1&&sys->ef_ct==texture+1&&sys->ef_tn[111]==texture);
+    const RecvxBootTexture *monitor_texture=recvxGameBootTextureGet(&sys->ef_tlist,texture);
+    assert(monitor_texture->rgba8888);
+    njSetTexture(&sys->ef_tlist);recvxGameBootCaptureBegin(512);
+    recvxGameBootCaptureSubmitted();njRenderTextureNum(texture);
+    assert(monitor_texture->pixels[0]==0x7f&&monitor_texture->pixels[512u*512u*4u-1]==0x7f);
+    bhGarbageTexture(NULL,0);sys->ef_thln=0;bhEff111(monitor);
+    assert(monitor->mode0==2&&monitor->ct0==64&&sys->ef_thln==1);
+    monitor->mode1=1;
+    for(int i=0;i<64;++i){sys->ef_thln=0;bhEff111(monitor);}
+    assert(monitor->mode0==3&&monitor->ct0==0);
+    sys->ef_thln=0;bhEff111(monitor);assert(!(sys->gm_flg&0x200u));
+    NJS_TEXNAME capture_name=sys->ef_tex[texture];NJS_TEXLIST capture_list={&capture_name,1};
+    njReleaseTexture(&capture_list);
+    memcpy(eff,saved,sizeof(eff));*sys=*old;free(saved);free(old);
+    puts("PASS: monitor capture/fade, 55 debris tiles and drawing/lifetimes, four emitter bursts, linked flame shutdown/pool exhaustion, looping and selectable animations, sparks, gas lifetimes and reversible model UV scroll");
+}
+
+static void test_effect_155_batch(void)
+{
+    O_WRK *saved=malloc(sizeof(eff));SYS_WORK *old=malloc(sizeof(*sys));
+    assert(saved&&old);memcpy(saved,eff,sizeof(eff));*old=*sys;
+    static const struct {void (*update)(O_WRK *);int types,frames;} animations[]={
+        {bhEff155,3,7},{bhEff157,1,12},{bhEff159,3,24},{bhEff161,3,10},
+        {bhEff167,1,13},{bhEff169,3,10}};
+    unsigned int variants=0;
+    for(size_t a=0;a<sizeof(animations)/sizeof(*animations);++a)
+        for(int type=0;type<animations[a].types;++type){
+            memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;e->type=type;
+            e->sx=2;e->sy=3;e->sz=0.25f;
+            e->tvp=e->tv;e->pvp=e->pv;e->mtx=(NJS_MATRIX *)e->mtxbuf;e->pn=4;
+            e->px=cam.wpx+cam.vx*10;e->py=cam.wpy+cam.vy*10;e->pz=cam.wpz+cam.vz*10;
+            float start_z=e->pz;int frames=0;
+            while(e->flg&&frames<40){
+                sys->ef_trsn=0;animations[a].update(e);
+                if(!e->flg)break;
+                assert(sys->ef_trsn==1&&sys->ef_trs[0]==e);
+                assert(isfinite(e->sx)&&isfinite(e->sy)&&e->sx>0&&e->sy>0);
+                if(animations[a].update==bhEff159){
+                    int expected=type==1?(frames>=14?2:0):frames>=20?3:frames>=18?1:0;
+                    assert(e->ani_ct==expected);
+                }
+                if(frames==0){
+                    /* Owned font pages stand in for effect atlases absent from
+                       the opening room; exercise the real sprite draw path. */
+                    sys->ef_tn[e->tex_id]=0;
+                    recvxGameBootRenderBeginFrame();
+                    bhDrawTrsEffect3D((unsigned int *)sys->ef_trs,1);
+                    assert(!recvxEngineOriginalFault());
+                }
+                ++frames;
+            }
+            int expected=animations[a].frames;
+            if(animations[a].update==bhEff159&&type==1)expected=26;
+            if(animations[a].update==bhEff161&&type==1)expected=15;
+            if(animations[a].update==bhEff169&&type)expected=14;
+            assert(!e->flg&&frames==expected);
+            if(animations[a].update==bhEff157)assert(fabsf(e->pz-start_z-3.25f)<0.0001f);
+            ++variants;
+        }
+    for(int repeats=0;repeats<=3;++repeats){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;e->sx=e->sy=1;e->sz=repeats;
+        int draws=0,frames=0;
+        while(e->flg&&frames++<80){sys->ef_trsn=0;bhEff163(e);draws+=sys->ef_trsn;}
+        assert(!e->flg&&draws==16+6*(repeats>1?repeats-1:0));
+    }
+    memset(eff,0,sizeof(eff));O_WRK *bubble=&eff[0];bubble->flg=1;bubble->type=1;
+    bubble->sx=bubble->sy=1;int draws=0;
+    for(int i=0;i<52;++i){sys->ef_trsn=0;bhEff163(bubble);draws+=sys->ef_trsn;}
+    assert(bubble->flg&&draws==32&&bubble->ct0==13);
+    static const struct {void (*update)(O_WRK *);int child,type;} emitters[]={
+        {bhEff156,157,2},{bhEff158,159,1},{bhEff160,161,1},
+        {bhEff162,163,1},{bhEff168,169,1}};
+    for(size_t i=0;i<sizeof(emitters)/sizeof(*emitters);++i){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;e->mode1=2;
+        e->px=1;e->py=2;e->pz=3;e->sx=4;e->sy=5;e->sz=6;
+        emitters[i].update(e);O_WRK *child=&eff[1];
+        assert(child->flg&&child->id==emitters[i].child&&child->type==emitters[i].type);
+        assert(child->px==1&&child->py==2&&child->pz==3&&child->sxb==4&&child->syb==5);
+        assert(e->mode1==0&&e->type==0);
+        emitters[i].update(e);assert(!eff[2].flg);
+        memset(eff,0,sizeof(eff));e=&eff[0];e->flg=1;e->type=2;
+        for(int j=1;j<512;++j)eff[j].flg=2;
+        emitters[i].update(e);assert(!e->type&&!e->mode1);
+    }
+    memset(eff,0,sizeof(eff));O_WRK *burst=&eff[0];burst->flg=1;burst->mode1=3;
+    for(int i=0;i<3;++i)bhEff164(burst);
+    assert(!burst->ct0&&!burst->type&&!burst->mode1);
+    for(int i=1;i<=3;++i)assert(eff[i].id==159&&eff[i].type==2);
+    memset(eff,0,sizeof(eff));O_WRK *trail=&eff[0];trail->flg=1;trail->mode1=2;
+    trail->px=3;trail->py=20;trail->pz=4;trail->sz=0.25f;
+    for(int i=0;i<4;++i)bhEff165(trail);
+    assert(!trail->type&&!trail->ct0&&trail->px==3&&trail->py==20&&trail->pz==4);
+    assert(eff[1].id==159&&eff[2].id==159&&!eff[3].flg);
+    memset(eff,0,sizeof(eff));O_WRK *periodic=&eff[0];periodic->flg=1;periodic->mode1=1;
+    for(int i=0;i<27;++i)bhEff166(periodic);
+    assert(periodic->type==1&&periodic->ct1==12);
+    for(int i=1;i<=3;++i)assert(eff[i].id==167);
+    periodic->type=0;bhEff166(periodic);assert(!eff[4].flg);
+    memset(eff,0,sizeof(eff));O_WRK *quad=&eff[0];quad->flg=1;
+    njUnitMatrix(NULL);getuv(0,quad);assert(quad->tv[0].x==-1&&quad->tv[1].x==1);
+    getuv(1,quad);assert(quad->tv[0].x==1&&quad->tv[1].x==-1);
+    memcpy(eff,saved,sizeof(eff));*sys=*old;free(saved);free(old);
+    printf("PASS: %u sprite variants expire with original texture-bank timing; bubble repeats/pauses, oriented quads, one-shot/burst/periodic emitters, pool exhaustion and moving-trail restoration\n",variants);
+}
+
+static void test_effect_170_batch(void)
+{
+    O_WRK *saved=malloc(sizeof(eff));SYS_WORK *old=malloc(sizeof(*sys));
+    assert(saved&&old);memcpy(saved,eff,sizeof(eff));*old=*sys;
+    for(int repeats=0;repeats<=3;++repeats){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;e->type=repeats;e->sx=e->sy=1;
+        int draws=0;
+        for(int i=0;i<37&&e->flg;++i){sys->ef_trsn=0;bhEff171(e);draws+=sys->ef_trsn;}
+        if(repeats)assert(!e->flg&&draws==repeats*10);
+        else assert(e->flg&&draws==37&&e->ct1==-3);
+    }
+    for(int blend=0;blend<100;++blend){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;e->type=blend;
+        for(int i=0;i<3;++i){
+            sys->ef_trsn=0;bhEff173(e);
+            assert(e->flg&&e->bl_src==2+blend/10&&e->bl_dst==2+blend%10&&sys->ef_trsn==1);
+            assert(e->ct0==1&&e->sx==3.984375f&&e->sy==3.984375f);
+        }
+    }
+    memset(eff,0,sizeof(eff));O_WRK *moon=&eff[0];moon->flg=1;moon->sx=2;moon->sy=3;
+    for(int i=0;i<3;++i){sys->ef_trsn=0;bhEff176(moon);assert(moon->ct0==0&&moon->sx==8&&moon->sy==12&&sys->ef_trsn==1);}
+    for(int start=0;start<=6;++start){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;e->type=start;
+        e->sx=e->sy=1;e->sz=0.25f;e->lkono=20;
+        int visible=0;while(e->flg){sys->ef_trsn=0;bhEff178(e);visible+=sys->ef_trsn;}
+        assert(visible==19&&e->ct1==20&&e->pz==4.75f);
+    }
+    for(int variant=0;variant<2;++variant){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;e->type=variant;e->sx=e->sy=1;
+        int visible=0;while(e->flg){sys->ef_trsn=0;bhEff180(e);visible+=sys->ef_trsn;}
+        assert(visible==10&&e->tex_id==408&&e->ani_ct==variant);
+    }
+    static const int smoke_frames[10]={20,22,24,24,16,20,17,16,17,20};
+    static const unsigned int colors[10]={0xffffffffu,0xd0201010u,0xffe0e0e0u,0xffc01000u,
+        0xffa0c090u,0xfff0f040u,0xff806040u,0xffc0e0ffu,0xd0201010u,0xff404040u};
+    for(int style=0;style<10;++style)for(int color=0;color<10;++color){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;e->type=color*10+style;
+        e->sx=e->sy=1;e->sz=2.25f;e->pn=4;e->tvp=e->tv;e->pvp=e->pv;e->mtx=(NJS_MATRIX *)e->mtxbuf;
+        e->px=cam.wpx+10*cam.vx;e->py=cam.wpy+10*cam.vy;e->pz=cam.wpz+10*cam.vz;
+        float start_z=e->pz;int visible=0;
+        while(e->flg&&visible<30){
+            sys->ef_trsn=0;bhEff182(e);
+            if(!e->flg)break;
+            assert(e->tv[0].col==colors[color]&&sys->ef_trsn==1);
+            if(visible==0){
+                /* Opening-room owned textures stand in for unavailable smoke atlases. */
+                sys->ef_tn[e->tex_id]=0;recvxGameBootRenderBeginFrame();
+                bhDrawTrsEffect3D((unsigned int *)sys->ef_trs,1);assert(!recvxEngineOriginalFault());
+            }
+            ++visible;
+        }
+        assert(!e->flg&&visible==smoke_frames[style]);
+        assert(fabsf(e->pz-start_z-(visible+1)*0.25f)<0.0001f);
+    }
+    static const struct{void (*update)(O_WRK *);int child,type;} emitters[]={
+        {bhEff172,173,1},{bhEff175,176,0},{bhEff177,178,1}};
+    for(size_t i=0;i<sizeof(emitters)/sizeof(*emitters);++i){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;e->mode1=2;e->lkono=27;
+        emitters[i].update(e);
+        assert(!e->type&&!e->mode1&&eff[1].id==emitters[i].child&&eff[1].type==emitters[i].type);
+        if(emitters[i].child==178)assert(eff[1].lkono==27);
+        emitters[i].update(e);assert(!eff[2].flg);
+        memset(eff,0,sizeof(eff));e=&eff[0];e->flg=1;e->type=2;
+        for(int j=1;j<512;++j)eff[j].flg=2;
+        emitters[i].update(e);assert(!e->type&&!e->mode1);
+    }
+    for(int kind=0;kind<2;++kind)for(int periodic=0;periodic<2;++periodic){
+        memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];e->flg=1;e->mode1=2;e->sz=periodic?3.75f:0;
+        for(int frame=0;frame<8;++frame){if(kind)bhEff181(e);else bhEff179(e);}
+        int count=0;for(int i=1;i<512;++i)if(eff[i].flg){assert(eff[i].id==(kind?182:180));++count;}
+        assert(count==(periodic?3:1));
+        if(!periodic)assert(!e->type&&!e->mode1);
+        else assert(e->type==2&&e->ct1==1);
+    }
+    memset(eff,0,sizeof(eff));O_WRK *trail=&eff[0];trail->flg=1;trail->mode1=2;
+    trail->px=3;trail->py=20;trail->pz=4;trail->sz=0.25f;
+    for(int i=0;i<4;++i)bhEff170(trail);
+    assert(!trail->type&&!trail->ct0&&trail->px==3&&trail->py==20&&trail->pz==4);
+    assert(fabsf(trail->loz-1)<0.0001f&&fabsf(trail->loy+0.6f)<0.0001f);
+    assert(eff[1].id==171&&eff[2].id==171&&!eff[3].flg);
+    memcpy(eff,saved,sizeof(eff));*sys=*old;free(saved);free(old);
+    puts("PASS: repeated sprites, all 100 blends and 100 smoke style/color combinations, fractional velocity, timed sprites, static sprite, one-shot/periodic emitters, child lifetime propagation and moving-trail restoration");
+}
+
+static O_WRK *effect_145_fixture(int id)
+{
+    memset(eff,0,sizeof(eff));O_WRK *e=&eff[0];
+    e->flg=1;e->id=id;e->sx=e->sy=e->sz=1;e->sxb=e->syb=e->szb=1;
+    e->tvp=e->tv;e->pvp=e->pv;e->pn=4;e->mtx=(NJS_MATRIX *)e->mtxbuf;
+    njUnitMatrix(e->mtx);return e;
+}
+static void test_effect_145_batch(void)
+{
+    O_WRK *saved=malloc(sizeof(eff));SYS_WORK *old=malloc(sizeof(*sys));
+    assert(saved&&old);memcpy(saved,eff,sizeof(eff));*old=*sys;
+    O_WRK *eye=effect_145_fixture(145);
+    eye->mtx[0][12]=3;eye->mtx[0][13]=20;eye->mtx[0][14]=4;
+    bhEff145(eye);assert(eye->mode0==1&&eye->tv[0].col==0xffff0000u);
+    bhEff145(eye);
+    assert(eff[1].id==146&&eff[2].id==146&&eff[1].exp0==(unsigned char *)eye);
+    assert(fabsf(eff[1].px-3.28f)<1e-5f&&fabsf(eff[2].px-2.72f)<1e-5f);
+    for(int frame=0;frame<20;++frame){
+        sys->ef_trsn=0;
+        for(int i=1;i<=2;++i)if(eff[i].flg)bhEff_Sub146(&eff[i]);
+    }
+    assert(!eff[1].flg&&!eff[2].flg);
+    eye->mode1=2;bhEff145(eye);assert((eye->tv[0].col>>24)==239);
+    sys->ef_trsn=0;
+    for(int i=1;i<=2;++i)bhEff_Sub146(&eff[i]);
+    assert(sys->ef_trsn==2&&!eff[1].flg&&!eff[2].flg&&eff[1].tv[3].col==eye->tv[0].col);
+    for(int i=1;i<512;++i)eff[i].flg=2;
+    bhEff145(eye);assert(eff[511].flg==2&&eye->flg&1u);
+    for(int variant=0;variant<2;++variant){
+        O_WRK *e=effect_145_fixture(147);e->type=variant;sys->ef_trsn=0;
+        bhEff147(e);assert(sys->ef_trsn==1&&e->tex_id==80&&e->bl_dst==3);
+        assert(e->tv[0].col==(variant?0xff5f0000u:0xff400000u));
+        sys->ef_trsn=512;bhEff147(e);assert(sys->ef_trsn==512);
+        e->stflg=0x1000000;sys->ef_trsn=0;bhEff147(e);assert(!sys->ef_trsn);
+    }
+    O_WRK *drop=effect_145_fixture(148);drop->px=3;drop->py=20;drop->pz=4;
+    sys->ef_trsn=0;bhEff148(drop);assert(drop->ofy==20&&!sys->ef_trsn);
+    drop->mode1=1;int falling=0;
+    while(drop->mode1==1&&falling++<100){sys->ef_trsn=0;bhEff148(drop);assert(sys->ef_trsn==1);}
+    assert(falling<100&&drop->mode1==2&&drop->py==drop->gpy);
+    sys->ef_trsn=0;bhEff148(drop);assert(drop->py==20&&drop->yn==0&&!drop->mode1&&!sys->ef_trsn);
+    O_WRK *fire=effect_145_fixture(149);fire->sx=2;fire->sy=3;
+    sys->ef_tn[80]=0;sys->ef_tn[4]=0;
+    bhEff149(fire);assert(fire->mode0==6&&fire->func);
+    fire->mode1=1;bhEff149(fire);assert(fire->mode0==1);
+    while(fire->mode0==1){sys->ef_fncn=0;bhEff149(fire);assert(sys->ef_fncn==1);}
+    assert(fire->mode0==2&&fire->ah==1);
+    fire->px=cam.wpx+cam.vx*10;fire->py=cam.wpy+cam.vy*10;fire->pz=cam.wpz+cam.vz*10;
+    recvxGameBootRenderBeginFrame();fire->func(fire);assert(!recvxEngineOriginalFault());
+    fire->ct3=0;sys->ef_fncn=0;bhEff149(fire);assert(eff[1].id==264);
+    O_WRK *sparks=&eff[1];bhEff_E12_FireSpark(sparks);assert(sparks->mode0==1&&sparks->func);
+    P_WRK *particles=(P_WRK *)sparks->exp0;assert(particles->num==16);
+    int spark_frames=0;
+    while(sparks->flg&&spark_frames++<70){
+        sys->ef_fncn=0;bhEff_E12_FireSpark(sparks);
+        if(sys->ef_fncn){recvxGameBootRenderBeginFrame();sparks->func(sparks);}
+    }
+    assert(!sparks->flg&&!particles->flg&&spark_frames<70);
+    fire->mode1=2;int fade_frames=0;
+    while(fire->mode0&&fade_frames++<60){sys->ef_fncn=0;bhEff149(fire);}
+    assert(!fire->mode0&&fire->sx==2&&fire->sy==3&&fade_frames<60);
+    for(int variant=0;variant<2;++variant){
+        O_WRK *e=effect_145_fixture(151);e->type=variant;e->sz=0.5f;
+        int frames=0;while(e->flg){sys->ef_trsn=0;bhEff151(e);frames+=e->flg!=0;}
+        assert(frames==10&&e->ani_ct==variant&&e->py<0);
+        e=effect_145_fixture(151);e->type=variant;bhEff151(e);
+        e->type=1-variant;sys->ef_trsn=0;bhEff151(e);
+        assert(e->ct0==1&&e->ani_ct==1-variant);
+    }
+    for(int phase=0;phase<12;++phase)for(int strength=0;strength<=20;strength+=10){
+        O_WRK *e=effect_145_fixture(153);e->type=phase;e->flr_no=strength;
+        for(int frame=0;frame<2;++frame){
+            sys->ef_trsn=0;bhEff153(e);assert(e->flg&&sys->ef_trsn==1);
+            assert((e->tv[0].col>>24)==(strength>=20?0:255-strength*255/20));
+        }
+        bhEff153(e);assert(!e->flg);
+    }
+    O_WRK *line=effect_145_fixture(152);line->mode1=3;line->lkono=10;line->px=3;line->py=20;line->pz=4;
+    for(int frame=0;frame<12;++frame){
+        memset(eff+1,0,sizeof(eff)-sizeof(*eff));bhEff152(line);
+        int phase=(frame+1)%12;
+        assert(line->ct1==phase&&line->px==3&&line->py==20&&line->pz==4);
+        for(int i=1;i<=3;++i)assert(eff[i].id==153&&eff[i].type==(phase+13-i)%12&&eff[i].flr_no==10);
+    }
+    O_WRK *burst=effect_145_fixture(150);burst->mode1=2;bhEff150(burst);
+    assert(eff[1].id==151&&eff[1].type==1&&!burst->type&&!burst->mode1);
+    burst=effect_145_fixture(154);burst->mode1=1;int previous=-1;
+    for(int frame=0;frame<15;++frame){
+        bhEff154(burst);
+        if(!(frame%7)){int slot=frame/7+1;assert(eff[slot].id==155&&eff[slot].type!=previous);previous=eff[slot].type;}
+    }
+    memcpy(eff,saved,sizeof(eff));*sys=*old;free(saved);free(old);
+    puts("PASS: linked eye spawn/fade and pool exhaustion, hidden/full shadow queues, falling drop/reset, fire sprite draw/fade and spark context release, debris variant switching, all 12 impact frames/alpha levels, phased line emission and alternating spark bursts");
+}
+
 static void test_remaining_effect_services(void)
 {
     O_WRK *saved=malloc(sizeof(eff));assert(saved);memcpy(saved,eff,sizeof(eff));
@@ -2330,6 +2953,7 @@ int main(int argc, char **argv)
 #endif
         test_room_read_and_expand(argv[1], arena, arena_size);
         test_game_direction_mapping(argv[1],arena,arena_size);
+        test_invalid_enemy_work(argv[1],arena,arena_size);
         test_large_room_streams(argv[1], arena, arena_size);
     }
     assert(recvxGameBootInit(argv[1], arena, arena_size) == 0);
@@ -2371,7 +2995,14 @@ int main(int argc, char **argv)
     press(&input, RECVX_BUTTON_START);
     for (i = 0; i < 30 && AdvWork.Mode != 9; ++i) tick(&input);
     assert(AdvWork.Mode == 9);
-    /* No memory card: original title selects New Game and disables Load. */
+    /* Preserve real workspace saves. The title selects Load when a valid
+       slot exists; verify both menu directions before choosing New Game. */
+    if(recvxGameBootSaveStorageAny()){
+        assert(AdvWork.Cursor[0]==0);
+        press(&input,RECVX_BUTTON_DOWN);assert(AdvWork.Cursor[0]==1);
+        press(&input,RECVX_BUTTON_UP);assert(AdvWork.Cursor[0]==0);
+        press(&input,RECVX_BUTTON_DOWN);
+    }
     assert(AdvWork.Cursor[0] == 1);
     capture = 1; capture_path = "/tmp/recvx-game-menu.ppm"; tick(&input);
     press(&input, RECVX_BUTTON_CROSS);
@@ -2567,6 +3198,11 @@ int main(int argc, char **argv)
     test_remaining_opcode_boundaries();
     test_remaining_opcode_state();
     test_remaining_effect_services();
+    test_effect_batch();
+    test_effect_next_batch();
+    test_effect_155_batch();
+    test_effect_170_batch();
+    test_effect_145_batch();
     test_effect_collision_services();
     test_effect_callback_lifetimes();
     test_event_skip_task();

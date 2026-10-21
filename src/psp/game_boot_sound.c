@@ -1,3 +1,4 @@
+#include "psp/game_boot_enemy_sound.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -20,6 +21,8 @@ typedef struct EventSoundControl {
 static EventSoundControl event_control[12][16];
 static int bgm_volume=-45;
 static void event_control_tick(void);
+extern void recvxGameBootEnemySoundReset(void) __attribute__((weak));
+extern void ExecEnemySeManager(void) __attribute__((weak));
 static void object_sound_reset(void);
 static void object_sound_tick(void);
 static void object_pool_stop(void);
@@ -40,6 +43,7 @@ void recvxGameBootSoundReset(void)
 {
     memset(event_control,0,sizeof(event_control));bgm_volume=-45;
     object_sound_reset();
+    if(recvxGameBootEnemySoundReset)recvxGameBootEnemySoundReset();
     room_case = init_script = system_slot = weapon_slot = request_kind = 0;
     current_bgm = pending_bgm = -1; memset(foot_slot, 0, sizeof(foot_slot));
     max_event_slot = 4; max_object_slot = 1;
@@ -50,6 +54,7 @@ void recvxGameBootSoundTick(void)
     recvxAudioService();
     event_control_tick();
     object_sound_tick();
+    if(ExecEnemySeManager)ExecEnemySeManager();
     recvxAudioLock(); recvxAudioAdvanceFades(); recvxAudioUnlock();
     check();
 }
@@ -83,6 +88,7 @@ void InitGameSoundSystem(void)
 {
     current_bgm = pending_bgm = -1;
     object_sound_reset();
+    if(recvxGameBootEnemySoundReset)recvxGameBootEnemySoundReset();
     for (int i = 0; i < 8; ++i) recvxAudioStopMidi(i);
     recvxGameBootLog("game sound initialized: native SAS ADPCM");
 }
@@ -133,7 +139,7 @@ void ContinuePlayVoice(void) { recvxAudioPause(1, 0); }
 void RequestAllStopSoundEx(int streams, int sounds, int frames)
 {
     if (streams) { StopBgm(frames); StopVoice(frames); }
-    if (sounds) { object_sound_reset(); recvxAudioStopSounds(frames); }
+    if (sounds) { object_sound_reset(); if(recvxGameBootEnemySoundReset)recvxGameBootEnemySoundReset(); recvxAudioStopSounds(frames); }
 }
 static void se(int slot, int sound, int volume, int pan)
 { recvxAudioPlaySe(slot, sound, volume, pan); check(); }
@@ -236,7 +242,7 @@ void CallPlayerFootStepSeEx(int floor, int type, int flag, int id, NJS_POINT3 *p
     }
     recvxAudioUpdateSe(slot, volume, pan, pitch);
 }
-void AllStopEnemySe(void) { for (int i = 0; i < 6; ++i) recvxAudioStopSe(i); }
+void AllStopEnemySe(void) { if(recvxGameBootEnemySoundReset)recvxGameBootEnemySoundReset(); for (int i = 0; i < 6; ++i) recvxAudioStopSe(i); }
 void CallEnemySe(int slot, NJS_POINT3 *position, int sound)
 { int volume, pan; if (slot < 0 || slot >= 6) recvxGameBootUnsupported("invalid enemy sound slot"); spatial(position, 4, &volume, &pan); se(slot, (sound & 255) | 0x300, volume, pan); }
 void StopEnemySe(int slot) { recvxAudioStopSe(slot); }
@@ -425,4 +431,22 @@ static void object_pool_stop(void)
     for(int i=0;i<3;++i)if(object_owner[i]>=0){
         recvxAudioStopMidi(3+i);recvxAudioSoundControl(1,3+i,0,0,0);object_owner[i]=-1;
     }
+}
+
+int recvxGameBootSoundInitScript(void) { return init_script; }
+void recvxGameBootEnemySpatial(NJS_POINT3 *position,char *pan,char *volume,float *distance)
+{
+    int v,p;original_spatial(position,0,&v,&p);
+    *pan=(char)p;*volume=(char)v;
+    float x=position->x-cam.wpx,y=position->y-cam.wpy,z=position->z-cam.wpz;
+    *distance=sqrtf(x*x+y*y+z*z);
+}
+void CallEnemySeMain(unsigned int slot,int sound,char pan,char volume,int flag,int frames)
+{
+    if(slot>=6)recvxGameBootUnsupported("invalid native enemy sound slot");
+    if(flag){
+        recvxAudioPlaySe(slot,sound,frames>0?-127:volume,pan);
+        if(frames>0)recvxAudioSeVolume(slot,volume,frames);
+    }else recvxAudioUpdateSe(slot,volume,pan,0);
+    check();
 }

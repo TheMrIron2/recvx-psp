@@ -306,6 +306,28 @@ Sint32 njLoadTexture(NJS_TEXLIST *list)
         NJS_TEXINFO *info = name->filename;
         unsigned int global_index = name->texaddr;
         if (!info) recvxGameBootUnsupported("missing ADV texture info");
+        /* Retail screen-distortion effects request an empty 512-square render
+           target. It has no TIM2 header; the GE capture fills its owned pixels. */
+        if((list==&sys->ren_tlist || list==&sys->ef_tlist) && info==&sys->ren_info &&
+           info->texsurface.Type==(2817u<<16) &&
+           info->texsurface.nWidth==512 && info->texsurface.nHeight==512){
+            unsigned int slot;
+            for(slot=0;slot<TEXTURE_LIMIT&&textures[slot].source;++slot){}
+            if(slot==TEXTURE_LIMIT)recvxGameBootUnsupported("scene capture texture pool is full");
+            RecvxBootTexture *t=&textures[slot];
+            t->source=calloc(1,1);t->source_size=1;
+            t->pixels=memalign(64,512u*512u*4u);
+            if(!t->source||!t->pixels)recvxGameBootUnsupported("scene capture allocation failed");
+            memset(t->pixels,0,512u*512u*4u);
+            t->rgba8888=1;t->width=t->height=t->tile_width=512;t->tile_count=1;
+            t->capture_scale_u=480.0f/512;t->capture_scale_v=272.0f/512;
+            memset(&descriptors[slot],0,sizeof(descriptors[slot]));
+            descriptors[slot].texinfo=*info;descriptors[slot].texinfo.texaddr=t->pixels;
+            descriptors[slot].texinfo.texsurface.pSurface=(Uint32 *)t->source;
+            descriptors[slot].globalIndex=global_index;descriptors[slot].count=1;
+            name->filename=NULL;name->texaddr=(Uint32)(uintptr_t)&descriptors[slot];
+            continue;
+        }
         recvxGameBootTextureInstall(list, i, info->texaddr,
             recvxGameBootSourceRemaining(info->texaddr), 0, global_index, name->attr, 0);
     }

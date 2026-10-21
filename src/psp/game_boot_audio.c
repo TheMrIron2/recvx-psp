@@ -494,6 +494,23 @@ int recvxAudioPlayMidiFade(int slot, int sound, int volume, int pan, int frames)
 }
 int recvxAudioPlayMidi(int slot, int sound, int volume, int pan)
 { return recvxAudioPlayMidiFade(slot, sound, volume, pan, 0); }
+int recvxAudioSePlaying(int slot)
+{
+    int playing=0;recvxAudioLock();
+    for(int i=4;i<VOICES;++i)if(voices[i].active&&voices[i].owner==-1&&voices[i].slot==slot){playing=1;break;}
+    recvxAudioUnlock();return playing;
+}
+void recvxAudioSeVolume(int slot,int volume,int frames)
+{
+    recvxAudioLock();
+    for(int i=4;i<VOICES;++i){
+        Voice *v=&voices[i];
+        if(!v->active||v->owner!=-1||v->slot!=slot)continue;
+        v->target=v->sample_gain*gain(volume)/4096;v->fade=frames>0?frames:0;
+        if(!v->fade){v->volume=v->target;recvxAudioNativeVolume(i,native_volume(v),native_pan(v));}
+    }
+    recvxAudioUnlock();
+}
 void recvxAudioStopSe(int slot) { recvxAudioLock(); for (int i = 4; i < VOICES; ++i) if (voices[i].owner == -1 && voices[i].slot == slot) stop(&voices[i]); recvxAudioUnlock(); }
 void recvxAudioUpdateSe(int slot, int volume, int pan, int pitch)
 {

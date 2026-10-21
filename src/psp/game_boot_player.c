@@ -239,32 +239,48 @@ int recvxGameBootValidatePvp(const unsigned char *data, size_t size, unsigned in
     return count >= 0 && (textures == UINT32_MAX ? count > 0 : (unsigned int)count == textures) ? 0 : -1;
 }
 
+static int aligned_motion(const RecvxPlayerMotionAsset *motion)
+{
+    const unsigned char *base;
+    if (!motion->present) return 0;
+    if (((uintptr_t)motion->data & 3) || (half(motion->data + 4) & 3) ||
+        (motion->motion_offset & 3) || (motion->data_offset & 3) ||
+        (motion->attribute_offset != UINT32_MAX && (motion->attribute_offset & 1))) return -1;
+    base = motion->data + half(motion->data + 4);
+    for (unsigned int j = 0; j < motion->object_count * 2u; ++j) {
+        unsigned int reference = word(base + motion->data_offset + j * 4u);
+        if (reference != UINT32_MAX && (reference & 3)) return -1;
+    }
+    return 0;
+}
 static int aligned_motions(const RecvxPlayerAssets *assets)
 {
-    unsigned int i;
-    for (i = 0; i < assets->motion_count; ++i) {
-        const RecvxPlayerMotionAsset *motion = &assets->motions[i];
-        const unsigned char *base;
-        unsigned int j;
-        if (!motion->present) continue;
-        if (((uintptr_t)motion->data & 3) || (half(motion->data + 4) & 3) ||
-            (motion->motion_offset & 3) || (motion->data_offset & 3) ||
-            (motion->attribute_offset != UINT32_MAX && (motion->attribute_offset & 1))) return -1;
-        base = motion->data + half(motion->data + 4);
-        for (j = 0; j < motion->object_count * 2u; ++j) {
-            unsigned int reference = word(base + motion->data_offset + j * 4u);
-            if (reference != UINT32_MAX && (reference & 3)) return -1;
-        }
-    }
+    for (unsigned int i = 0; i < assets->motion_count; ++i)
+        if (aligned_motion(&assets->motions[i])) return -1;
     return 0;
 }
 
 int recvxGameBootValidateMotionStream(const unsigned char *data, size_t size)
 {
-    static const unsigned char empty_models[4] = {255, 255, 255, 255};
-    RecvxPlayerAssets assets;
-    if (recvxPlayerAssetsParse(empty_models, 4, data, size, NULL, 0, &assets)) return -1;
-    return aligned_motions(&assets);
+    size_t cursor=0;
+    unsigned int slots=0;
+    /* Enemy/room banks use 512 MN_WORK entries; player banks retain the
+       separate 128-slot asset-parser limit. Validate each record directly. */
+    if(!data)return -1;
+    while(span(size,cursor,4)){
+        unsigned int length=word(data+cursor);cursor+=4;
+        if(length==UINT32_MAX){
+            while(cursor<size)if(data[cursor++])return -1;
+            return 0;
+        }
+        if(slots++>=512)return -1;
+        if(!length)continue;
+        RecvxPlayerMotionAsset motion;
+        if(!span(size,cursor,length)||
+            recvxPlayerMotionAssetParse(data+cursor,length,&motion)||aligned_motion(&motion))return -1;
+        cursor+=length;
+    }
+    return -1;
 }
 
 int recvxGameBootValidatePlayerSource(const void *source, size_t size)

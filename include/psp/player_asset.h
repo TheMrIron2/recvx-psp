@@ -43,6 +43,8 @@ typedef struct RecvxPlayerAssets {
     uint32_t speed_count, populated_speeds;
 } RecvxPlayerAssets;
 
+/* Parse one MTN record without imposing a player-bank slot limit. */
+int recvxPlayerMotionAssetParse(const void *data,size_t size,RecvxPlayerMotionAsset *motion);
 int recvxPlayerAssetsParse(const void *model_stream, size_t model_size,
                            const void *motion_stream, size_t motion_size,
                            const void *speed_stream, size_t speed_size,

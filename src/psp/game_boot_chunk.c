@@ -63,6 +63,57 @@ void recvxGameBootChunkReset(void)
 }
 const char *recvxGameBootChunkFault(void) { return chunk_fault; }
 
+/* Scalar replacement for njplus.c's PS2 strip-UV assembly. Validate the entire
+   stream first so a malformed later command cannot leave an earlier one edited. */
+void npSetOffsetUV(NJS_CNK_MODEL *model, short offu, short offv)
+{
+    if(remaining(model,4)<sizeof(*model))
+        recvxGameBootUnsupported("invalid UV scroll model");
+    if(!model->plist)return;
+    for(int apply=0;apply<2;++apply){
+        unsigned char *p=(unsigned char *)model->plist;
+        size_t left=remaining(p,2);
+        unsigned int commands=0;
+        for(;;){
+            if(++commands>CHUNK_COMMAND_LIMIT||left<2)
+                recvxGameBootUnsupported("unterminated UV scroll stream");
+            unsigned int type=p[0];
+            if(type==255)break;
+            size_t size=2;
+            if(type==0){p+=2;left-=2;continue;}
+            if(left<4)recvxGameBootUnsupported("truncated UV scroll command");
+            if((type>=1&&type<=3)||type==8)size=4;
+            else if((type>=17&&type<=23)||(type>=56&&type<=58)||(type>=64&&type<=66))
+                size=4u+u16(p+2)*2u;
+            else recvxGameBootUnsupported("unsupported UV scroll command");
+            if(size>left)recvxGameBootUnsupported("UV scroll command exceeds stream");
+            if(type==65||type==66){
+                unsigned char *v=p+4,*end=p+size;
+                if(end-v<2)recvxGameBootUnsupported("truncated UV scroll strips");
+                unsigned int strips=u16(v)&0x3fffu,attributes=u16(v)>>14;v+=2;
+                while(strips--){
+                    if(end-v<2)recvxGameBootUnsupported("truncated UV scroll strip length");
+                    unsigned int encoded=u16(v),count=encoded&0x8000u?65536u-encoded:encoded;
+                    v+=2;
+                    if(count<3)recvxGameBootUnsupported("invalid UV scroll strip length");
+                    for(unsigned int i=0;i<count;++i){
+                        size_t bytes=6u+(i>=2?attributes*2u:0u);
+                        if(bytes>(size_t)(end-v))recvxGameBootUnsupported("truncated UV scroll vertex");
+                        if(apply){
+                            uint16_t u=(uint16_t)(u16(v+2)+offu),w=(uint16_t)(u16(v+4)+offv);
+                            v[2]=u;v[3]=u>>8;v[4]=w;v[5]=w>>8;
+                        }
+                        v+=bytes;
+                    }
+                }
+                if(end-v>2 || (end-v==2&&u16(v)))
+                    recvxGameBootUnsupported("invalid UV scroll strip padding");
+            }
+            p+=size;left-=size;
+        }
+    }
+}
+
 typedef struct VertexSource {
     const unsigned char *data;
     unsigned int first, count, stride, normal;

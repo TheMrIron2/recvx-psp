@@ -74,6 +74,10 @@ ENGINE_PLAYER_CONTROL_SOURCES := $(filter-out src/psp/engine_player_test.c,$(ENG
 	src/psp/engine_original_event_test.c \
 	src/psp/engine_pacer.c src/psp/original_clock.c \
 	src/psp/engine_test_input.c
+BOOT_ENEMY_UNITS := en01 en02 en03 en04 en05 en06 en07 en08 en09 en10 en11 en12 en13 en14 en15 en16 en17 en18 en19 en20 en21 en22 en23 en24 en25 en26 en27 en29 en30 en54 en55 en01sub en01b en02sub en03sub en05sub en06sub en13sub en17sub zonzon zonzon1 rutchk hitchkl services enemy_sound extras
+BOOT_ENEMY_OBJECTS = $(addprefix $(BUILD_DIR)/enemy/,$(addsuffix .o,$(BOOT_ENEMY_UNITS)))
+BOOT_ENEMY_SOURCES = $(BOOT_ENEMY_OBJECTS:.o=.c)
+HOST_ENEMY_SOURCES := $(addprefix build/host/enemy/,$(addsuffix .c,$(BOOT_ENEMY_UNITS)))
 ifeq ($(BUILD_PROFILE),game)
 PSP_LARGE_MEMORY := 1
 CFLAGS += -fsigned-char -ffunction-sections -fdata-sections -DRECVX_GAME_BOOT -DRECVX_ENGINE_SHARED_EVENT_CORE
@@ -159,7 +163,7 @@ BOOT_SAVE_CONTROLLERS_OBJECT := $(BUILD_DIR)/game_boot_save_controllers_original
 # Newlib reads these from its CRT, linked after our intermediate GC pass.
 BOOT_RUNTIME_ROOTS := -u sce_newlib_attribute -u sce_newlib_heap_kb_size -u sce_newlib_heap_threshold_kb_size
 LIBS += -lpspmpeg -lpsprtc
-SOURCES := src/psp/game_main.c src/psp/game_boot_map.c src/psp/game_boot_file_view.c src/psp/game_boot_save_storage.c src/ps2/veronica/prog/item.c src/psp/game_boot_inventory_control.c src/psp/game_boot_terminal_gameover.c src/psp/game_boot_door.c src/psp/game_boot_actor_wall.c src/psp/game_boot_item_view.c src/psp/game_boot_sys_save.c src/psp/game_boot_save_controllers.c src/psp/game_boot_movie.c src/psp/game_boot_movie_psp.c src/psp/game_boot_event_movie.c src/psp/game_boot_event_remaining.c src/psp/game_boot_event_actor.c src/psp/game_boot.c \
+SOURCES := $(BOOT_ENEMY_OBJECTS) src/psp/game_boot_enemy.c src/psp/game_main.c src/psp/game_boot_map.c src/psp/game_boot_file_view.c src/psp/game_boot_save_storage.c src/ps2/veronica/prog/item.c src/psp/game_boot_inventory_control.c src/psp/game_boot_terminal_gameover.c src/psp/game_boot_door.c src/psp/game_boot_actor_wall.c src/psp/game_boot_item_view.c src/psp/game_boot_sys_save.c src/psp/game_boot_save_controllers.c src/psp/game_boot_movie.c src/psp/game_boot_movie_psp.c src/psp/game_boot_event_movie.c src/psp/game_boot_event_remaining.c src/psp/game_boot_event_actor.c src/psp/game_boot.c \
 	src/psp/game_boot_files.c src/psp/game_boot_services.c src/psp/game_boot_sound.c src/psp/game_boot_audio.c src/psp/game_boot_movie_audio.c src/psp/game_boot_audio_psp.c \
 	src/psp/game_boot_draw.c src/psp/game_boot_draw_control.c src/psp/game_boot_draw_skin.c src/psp/game_boot_effect_draw.c src/psp/game_boot_skin.c src/psp/game_boot_morph.c src/psp/game_boot_effect_sprites.c src/psp/game_boot_effect_shadow.c src/psp/game_boot_fog.c src/psp/game_boot_effect_lines.c src/psp/game_boot_effect_thl.c src/psp/game_boot_effect_2d.c src/psp/game_boot_thunder.c src/psp/game_boot_render.c src/psp/game_boot_chunk.c src/psp/game_boot_render_texture.c src/psp/game_boot_texture.c src/psp/game_boot_gu.c src/psp/game_boot_cut.c src/psp/game_boot_checkpoint.c src/psp/engine_original_view.c src/psp/engine_original_lighting_psp.c \
 	src/psp/engine_original_memory.c src/psp/engine_original_fault.c \
@@ -646,7 +650,7 @@ HOST_FLAGS := -std=c11 -O1 -g -Wall -Wextra -Werror -Iinclude -Iinclude/ps2/vero
 HOST_EVENT_FLAGS := $(HOST_FLAGS) -fsigned-char -D__PSP__ -DRECVX_EVENT_CORE_HOST_TEST -DRECVX_EVENT_CORE_TEST -idirafter include/recvx-decomp-katana/KATANA/Include
 HOST_ORIGINAL_ENGINE_FLAGS := $(HOST_FLAGS) -fsigned-char -D__PSP__ -idirafter include/recvx-decomp-katana/KATANA/Include
 HOST_BOOT_TEST := build/host/game-boot-test
-HOST_BOOT_SOURCES := src/psp/game_boot_map.c src/psp/game_boot_file_view.c src/psp/game_boot_save_storage.c build/host/game_boot_file_view_original.c src/ps2/veronica/prog/item.c build/host/game_boot_map_control_original.c src/psp/game_boot_inventory_control.c build/host/game_boot_inventory_control_original.c src/psp/game_boot_terminal_gameover.c build/host/game_boot_terminal_gameover_original.c src/psp/game_boot_door.c build/host/game_boot_door_control_original.c src/psp/game_boot_actor_wall.c build/host/game_boot_actor_wall_original.c src/psp/game_boot_item_view.c build/host/game_boot_item_view_original.c build/host/psp_debug_font.c build/host/game_boot_save_controllers_original.c src/psp/game_boot_sys_save.c src/psp/game_boot_save_controllers.c src/psp/game_boot_movie.c src/psp/game_boot_event_remaining.c src/psp/game_boot_event_actor.c src/psp/game_boot_event_movie.c tests/game_boot_movie_native_host.c src/psp/game_boot.c src/psp/game_boot_files.c \
+HOST_BOOT_SOURCES := src/psp/game_boot_enemy.c $(addprefix build/host/enemy/,$(addsuffix .c,$(BOOT_ENEMY_UNITS))) src/psp/game_boot_map.c src/psp/game_boot_file_view.c src/psp/game_boot_save_storage.c build/host/game_boot_file_view_original.c src/ps2/veronica/prog/item.c build/host/game_boot_map_control_original.c src/psp/game_boot_inventory_control.c build/host/game_boot_inventory_control_original.c src/psp/game_boot_terminal_gameover.c build/host/game_boot_terminal_gameover_original.c src/psp/game_boot_door.c build/host/game_boot_door_control_original.c src/psp/game_boot_actor_wall.c build/host/game_boot_actor_wall_original.c src/psp/game_boot_item_view.c build/host/game_boot_item_view_original.c build/host/psp_debug_font.c build/host/game_boot_save_controllers_original.c src/psp/game_boot_sys_save.c src/psp/game_boot_save_controllers.c src/psp/game_boot_movie.c src/psp/game_boot_event_remaining.c src/psp/game_boot_event_actor.c src/psp/game_boot_event_movie.c tests/game_boot_movie_native_host.c src/psp/game_boot.c src/psp/game_boot_files.c \
 	src/psp/game_boot_sound.c src/psp/game_boot_audio.c src/psp/game_boot_movie_audio.c src/psp/game_boot_audio_psp.c \
 	build/host/game_boot_sequence.c \
 	build/host/game_boot_wall_original.c \
@@ -1612,3 +1616,10 @@ game-boot-door-package-test: build/host/game-boot-door-package-test
 build/host/game-boot-door-package-test: tests/game_boot_door_package_test.c src/psp/game_boot_door.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
 	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -Wno-error=unused-function -ffunction-sections -fdata-sections \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
+
+$(BOOT_ENEMY_SOURCES): $(BUILD_DIR)/enemy/%.c: tools/extract_original_enemies.py tools/extract_original_boot_initializers.py $(wildcard src/ps2/veronica/prog/*.c)
+	python3 $< $* $@
+$(HOST_ENEMY_SOURCES): build/host/enemy/%.c: tools/extract_original_enemies.py tools/extract_original_boot_initializers.py $(wildcard src/ps2/veronica/prog/*.c)
+	python3 $< $* $@
+$(BUILD_DIR)/enemy/%.o: $(BUILD_DIR)/enemy/%.c include/psp/game_boot_enemy.h Makefile
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Wno-error -c $< -o $@
