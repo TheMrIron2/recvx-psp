@@ -613,3 +613,28 @@ can legitimately be negative at the start of its fade. Finite signed overlay
 distances now pass through the projection and clamp to the GE depth range;
 non-finite values still stop. GU regressions cover signed title shadows,
 blue-panel/model/far-panel ordering and opaque-only alpha/depth state.
+
+## Effects 191–207
+
+The service extractor retains the original `effsub0.c` callbacks 191–199 and
+`effsub5.c` callbacks 200–207. This includes sprite sheets, palette cycles,
+burst and periodic emitters, linked moving particles, opaque effect queues,
+and the six polygon-particle drawing passes in effect 199. Effect 197 retains
+its empty original body. All seventeen names are removed from the unported
+boundary list.
+
+Callback checks bound modes, animation frames, variant indices, burst counts,
+linked effect-pool parents, and lifetime/interval conversions. The extractor
+bounds random atlas selections at their upper endpoint and ensures effect 203
+has a positive lifetime divisor, including particles fast enough to round it
+to zero. Its alpha and angular damping calculations use wide intermediates.
+Effect 196 preserves transitions from eight-frame to three-frame loops.
+
+The native regression exercises sprite lifetimes and geometry with the original
+allocator's local quad corners, all 24 palette/type combinations, looping and
+held animations, burst and timed child allocation, linked particle expiry and
+parent cancellation, opaque queue submission, fast-particle divisors and the
+polygon-particle draw passes. Twelve additional malformed-state cases cover
+this batch, bringing the callback guard fixture to 93 cases. Rendering fixtures
+reuse owned opening-room textures to verify submission independently of the
+room-specific effect atlases.

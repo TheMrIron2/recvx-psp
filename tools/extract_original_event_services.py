@@ -27,6 +27,9 @@ GROUPS={
 GROUPS['effsub1.c'] += ['bhEff%03d' % i for i in NEXT_EFFECTS] + ['bhDraw114']
 GROUPS['effsub0.c']=['setentry','effinit','effset','getuv'] + ['bhEff%03d' % i for i in range(150,183)]
 CALLBACKS.update({'bhEff%03d' % i:i for i in range(150,183)})
+GROUPS['effsub0.c'] += ['bhEff%03d' % i for i in range(191,200)]
+GROUPS['effsub5.c'] = ['bhEff%03d' % i for i in range(200,208)]
+CALLBACKS.update({'bhEff%03d' % i:i for i in range(191,208) if i not in (197,199)})
 GROUPS['effsub2.c'] += ['bhEff_Draw3DSprite','bhEff_E12_FireSpark','bhEff_E00_DrawParticleSpr']
 CALLBACKS.update({'bhEff145':145,'bhEff146_Init':1460,'bhEff_Sub146':146,'bhEff147':147,'bhEff148':148,'bhEff149':149,'bhEff_E12_FireSpark':264,'bhEff_E00_DrawParticleSpr':1001})
 def extract(text,name):
@@ -105,6 +108,14 @@ def main(dest):
                 fn=fn.replace('{','{\n    recvxGameBootEffectCallbackPrepare(10000,op);\n    if(!uvp || num>=10 || !isfinite(uvp->u) || !isfinite(uvp->v) || !isfinite(uvp->xs) || !isfinite(uvp->ys))recvxGameBootUnsupported("invalid effect UV/color parameters");',1)
             if name=='getuv':
                 fn=fn.replace('{','{\n    recvxGameBootEffectCallbackPrepare(10000,op);\n    if(type>=2)recvxGameBootUnsupported("invalid effect quad orientation");',1)
+            if name=='bhEff201':
+                fn=fn.replace('16.0f * (-rand() / -2.1474836E9f)', 'fminf(15.0f,16.0f * (-rand() / -2.1474836E9f))')
+            if name=='bhEff202':
+                fn=fn.replace('4.0f * (-rand() / -2.1474836E9f)', 'fminf(3.0f,4.0f * (-rand() / -2.1474836E9f))')
+            if name=='bhEff203':
+                fn=fn.replace('if (op->ct1 < 0)', 'if (op->ct1 < 1)')
+                fn=fn.replace('(op->ax * (int)(100.0 - (5.0 * op->sz)))', '((int64_t)op->ax * (int)(100.0 - (5.0 * op->sz)))').replace('(op->ay * (int)(100.0 - (5.0 * op->sz)))', '((int64_t)op->ay * (int)(100.0 - (5.0 * op->sz)))')
+                fn=fn.replace('((0xFF - ((op->ct0 * 0xFF) / op->ct1)) << 24)', '((unsigned int)(0xFF - (((int64_t)op->ct0 * 0xFF) / op->ct1)) << 24)')
             if name=='bhEff159':
                 fn=fn.replace('op->ani_ct = exp_bank1[op->ct0];','if(op->ct0<0 || op->ct0>=26)recvxGameBootUnsupported("invalid explosion texture bank frame");\n            op->ani_ct = exp_bank1[op->ct0];')
                 fn=fn.replace('op->ani_ct = exp_bank0[op->ct0];','if(op->ct0<0 || op->ct0>=24)recvxGameBootUnsupported("invalid explosion texture bank frame");\n            op->ani_ct = exp_bank0[op->ct0];')

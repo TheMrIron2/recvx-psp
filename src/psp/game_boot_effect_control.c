@@ -121,6 +121,37 @@ void recvxGameBootEffectCallbackPrepare(unsigned int kind,O_WRK *e)
     if(!sys||!rom||!actor_array(e,eff,sizeof(*eff),512))
         recvxGameBootUnsupported("invalid effect callback actor");
     switch(kind){
+    case 191:case 193:case 195:case 196:case 198:case 200:case 201:case 202:case 203:case 204:case 205:case 206:case 207:
+        if(e->mode0>(kind==205?2:1))recvxGameBootUnsupported("invalid late sprite mode");
+        if(!isfinite(e->sx)||!isfinite(e->sy)||!isfinite(e->sz))
+            recvxGameBootUnsupported("invalid late sprite scale");
+        if(e->mode0&&(e->ct0<0||e->ct0>INT_MAX/24-1))
+            recvxGameBootUnsupported("invalid late sprite frame counter");
+        if((kind==191&&e->mode0&&e->ct0>=20)||
+           (kind==193&&(e->ct1<0||e->ct1>=15))||
+           (kind==200&&e->mode0&&e->ct0>=8)||
+           (kind==201&&e->mode0&&e->ct0>=16)||
+           (kind==205&&e->mode0&&e->ct0>=(e->mode0==1?14:2))||
+           (kind==207&&e->mode0&&e->ct0>=24))
+            recvxGameBootUnsupported("invalid late sprite animation frame");
+        if(kind==195&&e->type>=3)recvxGameBootUnsupported("invalid late sprite variant");
+        if(kind==193&&(!isfinite(e->spd)||e->sy>=2147483520.0f||e->sy<0))
+            recvxGameBootUnsupported("invalid late sprite duration");
+        if(kind==196&&e->mode0&&e->ct0>=8)
+            recvxGameBootUnsupported("invalid late sprite animation frame");
+        if(kind==203){
+            if(!actor_array(e->exp0,eff,sizeof(*eff),512))
+                recvxGameBootUnsupported("invalid linked particle emitter");
+            if(e->type<1||e->type>2||e->mdlver>=4||e->sz<=0||e->sz>429496704.0f||
+               60.0/e->sz>2147483520.0||(e->mode0&&e->ct1<1))
+                recvxGameBootUnsupported("invalid linked particle lifetime/variant");
+        }
+        if(kind==205&&(e->sz<0||e->sz>=2147483520.0f||e->ct1<0||e->ct1==INT_MAX))
+            recvxGameBootUnsupported("invalid late sprite interval");
+        break;
+    case 192:
+        if(e->lkono<0||e->lkono>512)recvxGameBootUnsupported("invalid burst particle count");
+        break;
     case 145:case 1460:case 148:
         if((kind!=1460&&e->mode0>1)||(kind==148&&e->mode1>2))
             recvxGameBootUnsupported("invalid linked eye/drop effect mode");

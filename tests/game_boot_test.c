@@ -26,6 +26,7 @@
 #include "psp/game_boot_render.h"
 #include "psp/game_boot_effect_callbacks.h"
 #include "ps2/veronica/prog/effsub0.h"
+#include "ps2/veronica/prog/effsub5.h"
 #include "ps2/veronica/prog/effsub1.h"
 #include "ps2/veronica/prog/effsub2.h"
 #include "ps2/veronica/prog/effsub3.h"
@@ -1015,15 +1016,28 @@ static void callback_fault_task(void)
     case 78:e->mtx=(NJS_MATRIX *)e->mtxbuf;bhEff148(e);e->mode1=1;sys->ef_trsn=512;bhEff148(e);break;
     case 79:e->mtx=NULL;bhEff146_Init(e);break;
     case 80:e->ct3=INT_MIN;bhEff_Sub146(e);break;
+    case 81:e->mode0=1;e->ct0=20;bhEff191(e);break;
+    case 82:e->ct1=15;bhEff193(e);break;
+    case 83:e->type=3;bhEff195(e);break;
+    case 84:e->mode0=1;e->type=19;e->ct0=8;bhEff196(e);break;
+    case 85:sys->ef_opqn=512;bhEff198(e);break;
+    case 86:e->mode0=1;e->ct0=8;bhEff200(e);break;
+    case 87:e->mode0=1;e->ct0=16;bhEff201(e);break;
+    case 88:e->exp0=NULL;bhEff203(e);break;
+    case 89:e->type=1;e->sz=0;bhEff203(e);break;
+    case 90:e->mode0=2;e->ct0=2;bhEff205(e);break;
+    case 91:e->mode0=1;e->ct0=24;bhEff207(e);break;
+    case 92:e->lkono=513;bhEff192(e);break;
+
     }
     assert(0);
 }
 static void test_effect_callback_faults(const char *directory,void *arena,size_t arena_size)
 {
-    static const char *messages[]={"mode/type","auxiliary context","overlapping","mode/type","counts","buffers","vertex index","sand particle state","sand dust animation","UV table/frame","render queue is full","blood pool effect state","links an invalid actor","weapon effect state","explosion animation state","flame UV selector","projectile target","completion link","swap effect placement","water ripple buffer","UV table/frame","auxiliary context","debris emitter type","debris effect state","debris effect state","linked flame mode","linked flame emitter state","selector effect UV frame","gas particle color selector","monitor effect state","linked flame slot","links an invalid actor","UV scroll model","UV scroll command exceeds stream","UV table/frame","sprite animation mode","UV table/frame","UV table/frame","texture bank frame","bubble animation repeat count","bubble animation repeat count","emitter countdown","emitter countdown","initialization texture","quad orientation","UV/color parameters","entry id","UV table/frame","render queue is full","UV table/frame","UV table/frame","sprite repeat counter","sprite blend selector","sprite animation mode","UV table/frame","timed sprite lifetime","emitter interval","emitter interval","emitter interval","smoke color or velocity selector","smoke color or velocity selector","UV table/frame","emitter countdown","render queue is full","UV table/frame","UV table/frame","linked eye/drop effect mode","linked eye/drop effect mode","linked eye/drop matrix","fire sprite state","fire sprite state","UV table/frame","impact emitter phase","impact sprite frame","impact sprite UV pointer","auxiliary context","fire spark particle count","render queue is full","render queue is full","linked eye/drop matrix","eye particle state"};
+    static const char *messages[]={"mode/type","auxiliary context","overlapping","mode/type","counts","buffers","vertex index","sand particle state","sand dust animation","UV table/frame","render queue is full","blood pool effect state","links an invalid actor","weapon effect state","explosion animation state","flame UV selector","projectile target","completion link","swap effect placement","water ripple buffer","UV table/frame","auxiliary context","debris emitter type","debris effect state","debris effect state","linked flame mode","linked flame emitter state","selector effect UV frame","gas particle color selector","monitor effect state","linked flame slot","links an invalid actor","UV scroll model","UV scroll command exceeds stream","UV table/frame","sprite animation mode","UV table/frame","UV table/frame","texture bank frame","bubble animation repeat count","bubble animation repeat count","emitter countdown","emitter countdown","initialization texture","quad orientation","UV/color parameters","entry id","UV table/frame","render queue is full","UV table/frame","UV table/frame","sprite repeat counter","sprite blend selector","sprite animation mode","UV table/frame","timed sprite lifetime","emitter interval","emitter interval","emitter interval","smoke color or velocity selector","smoke color or velocity selector","UV table/frame","emitter countdown","render queue is full","UV table/frame","UV table/frame","linked eye/drop effect mode","linked eye/drop effect mode","linked eye/drop matrix","fire sprite state","fire sprite state","UV table/frame","impact emitter phase","impact sprite frame","impact sprite UV pointer","auxiliary context","fire spark particle count","render queue is full","render queue is full","linked eye/drop matrix","eye particle state","late sprite animation frame","late sprite animation frame","late sprite variant","late sprite animation frame","render queue is full","late sprite animation frame","late sprite animation frame","linked particle emitter","linked particle lifetime/variant","late sprite animation frame","late sprite animation frame","burst particle count"};
     RecvxLiveTaskProc saved=bhSysTaskJumpTab[0];
     RecvxInputState input={.analog_x=128,.analog_y=128};bhSysTaskJumpTab[0]=callback_fault_task;
-    for(callback_fault_case=0;callback_fault_case<81;++callback_fault_case){
+    for(callback_fault_case=0;callback_fault_case<(int)(sizeof(messages)/sizeof(*messages));++callback_fault_case){
         assert(!recvxGameBootInit(directory,arena,arena_size));
         assert(recvxGameBootTick(&input)==-1&&recvxGameBootFault());
         if(!strstr(recvxGameBootFault(),messages[callback_fault_case]))
@@ -1031,7 +1045,7 @@ static void test_effect_callback_faults(const char *directory,void *arena,size_t
         assert(strstr(recvxGameBootFault(),messages[callback_fault_case]));
     }
     bhSysTaskJumpTab[0]=saved;
-    puts("PASS: 81 effect callback fault paths reject invalid modes/types, auxiliary contexts, overlaps, stage/buffer/vertex indices, UV pointers, parents and full queues");
+    puts("PASS: 93 effect callback fault paths reject invalid modes/types, auxiliary contexts, overlaps, stage/buffer/vertex indices, UV pointers, parents and full queues");
 }
 
 static void test_effect_control(const char *directory, void *arena, size_t arena_size)
@@ -2708,6 +2722,93 @@ static void test_effect_155_batch(void)
     printf("PASS: %u sprite variants expire with original texture-bank timing; bubble repeats/pauses, oriented quads, one-shot/burst/periodic emitters, pool exhaustion and moving-trail restoration\n",variants);
 }
 
+static O_WRK *effect_145_fixture(int id);
+static void test_effect_191_batch(void)
+{
+    O_WRK *saved=malloc(sizeof(eff));SYS_WORK *old=malloc(sizeof(*sys));
+    assert(saved&&old);memcpy(saved,eff,sizeof(eff));*old=*sys;
+    NJS_MATRIX matrix;njGetMatrix(&matrix);
+    static const struct{int id,frames,variants;void (*update)(O_WRK *);} sprites[]={
+        {191,20,1,bhEff191},{193,15,1,bhEff193},{195,15,3,bhEff195},{207,24,4,bhEff207}};
+    for(size_t k=0;k<sizeof(sprites)/sizeof(*sprites);++k)for(int type=0;type<sprites[k].variants;++type){
+        O_WRK *e=effect_145_fixture(sprites[k].id);e->type=type;e->sy=sprites[k].id==193?15:1;e->sz=14.5f;
+        /* bhSetEffectTb supplies these local quad corners before callbacks. */
+        for(int v=0;v<4;++v){e->tv[v].x=(v&1)?1:-1;e->tv[v].y=(v&2)?1:-1;}
+
+        e->px=cam.wpx+10*cam.vx;e->py=cam.wpy+10*cam.vy;e->pz=cam.wpz+10*cam.vz;
+        int drawn=0;
+        while(e->flg&&drawn<40){
+            sys->ef_trsn=0;sprites[k].update(e);if(!e->flg)break;
+            assert(sys->ef_trsn==1&&isfinite(e->px)&&isfinite(e->py)&&isfinite(e->pz));
+            for(int v=0;v<4;++v)assert(e->tv[v].u>=0&&e->tv[v].u<1&&e->tv[v].v>=0&&e->tv[v].v<1);
+            if(!drawn){
+                sys->ef_tn[e->tex_id]=0;recvxGameBootRenderBeginFrame();
+                njSetMatrix(NULL,cam.mtx);
+                bhDrawTrsEffect3D((unsigned int *)sys->ef_trs,1);
+                if(!recvxGameBootRenderFrame()->vertex_count)fprintf(stderr,"empty late effect draw: id=%d type=%d\n",sprites[k].id,type);
+                assert(!recvxEngineOriginalFault()&&recvxGameBootRenderFrame()->vertex_count>0);
+                recvxGameBootRenderConsume();
+            }
+            ++drawn;
+        }
+        assert(!e->flg&&drawn==sprites[k].frames);
+    }
+    for(int type=1;type<=24;++type){
+        O_WRK *e=effect_145_fixture(196);e->mode1=type;
+        for(int step=0;step<25;++step){sys->ef_trsn=0;bhEff196(e);
+            assert(sys->ef_trsn==1&&e->ani_ct==(type-1)%6&&e->ct0==step%(((type-1)/6)%4==3?3:8));}
+        e->type=e->mode1=0;sys->ef_trsn=0;bhEff196(e);assert(!sys->ef_trsn&&(e->flg&0x1000000));
+    }
+    O_WRK *changing=effect_145_fixture(196);changing->type=1;bhEff196(changing);
+    changing->ct0=7;changing->type=19;sys->ef_trsn=0;bhEff196(changing);
+    assert(!changing->ct0&&sys->ef_trsn==1); /* Eight-frame to three-frame loop. */
+    for(int kind=0;kind<2;++kind){
+        O_WRK *e=effect_145_fixture(200+kind);e->mode1=1;e->ax=321;
+        for(int frame=0;frame<40;++frame){sys->ef_trsn=0;if(kind)bhEff201(e);else bhEff200(e);
+            assert(sys->ef_trsn==1&&e->ct0>=0&&e->ct0<(kind?16:8));}
+        if(!kind)assert(e->az==321);
+    }
+    O_WRK *e=effect_145_fixture(205);e->mode1=1;e->sz=2;
+    for(int frame=0;frame<28;++frame){sys->ef_trsn=0;bhEff205(e);assert(sys->ef_trsn==1);}
+    assert(e->mode0==2&&!e->ct0);
+    sys->ef_trsn=0;bhEff205(e);assert(e->ct0==1&&e->tv[0].u==160.0f/256);
+    sys->ef_trsn=0;bhEff205(e);assert(e->ct0==0&&e->tv[0].u==0);
+    e->type=e->mode1=0;bhEff205(e);assert(!e->mode0);
+    e=effect_145_fixture(192);e->mode1=1;e->lkono=3;bhEff192(e);
+    assert(!e->type&&!e->mode1);for(int i=1;i<=3;++i)assert(eff[i].id==193&&eff[i].flg);
+    e=effect_145_fixture(194);e->mode1=3;bhEff194(e);assert(eff[1].id==195&&eff[1].type==2);
+    for(int type=1;type<=4;++type){
+        e=effect_145_fixture(202);e->mode1=type;e->lkono=2;e->sz=10;
+        bhEff202(e);assert(!eff[1].flg);bhEff202(e);
+        O_WRK *child=&eff[1];assert(child->flg&&child->id==203&&child->type==(type%2?1:2)&&child->mdlver<4&&child->exp0==(unsigned char *)e);
+        int frames=0;while(child->flg&&frames<65){sys->ef_trsn=0;bhEff203(child);++frames;}
+        assert(!child->flg&&frames==(type%2?61:31));
+        child->flg=1;e->stflg|=0x1000000;bhEff203(child);assert(!child->flg);
+    }
+    for(int type=1;type<=2;++type){
+        e=effect_145_fixture(203);e->type=type;e->sz=100;e->exp0=(unsigned char *)&eff[1];
+        eff[1].flg=1;sys->ef_trsn=0;bhEff203(e);assert(e->ct1==1);
+        bhEff203(e);assert(!e->flg); /* Fast particles still have a valid divisor. */
+    }
+    for(int type=1;type<=4;++type){
+        e=effect_145_fixture(206);e->mode1=type;
+        for(int frame=0;frame<13;++frame)bhEff206(e);
+        assert(eff[1].id==207&&eff[1].type==type-1&&eff[2].id==207&&!eff[3].flg);
+    }
+    for(int kind=0;kind<2;++kind){
+        e=effect_145_fixture(kind?204:198);e->type=1;
+        sys->ef_opqn=0;if(kind)bhEff204(e);else bhEff198(e);
+        assert(sys->ef_opqn==1&&sys->ef_opq[0]==e);
+        if(kind)assert(sys->ef_tn[449]==7&&e->tv[0].col==0xff000000u);
+    }
+    e=effect_145_fixture(197);O_WRK untouched=*e;bhEff197();assert(!memcmp(e,&untouched,sizeof(*e)));
+    NJS_MATRIX camera;memcpy(&camera,cam.mtx,sizeof(camera));njUnitMatrix(cam.mtx);
+    recvxGameBootRenderBeginFrame();bhEff199();assert(recvxGameBootRenderFrame()->vertex_count==360);
+    recvxGameBootRenderConsume();memcpy(cam.mtx,&camera,sizeof(camera));njSetMatrix(NULL,&matrix);
+    memcpy(eff,saved,sizeof(eff));*sys=*old;free(saved);free(old);
+    puts("PASS: effects 191-207 sprite lifetimes/variants/drawing, all 24 palette cycles, loop/hold/restart, burst and periodic emitters, linked particle movement/lifetime/cancellation, opaque queues and 66 polygon particles");
+}
+
 static void test_effect_170_batch(void)
 {
     O_WRK *saved=malloc(sizeof(eff));SYS_WORK *old=malloc(sizeof(*sys));
@@ -2755,6 +2856,7 @@ static void test_effect_170_batch(void)
             if(visible==0){
                 /* Opening-room owned textures stand in for unavailable smoke atlases. */
                 sys->ef_tn[e->tex_id]=0;recvxGameBootRenderBeginFrame();
+                njSetMatrix(NULL,cam.mtx);
                 bhDrawTrsEffect3D((unsigned int *)sys->ef_trs,1);assert(!recvxEngineOriginalFault());
             }
             ++visible;
@@ -3288,6 +3390,7 @@ int main(int argc, char **argv)
     test_effect_next_batch();
     test_effect_155_batch();
     test_effect_170_batch();
+    test_effect_191_batch();
     test_effect_145_batch();
     test_effect_collision_services();
     test_effect_callback_lifetimes();
