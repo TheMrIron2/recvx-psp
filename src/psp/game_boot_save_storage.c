@@ -22,7 +22,10 @@
 #include "ps2/veronica/prog/padman.h"
 #include "ps2/veronica/prog/ps2_SaveScreen.h"
 #include "ps2/veronica/prog/ps2_LoadScreen.h"
-#include "ps2/veronica/prog/ps2_NaDebugFontFunction.h"
+#include "ps2/veronica/prog/ps2_McSaveFile.h"
+#include "ps2/veronica/prog/ps2_MemoryCard..h"
+#include "ps2/veronica/prog/bup_00.h"
+#include "ps2/veronica/prog/message.h"
 #include "ps2/veronica/prog/room.h"
 #include "ps2/veronica/prog/item.h"
 #include "ps2/veronica/prog/sub1.h"
@@ -45,7 +48,6 @@ static MEMORYCARDSTATE card;
 static ICONINFORMATION icon;
 static int slot_state[SAVE_SLOTS];
 
-enum { SCREEN_SELECT=1, SCREEN_CONFIRM, SCREEN_ERROR, SCREEN_DONE };
 
 static int error(const char *description)
 { snprintf(last_error,sizeof(last_error),"%s",description);return -1; }
@@ -209,124 +211,128 @@ int recvxGameBootSaveSlotWrite(unsigned int slot)
     last_error[0]=0;return 0;
 }
 
+/* PSP has one storage device. Enter the original slot UI after scanning it;
+ * PS2 card detection/formatting is replaced by real file operations below. */
 static void scan_slots(void)
 {
-    unsigned int i;
-    memset(records,0,sizeof(records));memset(&window,0,sizeof(window));
-    window.pRecordTop=records;window.lRecordMax=SAVE_SLOTS;window.slDispRecordNumber=5;
-    for(i=0;i<SAVE_SLOTS;++i) {
+    mcSelectFileInfoInit(records);
+    for(unsigned int i=0;i<SAVE_SLOTS;++i) {
         slot_state[i]=recvxGameBootSaveSlotRead(i,&verification);
-        records[i].FileNumber=(int)i+1;
-        if(slot_state[i]==1) {
-            records[i].save_ct=verification.save_ct;records[i].gm_mode=verification.gm_mode;
-            records[i].ply_id=verification.ply_id;records[i].saveroom=verification.rom_no;
-        }
+        if(slot_state[i]==1) mcGetPortSelectDirInfo(&verification,&window,i);
     }
 }
-static unsigned int buttons(void) { return Pad[0].press; }
-static void move_slot(short *selection,unsigned int pressed)
+int recvxGameBootSaveSlotState(unsigned int slot)
+{ return slot<SAVE_SLOTS ? slot_state[slot] : -1; }
+
+void SetStateSaveScreenAwarenessCard(SAVE_SCREEN *screen)
+{ scan_slots();SetStateSaveScreenSelectFile(screen); }
+void SetStateLoadScreenAwarenessCard(LOAD_SCREEN *screen)
+{ scan_slots();SetStateLoadScreenSelectFile(screen); }
+void SetStateSaveScreenSelectCard(SAVE_SCREEN *screen)
+{ SetStateSaveScreenExit(screen); }
+void SetStateLoadScreenSelectCard(LOAD_SCREEN *screen)
+{ SetStateLoadScreenTitleExit(screen); }
+
+static void init_screen(void)
 {
-    if(pressed&0x4000)*selection=(*selection+14)%15;
-    else if(pressed&0x1000)*selection=(*selection+1)%15;
-}
-static void print_screen(int loading,unsigned int state,short selection)
-{
-    char line[96];int first,i;
-    njPrintSize(12);njPrintColor(0xffffffff);
-    njPrintC(0x00030002,loading?"LOAD GAME":"SAVE GAME");
-    first=selection>2?selection-2:0;if(first>10)first=10;
-    for(i=first;i<first+5;++i) {
-        if(slot_state[i]==1)snprintf(line,sizeof(line),"%c Slot %02d  Saves %02d  Room %02u",i==selection?'>':' ',i+1,records[i].save_ct,(unsigned char)records[i].saveroom);
-        else snprintf(line,sizeof(line),"%c Slot %02d  %s",i==selection?'>':' ',i+1,slot_state[i]<0?"Damaged":"Empty");
-        njPrintC((3<<16)|(5+(i-first)*2),line);
-    }
-    if(state==SCREEN_CONFIRM)njPrintC(0x00030010,"Overwrite slot? CROSS: Yes  CIRCLE: No");
-    else if(state==SCREEN_ERROR) {
-        njPrintC(0x00030010,recvxGameBootSaveStorageError());
-        njPrintC(0x00030012,"CROSS: Retry  CIRCLE: Back");
-    } else if(state==SCREEN_DONE)njPrintC(0x00030010,loading?"Game loaded. CROSS to continue.":"Game saved. CROSS to continue.");
-    else njPrintC(0x00030010,"UP/DOWN: Slot  CROSS: OK  CIRCLE: Cancel");
+    memset(&screen_image,0,sizeof(screen_image));memset(&configuration,0,sizeof(configuration));
+    memset(&card,0,sizeof(card));memset(&icon,0,sizeof(icon));
+    mcCreateFileSelectWindow(&window,records,SAVE_SLOTS);scan_slots();
 }
 SAVE_SCREEN *CreateSaveScreen(SAVE_SCREEN *screen,void *work)
 {
     if(!screen)recvxGameBootUnsupported("null save screen");
-    memset(screen,0,sizeof(*screen));screen->ulState=SCREEN_SELECT;screen->vpReadBuffer=work;
+    init_screen();memset(screen,0,sizeof(*screen));screen->vpReadBuffer=work;
     screen->pSaveFile=&screen_image;screen->pSelectFileInfo=records;screen->pSelectFileWindow=&window;
     screen->pConfigFile=&configuration;screen->pMcState=&card;screen->pIconInfo=&icon;
-    active_load=NULL;active_save=screen;scan_slots();return screen;
+    active_load=NULL;active_save=screen;SetStateSaveScreenSelectFile(screen);return screen;
 }
 LOAD_SCREEN *CreateLoadScreen(LOAD_SCREEN *screen,void *work)
 {
-    (void)work;
-    if(!screen)recvxGameBootUnsupported("null load screen");
-    memset(screen,0,sizeof(*screen));screen->ulState=SCREEN_SELECT;
+    (void)work;if(!screen)recvxGameBootUnsupported("null load screen");
+    init_screen();memset(screen,0,sizeof(*screen));
     screen->pSaveFile=&screen_image;screen->pSelectFileInfo=records;screen->pSelectFileWindow=&window;
     screen->pConfigFile=&configuration;screen->pMcState=&card;screen->pIconInfo=&icon;
-    active_save=NULL;active_load=screen;scan_slots();return screen;
+    active_save=NULL;active_load=screen;SetStateLoadScreenSelectFile(screen);return screen;
+}
+static void draw_slots(void)
+{
+    bhFontScaleSet(0.71f,0.71f,0.75f);
+    mcDisplayFileSelectWindow(&window,60.0f,108.0f,0);
+    bhFontScaleSet(1,1,1);
+}
+static void validate_window(void)
+{
+    if(window.pRecordTop!=records || window.lRecordMax!=15 || window.slDispRecordNumber!=5 ||
+       window.slDispTopNumber<0 || window.slDispTopNumber>10 || window.sCursol<0 || window.sCursol>4 ||
+       window.sMesCur<0 || window.sMesCur>=15 || card.lSelectFileNumber<0 || card.lSelectFileNumber>=15)
+        recvxGameBootUnsupported("invalid original save/load slot window");
 }
 int ExecuteSaveScreen(SAVE_SCREEN *screen)
 {
-    unsigned int pressed=buttons();
-    if(!sys || !screen || screen!=active_save || screen->sSelectCur<0 || screen->sSelectCur>=15)
+    if(!sys || !screen || screen!=active_save || screen->sCursorY<0 || screen->sCursorY>=15 ||
+       screen->sSelectCur<0 || screen->sSelectCur>1)
         recvxGameBootUnsupported("invalid save screen lifecycle");
     if(screen->usExitFlag)return screen->usExitFlag;
+    validate_window();screen->lCardState=100;DispBackGroundTexture();
     switch(screen->ulState) {
-    case SCREEN_SELECT:
-        move_slot(&screen->sSelectCur,pressed);
-        if(pressed&0x20)screen->usExitFlag=1;
-        else if(pressed&0x40) {
-            if(slot_state[screen->sSelectCur])screen->ulState=SCREEN_CONFIRM;
-            else screen->ulState=recvxGameBootSaveSlotWrite(screen->sSelectCur)?SCREEN_ERROR:SCREEN_DONE;
+    case 11:ExecuteStateSaveScreenExit(screen);break;
+    case 18:ExecuteStateSaveScreenSpecialSave(screen);break;
+    case 20:ExecuteStateSaveScreenSelectFile(screen);break;
+    case 30:ExecuteStateSaveScreenSaveCursor(screen);break;
+    case 31:ExecuteStateSaveScreenSaveCursorOld(screen);break;
+    case 32:ExecuteStateSaveScreenSaveCursorNew(screen);break;
+    case 33:
+        if(recvxGameBootSaveSlotWrite(card.lSelectFileNumber))SetStateSaveScreenErrCardWrite(screen);
+        else {
+            scan_slots();SetStateSaveScreenSuccessCardWrite(screen);
+            /* Non-typewriter special saves can have no authored room label. */
+            if(records[card.lSelectFileNumber].saveroom==0) {
+                bhPushGameData();SetStateSaveScreenSuccessCardWriteMessage(screen);
+            }
         }
         break;
-    case SCREEN_CONFIRM:
-        if(pressed&0x20)screen->ulState=SCREEN_SELECT;
-        else if(pressed&0x40)screen->ulState=recvxGameBootSaveSlotWrite(screen->sSelectCur)?SCREEN_ERROR:SCREEN_DONE;
-        break;
-    case SCREEN_ERROR:
-        if(pressed&0x20)screen->ulState=SCREEN_SELECT;
-        else if(pressed&0x40)screen->ulState=recvxGameBootSaveSlotWrite(screen->sSelectCur)?SCREEN_ERROR:SCREEN_DONE;
-        break;
-    case SCREEN_DONE:
-        if(pressed&0x40)screen->usExitFlag=1;
-        break;
+    case 35:ExecuteStateSaveScreenSuccessCardWrite(screen);break;
+    case 36:ExecuteStateSaveScreenSuccessCardWriteMessage(screen);break;
+    case 37:ExecuteStateSaveScreenErrCardWrite(screen);break;
     default:recvxGameBootUnsupported("invalid save screen state");
     }
-    if(screen->ulState==SCREEN_DONE && !screen->usSaveEnd) {
-        screen->usSaveEnd=1;bhPushGameData();scan_slots();
-    }
-    print_screen(0,screen->ulState,screen->sSelectCur);
+    validate_window();
+    if(screen->cCgFlag==3 || screen->cCgFlag==4)draw_slots();
+    if(screen->cCgFlag==3)DispUpDownCursol(256,359,screen->sSelectCur+2);
+    if(screen->cCgFlag==2)DispUpDownCursol(256,359,screen->sSelectCur+2);
+    if(screen->cMesFlag!=100)DispMessageSelect(screen->cMesFlag);
     return screen->usExitFlag;
 }
 int ExecuteLoadScreen(LOAD_SCREEN *screen)
 {
-    unsigned int pressed=buttons();int result;
-    if(!sys || !screen || screen!=active_load || screen->sSelectCur<0 || screen->sSelectCur>=15)
+    if(!sys || !screen || screen!=active_load || screen->sCursorY<0 || screen->sCursorY>=15 ||
+       screen->sSelectCur<0 || screen->sSelectCur>1)
         recvxGameBootUnsupported("invalid load screen lifecycle");
     if(screen->usExitFlag)return screen->usExitFlag;
+    validate_window();screen->lCardState=100;DispBackGroundTexture();
     switch(screen->ulState) {
-    case SCREEN_SELECT:
-    case SCREEN_ERROR:
-        if(screen->ulState==SCREEN_SELECT)move_slot(&screen->sSelectCur,pressed);
-        if(pressed&0x20) {
-            if(screen->ulState==SCREEN_ERROR)screen->ulState=SCREEN_SELECT;
-            else screen->usExitFlag=1;
-        } else if(pressed&0x40) {
-            result=recvxGameBootSaveSlotRead(screen->sSelectCur,&screen_image);
-            if(result==1) {
-                memcpy(&sys->version,&screen_image,SAVE_PAYLOAD);
-                screen->ulState=SCREEN_DONE;screen->usSaveEnd=1;
-            } else {
-                if(result==0)error("selected save slot is empty");
-                screen->ulState=SCREEN_ERROR;
-            }
-        }
+    case 11:ExecuteStateLoadScreenTitleExit(screen);break;
+    case 20:ExecuteStateLoadScreenSelectFile(screen);break;
+    case 21:ExecuteStateLoadScreenNoSave(screen);break;
+    case 30:ExecuteStateLoadScreenLoadCursor(screen);break;
+    case 31: {
+        int result=recvxGameBootSaveSlotRead(card.lSelectFileNumber,&screen_image);
+        if(result==1) {
+            memcpy(&sys->version,&screen_image,SAVE_PAYLOAD);screen->usSaveEnd=1;
+            SetStateLoadScreenLoadExit(screen);
+        } else if(result<0)SetStateLoadScreenFileBroken(screen);
+        else SetStateLoadScreenNoSave(screen);
         break;
-    case SCREEN_DONE:
-        if(pressed&0x40) {sys->typ_flg|=0x10;screen->usExitFlag=1;}
-        break;
+    }
+    case 32:ExecuteStateLoadScreenFileBroken(screen);break;
+    case 33:ExecuteStateLoadScreenErrCardRead(screen);break;
+    case 34:ExecuteStateLoadScreenLoadExit(screen);break;
     default:recvxGameBootUnsupported("invalid load screen state");
     }
-    print_screen(1,screen->ulState,screen->sSelectCur);
+    validate_window();
+    if(screen->cCgFlag==1 || screen->cCgFlag==2)draw_slots();
+    if(screen->cCgFlag==2)DispUpDownCursol(256,358,screen->sSelectCur+2);
+    if(screen->cMesFlag!=100)DispLoadMessageSelect(screen->cMesFlag);
     return screen->usExitFlag;
 }

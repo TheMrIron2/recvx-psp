@@ -30,7 +30,10 @@ NJS_TEXLIST *recvxGameBootRenderTextureCurrentList(void) { return state.texture_
 
 void recvxGameBootRenderTextureList(NJS_TEXLIST *list)
 {
-    if (list && (!list->textures || !list->nbTexture || list->nbTexture > 256))
+    /* TypeWriterTextureInit restores the empty effect list when entered from
+       the title. Binding a list does not sample it; selection validates the
+       index and owned texture separately. */
+    if (list && (list->nbTexture > 256 || (list->nbTexture && !list->textures)))
         recvxGameBootUnsupported("invalid original render texture list");
     state.texture_list = list;
     state.selected_texture = NULL;

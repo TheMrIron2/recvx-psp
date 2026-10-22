@@ -68,6 +68,9 @@
 #include "ps2/veronica/prog/subpl.h"
 #include "ps2/veronica/prog/Motion.h"
 #include "ps2/veronica/prog/system.h"
+#include "ps2/veronica/prog/bup_00.h"
+#include "ps2/veronica/prog/ps2_SaveScreen.h"
+#include "ps2/veronica/prog/ps2_LoadScreen.h"
 #include "ps2/veronica/prog/screen.h"
 #include "ps2/veronica/prog/cut.h"
 #include "psp/engine_original_view.h"
@@ -1310,6 +1313,29 @@ static void room_stream_task(void)
     }
     bhFinishRoom();
     if(index==2){
+        /* Returning from a room animation restores the persistent table before
+           normal control replaces the event motion number. These are actual
+           holes in the packaged Claire table, not synthetic missing assets. */
+        SYS_WORK *saved_action_sys=malloc(sizeof(*sys));assert(saved_action_sys);
+        *saved_action_sys=*sys;BH_PWORK saved_action_player=*plp;
+        EXP_WORK saved_action_expression=*(EXP_WORK *)plp->exp0;
+        unsigned char saved_action_head[124];memcpy(saved_action_head,plp->exp1,124);
+        static const unsigned int old_event_motions[]={47,57,99};
+        for(unsigned int i=0;i<sizeof(old_event_motions)/sizeof(old_event_motions[0]);++i){
+            plp->mnwP=(MN_WORK *)sys->plmthp;
+            plp->mtn_no=old_event_motions[i];assert(!plp->mnwP[plp->mtn_no].frm_num);
+            plp->mode0=1;plp->mode1=plp->mode2=plp->mode3=0;
+            plp->flg&=~0x10000u;plp->stflg=0;plp->frm_no=0;plp->hp=160;
+            ((EXP_WORK *)plp->exp0)->wpntp=((EXP_WORK *)plp->exp0)->dmlvl=0;
+            sys->pad_on=sys->pad_ps=sys->pad_old=0;sys->gm_flg=0;
+            bhCPM0_action();assert(plp->mtn_no==42&&plp->mode3==1);
+            bhSetMotion(plp,(int)plp->mtn_add,plp->mtn_md,plp->mtn_tp);
+            bhCalcModel(plp);assert(!recvxGameBootFault()&&!recvxEngineOriginalFault());
+        }
+        *plp=saved_action_player;*(EXP_WORK *)plp->exp0=saved_action_expression;
+        memcpy(plp->exp1,saved_action_head,124);*sys=*saved_action_sys;free(saved_action_sys);
+        bhCalcModel(plp);
+        puts("PASS: stair-room Claire returns from empty event motion slots to rendered idle through original player control");
         for(int i=0;i<rom->ene_n;++i)if(ene[i].id!=1)ene[i].stflg|=0x41000000u;
         RequestRoomSoundBank(0,2,0);recvxGameBootSoundTick();
         sys->sp_flg|=2;
@@ -2021,6 +2047,50 @@ static void test_loaded_player_remaining(void)
     puts("PASS: real loaded damage/death, enemy-controlled states, ten scripted movement routes, eight traversal routes and both ladder exits, crouch, knife miss/hit/damage/sound, XYZ fix, water splashes and eye-camera handoffs");
 }
 
+
+static unsigned int typewriter_keys;
+static void typewriter_screen_task(void)
+{ sys->pad_on=sys->pad_ps=typewriter_keys;ControlTypewriter(); }
+
+static void test_loaded_typewriter(const char *directory)
+{
+    extern SAVE_SCREEN *pSave;
+    SYS_WORK *saved=malloc(sizeof(*sys));assert(saved);*saved=*sys;
+    TYP_WORK saved_work=*(TYP_WORK *)sys->typ_exp;
+    void (*old_task)(void)=bhSysTaskJumpTab[0];
+    char root[]="/tmp/recvx-typewriter-XXXXXX",data[160],name[160];
+    assert(mkdtemp(root));snprintf(data,sizeof(data),"%s/data",root);assert(!mkdir(data,0700));
+    assert(!recvxGameBootSaveStorageInit(data));
+    memset(sys->typ_exp,0,sizeof(TYP_WORK));sys->typ_md0=sys->typ_md1=0;
+    sys->ss_flg&=~0x200u;sys->typ_flg=0;sys->ts_flg=0;sys->cb_flg=0;
+    sys->stg_no=1;sys->rom_no=8;sys->ev_flg[1]&=~(0x80000000u>>(56%32));
+    sys->itm[(unsigned char)sys->ply_id*16+11]=(31u<<16)|3;
+    unsigned int count=sys->save_ct;
+    bhSysTaskJumpTab[0]=typewriter_screen_task;sys->tk_flg=1;typewriter_keys=0;
+    RecvxInputState input={.analog_x=128,.analog_y=128};
+    for(int i=0;i<30&&sys->typ_md0!=1;++i)tick(&input);
+    assert(sys->typ_md0==1&&pSave&&pSave->ulState==20);
+    TYP_WORK *work=sys->typ_exp;assert(work->twtx_list.nbTexture==3);
+    for(int i=0;i<3;++i)assert(recvxGameBootTextureGet(&work->twtx_list,i)->source);
+    capture=1;capture_path="/tmp/recvx-game-save.ppm";tick(&input);
+    typewriter_keys=0x800;tick(&input);typewriter_keys=0;tick(&input);
+    assert(pSave->ulState==32&&pSave->sSelectCur==0&&sys->save_ct==count);
+    typewriter_keys=0x800;tick(&input);typewriter_keys=0;tick(&input);
+    assert(pSave->ulState==35&&sys->save_ct==count+1);
+    int animated=0;
+    for(int i=0;i<400&&!(sys->typ_md0==0&&work->mode_00==0);++i){
+        animated+=pSave->ulState==35;tick(&input);
+    }
+    assert(animated>20&&sys->typ_md0==0&&work->mode_00==0);
+    SAVEFILE image;assert(recvxGameBootSaveSlotRead(0,&image)==1&&image.save_ct==count+1);
+    assert(image.stg_no==1&&image.rom_no==8);
+    assert(!recvxGameBootFault()&&!recvxAudioFault());
+    snprintf(name,sizeof(name),"%s/saves/SAVEDATA-00.bin",root);assert(!remove(name));
+    snprintf(name,sizeof(name),"%s/saves",root);assert(!rmdir(name));assert(!rmdir(data));assert(!rmdir(root));
+    assert(!recvxGameBootSaveStorageInit(directory));
+    bhSysTaskJumpTab[0]=old_task;*sys=*saved;free(saved);*(TYP_WORK *)sys->typ_exp=saved_work;
+    puts("PASS: in-game retail typewriter artwork, original fonts/slot UI, confirmation, native save, typed room-name animation, sound and room-texture return");
+}
 
 static void test_remaining_game_services(void)
 {
@@ -3636,6 +3706,22 @@ int main(int argc, char **argv)
        slot exists; verify both menu directions before choosing New Game. */
     if(recvxGameBootSaveStorageAny()){
         assert(AdvWork.Cursor[0]==0);
+        /* Enter through the real title menu before the font pages are loaded,
+           display the load slots, then cancel without modifying any save. */
+        assert(!sys->ef_tlist.nbTexture);
+        press(&input,RECVX_BUTTON_CROSS);
+        for(i=0;i<200&&sys->typ_md0!=1;++i)tick(&input);
+        assert(sys->typ_md0==1&&(sys->ss_flg&0x200));
+        assert(sys->ef_tlist.nbTexture==4&&(sys->ss_flg&0x40u));
+        capture=1;capture_path="/tmp/recvx-game-load.ppm";tick(&input);
+        for(i=0;i<5;++i)tick(&input);
+        press(&input,RECVX_BUTTON_CIRCLE);
+        for(i=0;i<300&&!((sys->tk_flg&8)&&(AdvWork.Mode==6||AdvWork.Mode==9));++i)tick(&input);
+        assert((sys->tk_flg&8)&&(AdvWork.Mode==6||AdvWork.Mode==9)&&!recvxGameBootFault());
+        if(AdvWork.Mode==6)press(&input,RECVX_BUTTON_START);
+        for(i=0;i<30&&AdvWork.Mode!=9;++i)tick(&input);
+        assert(AdvWork.Mode==9&&AdvWork.Cursor[0]==0);
+        puts("PASS: title Load Game displays original artwork, fonts, slot list and dialogs and cancels back to title");
         press(&input,RECVX_BUTTON_DOWN);assert(AdvWork.Cursor[0]==1);
         press(&input,RECVX_BUTTON_UP);assert(AdvWork.Cursor[0]==0);
         press(&input,RECVX_BUTTON_DOWN);
@@ -3828,6 +3914,7 @@ int main(int argc, char **argv)
     test_loaded_arm_ik();
     test_loaded_player_interactions();
     test_loaded_player_remaining();
+    test_loaded_typewriter(argv[1]);
     test_loaded_inventory_transition();
     test_loaded_camera_reset();
     test_camera_pause_task();

@@ -9,4 +9,6 @@ int recvxGameBootSaveStorageAny(void);
 /* Commit a snapshot and apply save count/ink changes only after verified storage. */
 int recvxGameBootSaveSlotWrite(unsigned int slot);
 const char *recvxGameBootSaveStorageError(void);
+/* State of a slot in the active original save/load window: empty/live/damaged. */
+int recvxGameBootSaveSlotState(unsigned int slot);
 #endif

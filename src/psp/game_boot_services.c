@@ -15,6 +15,7 @@
 #include "ps2/veronica/prog/ps2_sg_pdvib.h"
 #include "ps2/veronica/prog/ps2_sg_maloc.h"
 #include "ps2/veronica/prog/message.h"
+#include "ps2/veronica/prog/ps2_texture.h"
 #include "ps2/veronica/prog/sync.h"
 #include "psp/original_clock.h"
 #include "psp/engine_original_memory.h"
@@ -100,10 +101,22 @@ void bhFontScaleSet(float x, float y, float cr)
 { FontScaleX = x; FontScaleY = y; FontScaleCR = cr; }
 void bhSetFontTexture(void *data)
 {
-    /* ADV's pictures contain their own lettering. In-game text is a later service. */
-    if (recvxGameBootSourceRemaining(data) == 0)
-        recvxGameBootUnsupported("font resource is outside the loaded SYSTEM entry");
-    recvxGameBootLog("SYSTEM font payload loaded; in-game font drawing pending");
+    if(sys->ss_flg & 0x40u)return;
+    size_t size=recvxGameBootSourceRemaining(data),cursor=0;
+    if(recvxGameBootValidateEffectSource(data,size))
+        recvxGameBootUnsupported("invalid SYSTEM font payload");
+    /* The retail SYSTEM font package shares the four model records preceding
+       the common effect/font PVP. Font initialization relocates only textures. */
+    for(unsigned int i=0;i<4;++i) {
+        uint32_t length;memcpy(&length,(unsigned char *)data+cursor,4);
+        cursor+=4u+length;
+    }
+    cursor=(cursor+4u+31u)&~(size_t)31u;
+    sys->ef_tlist.textures=sys->ef_tex;sys->ef_tlist.nbTexture=0;
+    sys->ef_ct=bhSetMemPvpTexture(&sys->ef_tlist,(unsigned char *)data+cursor,0);
+    if(sys->ef_ct<4)recvxGameBootUnsupported("incomplete SYSTEM font texture pages");
+    sys->ef_tlist.nbTexture=4;sys->ss_flg|=0x40u;
+    recvxGameBootLog("SYSTEM font initialized: four original font texture pages");
 }
 void ExitApplication(void) { recvxGameBootUnsupported("unexpected ADV application exit"); }
 void bhCheckSoftReset(void) { }

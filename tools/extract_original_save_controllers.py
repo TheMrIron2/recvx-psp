@@ -55,6 +55,10 @@ def prepare(destination):
             }
             if name in guards:
                 body = body.replace('{', '{\n    ' + guards[name], 1)
+            if name == 'CountDisplay':
+                # The material renderer consumes a polygon count, just as the
+                # original message glyph path does. The decomp omitted it.
+                body = body.replace('p2c.p = p;', 'p2c.p = p;\n    p2c.num = 1;', 1)
             # Host tools have 64-bit pointers; PSP remains the original 32-bit ABI.
             body = body.replace('((int)sys->memp + 0x3F) & ~0x3F',
                                 '((uintptr_t)sys->memp + 0x3F) & ~(uintptr_t)0x3F')

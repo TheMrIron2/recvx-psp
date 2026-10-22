@@ -13,22 +13,49 @@
 #include "ps2/veronica/prog/padman.h"
 #include "ps2/veronica/prog/ps2_SaveScreen.h"
 #include "ps2/veronica/prog/ps2_LoadScreen.h"
+#include "ps2/veronica/prog/bup_00.h"
 
 static SYS_WORK state;
 SYS_WORK *sys=&state;
 PAD_WRK Pad[4];
 S_WORK swork;
 static int checkpoints,prompts;
+static TYP_WORK typewriter;
 void recvxGameBootUnsupported(const char *reason)
 { fprintf(stderr,"unexpected save-screen fault: %s\n",reason);abort(); }
 void bhPushGameData(void) { ++checkpoints; }
-void njPrintSize(Uint16 size) { assert(size==12); }
-void njPrintColor(Uint32 color) { assert(color==0xffffffff); }
-void njPrintC(Int location,const char *message)
-{ assert((location>>16)==3 && message && *message);++prompts; }
+void bhFontScaleSet(float x,float y,float cr) { assert(x>0&&y>0&&cr>0); }
+int bhDispMessage(float x,float y,float z,int type,int id,int color,int count)
+{ (void)x;(void)y;(void)z;(void)color;(void)count;assert(type==1&&id>=208&&id<=490);++prompts;return 0; }
+int bhDispMessageEx(float x,float y,float z,int type,int id,unsigned int color,int count)
+{ return bhDispMessage(x,y,z,type,id,(int)color,count); }
+void bhDispFontEx(NJS_POINT2 *p,int code,unsigned int color,float z)
+{ assert(p&&code>=16&&code<=25);(void)color;(void)z;++prompts; }
+void CountDisplay(int point,NJS_POINT2 *p,unsigned int color,int param)
+{ assert(p&&(point==14||point==15));(void)color;(void)param;++prompts; }
+unsigned int RoomNameSwitch(unsigned int room) { (void)room;return 1; }
+int bhCkFlg(unsigned int *flags,unsigned int bit)
+{ return !!(flags[bit/32]&(0x80000000u>>(bit%32))); }
+void CallSystemSe(int id,int sound) { assert(id==0);(void)sound; }
+int njSetTexture(NJS_TEXLIST *list) { assert(list);return 0; }
+void njQuadTextureStart(int mode) { assert(mode==0||mode==1); }
+void njQuadTextureEnd(void) {}
+void njSetQuadTexture(int number,unsigned int color) { assert(number>=0&&number<=2);(void)color; }
+void njDrawQuadTexture(QUAD *quad,float depth) { assert(quad&&depth>0);++prompts; }
+void njDrawPolygon2D(NJS_POINT2COL *polygon,int count,float depth,unsigned int flags)
+{ assert(polygon&&count==4);(void)depth;(void)flags;++prompts; }
+void njDrawPolygon(NJS_POLYGON_VTX *polygon,int count,int blend)
+{ assert(polygon&&count==4&&blend==1);++prompts; }
+static int save_step(SAVE_SCREEN *screen,unsigned int keys)
+{ sys->pad_ps=sys->pad_on=keys;return ExecuteSaveScreen(screen); }
+static int load_step(LOAD_SCREEN *screen,unsigned int keys)
+{ sys->pad_ps=sys->pad_on=keys;return ExecuteLoadScreen(screen); }
+static void finish_save(SAVE_SCREEN *screen)
+{ for(int i=0;i<500&&!screen->usExitFlag;++i)save_step(screen,0);assert(screen->usExitFlag); }
 static void game(void)
 {
     memset(&state,0,sizeof(state));sys->version=10;sys->ply_id=0;
+    sys->typ_exp=&typewriter;
     sys->stg_no=1;sys->rom_no=3;sys->save_ct=2;
     sys->itm[2]=(31u<<16)|3;sys->itm[3]=(1u<<16)|15;
     sys->ply_hp[0]=100;sys->time=12345;
@@ -53,36 +80,42 @@ int main(void)
     assert(!recvxGameBootSaveStorageInit(data));game();
     assert(!recvxGameBootSaveStorageAny());
     assert(CreateSaveScreen(&save_screen,NULL)==&save_screen);
-    assert(!ExecuteSaveScreen(&save_screen) && !save_screen.usExitFlag);
-    Pad[0].press=0x20;assert(ExecuteSaveScreen(&save_screen)==1);
+    assert(!save_step(&save_screen,0) && !save_screen.usExitFlag);
+    assert(!save_step(&save_screen,0x1000));finish_save(&save_screen);
     assert(sys->save_ct==2 && (sys->itm[2]&255)==3 && !checkpoints);
     CreateSaveScreen(&save_screen,NULL);
-    Pad[0].press=0x40;assert(!ExecuteSaveScreen(&save_screen));
-    assert(save_screen.usSaveEnd==1 && checkpoints==1);
+    assert(!save_step(&save_screen,0x800));assert(!save_step(&save_screen,0));
+    assert(save_screen.ulState==32&&save_screen.sSelectCur==0&&sys->save_ct==2);
+    save_step(&save_screen,0x800);save_step(&save_screen,0);
+    assert(save_screen.ulState==35&&save_screen.usSaveEnd==1);
     assert(sys->save_ct==3 && (sys->itm[2]&255)==2);
     assert(recvxGameBootSaveSlotRead(0,&saved)==1 && saved.save_ct==3 && saved.time==12345 && saved.itm[383]==0xf0ff8105u);
-    assert(recvxGameBootSaveStorageAny());
-    Pad[0].press=0;assert(!ExecuteSaveScreen(&save_screen));
-    Pad[0].press=0x40;assert(ExecuteSaveScreen(&save_screen)==1 && checkpoints==1);
-    /* Existing data must be explicitly confirmed before consuming another ribbon. */
+    assert(recvxGameBootSaveStorageAny());finish_save(&save_screen);assert(checkpoints==1);
+    /* Retail overwrite defaults to No. Both default confirmation and cancel
+       return to the list without consuming an ink ribbon. */
     CreateSaveScreen(&save_screen,NULL);
-    assert(!ExecuteSaveScreen(&save_screen));assert(sys->save_ct==3);
-    Pad[0].press=0x20;assert(!ExecuteSaveScreen(&save_screen));assert(sys->save_ct==3);
-    Pad[0].press=0x40;assert(!ExecuteSaveScreen(&save_screen));assert(sys->save_ct==3);
-    Pad[0].press=0;assert(!ExecuteSaveScreen(&save_screen));
-    Pad[0].press=0x40;assert(!ExecuteSaveScreen(&save_screen));assert(sys->save_ct==4 && checkpoints==2);
-    /* Load restores only the original save payload and signals transition after acknowledgement. */
+    save_step(&save_screen,0x800);save_step(&save_screen,0);
+    assert(save_screen.ulState==31&&save_screen.sSelectCur==1);
+    save_step(&save_screen,0x800);assert(save_screen.ulState==20&&sys->save_ct==3);
+    save_step(&save_screen,0x800);save_step(&save_screen,0);
+    save_step(&save_screen,0x1000);assert(save_screen.ulState==20&&sys->save_ct==3);
+    save_step(&save_screen,0x800);save_step(&save_screen,0);
+    save_step(&save_screen,1);assert(save_screen.sSelectCur==0);
+    save_step(&save_screen,0x800);save_step(&save_screen,0);
+    assert(sys->save_ct==4);finish_save(&save_screen);assert(checkpoints==2);
+    /* Retail load confirmation defaults to Yes; the game payload is copied
+       only after confirmation and the original exit sets the transition. */
     sys->time=555;sys->typ_flg=0;sys->gm_flg=0xaabbccdd;sys->itm[383]=0;
     CreateLoadScreen(&load_screen,NULL);
-    Pad[0].press=0x40;assert(!ExecuteLoadScreen(&load_screen));
+    load_step(&load_screen,0x800);assert(load_screen.ulState==30&&sys->time==555);
+    load_step(&load_screen,0x800);load_step(&load_screen,0);
     assert(sys->time==12345 && sys->itm[383]==0xf0ff8105u && sys->save_ct==4 && !(sys->typ_flg&0x10) && sys->gm_flg==0xaabbccdd);
-    Pad[0].press=0;assert(!ExecuteLoadScreen(&load_screen));
-    Pad[0].press=0x40;assert(ExecuteLoadScreen(&load_screen)==1 && (sys->typ_flg&0x10));
-    /* Empty/corrupt slots cannot restore memory or claim successful load. */
-    CreateLoadScreen(&load_screen,NULL);load_screen.sSelectCur=1;sys->time=456;sys->typ_flg=0;
-    assert(!ExecuteLoadScreen(&load_screen) && !load_screen.usSaveEnd && sys->time==456 && !sys->typ_flg);
-    Pad[0].press=0x20;assert(!ExecuteLoadScreen(&load_screen));
-    assert(ExecuteLoadScreen(&load_screen)==1);
+    assert(load_step(&load_screen,0)==1 && (sys->typ_flg&0x10));
+    CreateLoadScreen(&load_screen,NULL);load_screen.sCursorY=1;sys->time=456;sys->typ_flg=0;
+    assert(!load_step(&load_screen,0x800) && load_screen.ulState==21 && !load_screen.usSaveEnd && sys->time==456 && !sys->typ_flg);
+    load_step(&load_screen,0x1000);load_step(&load_screen,0x1000);
+    for(int i=0;i<3&&!load_screen.usExitFlag;++i)load_step(&load_screen,0);
+    assert(load_screen.usExitFlag);
     /* A failed temporary-file open leaves both game state and previous save intact. */
     snprintf(blocking,sizeof(blocking),"%s/saves/SAVEDATA-00.bin.tmp",root);assert(!mkdir(blocking,0700));
     int count=sys->save_ct;unsigned int ink=sys->itm[2];

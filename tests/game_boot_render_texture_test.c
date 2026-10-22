@@ -114,6 +114,17 @@ static void texture_resolution(void)
     REJECT(recvxGameBootRenderTextureSelect(&list, 0), "valid owned texture");
     recvxGameBootRenderTextureList(NULL);
     REJECT(recvxGameBootRenderTextureSelect(NULL, 0), "texture exceeds");
+    /* The title's load screen restores ef_tlist before gameplay has loaded
+       any effects. Binding that empty list is valid; sampling it is not. */
+    NJS_TEXLIST empty = {0};
+    njSetTexture(&empty);
+    assert(recvxGameBootRenderTextureCurrentList() == &empty);
+    assert(!recvxGameBootRenderStateGet()->selected_texture);
+    REJECT(recvxGameBootRenderTextureSelect(NULL, 0), "texture exceeds");
+    REJECT(njSetTextureNum(0), "outside its list");
+    empty.textures = names; njSetTexture(&empty);
+    empty.textures = NULL; empty.nbTexture = 1;
+    REJECT(njSetTexture(&empty), "render texture list");
     list.nbTexture = 257; REJECT(recvxGameBootRenderTextureList(&list), "render texture list");
 }
 

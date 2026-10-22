@@ -42,8 +42,11 @@ static void motion(unsigned int index)
 {
     if (index >= 512 || !contains(sys->plmthp, 12288, plp->mnwP,
             ((size_t)index + 1u) * sizeof(MN_WORK)) ||
-        !plp->mnwP[index].frm_num || plp->mnwP[index].frm_num > 32767)
+        !plp->mnwP[index].frm_num || plp->mnwP[index].frm_num > 32767) {
+        recvxGameBootLog("player action motion rejected: index=%u current=%u modes=%u/%u/%u/%u",
+            index, plp->mtn_no, plp->mode0, plp->mode1, plp->mode2, plp->mode3);
         recvxGameBootUnsupported("invalid original player action motion");
+    }
 }
 
 void recvxGameBootPlayerActionPrepare(int kind)
@@ -58,7 +61,17 @@ void recvxGameBootPlayerActionPrepare(int kind)
     static const unsigned int actions[] = {0, 0, 0, 1, 6, 2, 3, 4, 5};
     unsigned int selected = PlMtnAct[expression->wpntp][damage][actions[kind]];
     motion(selected);
-    motion(plp->mtn_no);
+    /* The retail entry phases replace the previous event/damage motion.
+       Its number can refer to an empty slot in the restored player table.
+       Only require that old animation when the controller actually keeps it
+       or reads its frame count to preserve the phase of a moving animation. */
+    int reads_current = plp->mode3 != 0;
+    if (kind == 5 || kind == 7) reads_current = 0; /* Reassigned in phase 1 too. */
+    if (plp->mode3 == 0)
+        reads_current = kind == 6 || kind == 8 ||
+            (kind == 5 && (plp->flg & 0x800000u)) ||
+            (kind == 7 && (plp->flg & 0x2000000u));
+    if (reads_current) motion(plp->mtn_no);
     if (kind == 4 && plp->mode3 < 2) motion(selected + 1u);
     if ((kind == 7 || kind == 8) && (sys->pad_ps & 0x400u))
         motion(PlMtnAct[expression->wpntp][damage][3]);

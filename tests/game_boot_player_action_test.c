@@ -29,6 +29,7 @@ static int foot_type, add_angle;
 
 void recvxGameBootUnsupported(const char *service)
 { fault = service; longjmp(failure, 1); }
+void recvxGameBootLog(const char *format, ...) { (void)format; }
 #define BOUNDARY(name) void name(void) { recvxGameBootUnsupported(#name); }
 BOUNDARY(bhCPM1_act_atk)
 BOUNDARY(bhCPM2_act_kdu)
@@ -88,6 +89,33 @@ static EXP_WORK *setup(void)
 
 int main(void)
 {
+    /* Claire's retail table has empty slots (including 47). A room event can
+       leave its motion number behind when restoring the persistent table.
+       These entry paths select a fresh animation before using frame counts. */
+    static void (*const replace_motion[])(void) = {
+        bhCPM2_act_std, bhCPM2_act_srt, bhCPM2_act_sta,
+        bhCPM2_act_wlk, bhCPM2_act_bak
+    };
+    static const unsigned int replacement[] = {42, 39, 9, 0, 16};
+    for (unsigned int i = 0; i < sizeof(replacement) / sizeof(replacement[0]); ++i) {
+        setup(); plp->mtn_no = 47; plp->mnwP[47].frm_num = 0;
+        if (!setjmp(failure)) replace_motion[i]();
+        assert(!fault);
+        assert(plp->mtn_no == replacement[i] && plp->mode3 == 1);
+    }
+    /* The same hole must still be rejected when phase conversion consumes it. */
+    setup(); plp->mtn_no = 47; plp->mnwP[47].frm_num = 0;
+    REJECT(bhCPM2_act_run(), "invalid original player action motion");
+    REJECT(bhCPM2_act_bk2(), "invalid original player action motion");
+    plp->flg = 0x800000;
+    REJECT(bhCPM2_act_wlk(), "invalid original player action motion");
+    plp->flg = 0x2000000;
+    REJECT(bhCPM2_act_bak(), "invalid original player action motion");
+    plp->flg = 0; plp->mode3 = 1;
+    REJECT(bhCPM2_act_std(), "invalid original player action motion");
+    setup(); plp->mnwP[42].frm_num = 0;
+    REJECT(bhCPM2_act_std(), "invalid original player action motion");
+
     EXP_WORK *expression = setup();
     plp->px = 10; plp->pz = 20; expression->spx = 12; expression->spz = 24;
     bhCPM0_action();
