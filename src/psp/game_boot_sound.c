@@ -206,6 +206,7 @@ void CallSystemSeBasic(int sound, int volume, int fx)
     else se(17 + (system_slot++ & 1), sound, volume, 0);
 }
 void CallSystemSe(int slot, int sound) { (void)slot; CallSystemSeBasic(sound, 0, 0); }
+void StopSystemSe(void) { recvxAudioStopMidi(2); check(); }
 void CallSystemSeEx(int sound, int volume) { CallSystemSeBasic(sound, volume, 0); }
 void CallPlayerVoice(int sound)
 { NJS_POINT3 p = {plp->px, plp->py, plp->pz}; int volume, pan; spatial(&p, 0, &volume, &pan); se(7, sound, volume, pan); }

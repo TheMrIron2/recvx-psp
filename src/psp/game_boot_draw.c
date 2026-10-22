@@ -481,6 +481,10 @@ void njDrawPolygon2DM(NJS_POINT2COL *polygon, int count, float priority, unsigne
     RecvxBootDraw *draw;
     const RecvxBootTexture *texture;
     unsigned int i;
+    if(current_list==&sys->ef_tlist && current_number>=4){
+        njDrawPolygon2D(polygon,count,priority,attributes);
+        return;
+    }
     if (!polygon || !polygon->p || !polygon->tex || !polygon->col || count != 4 ||
         polygon->num != 1 || attributes != 0x80000060u ||
         current_list != &sys->ef_tlist || current_number >= 4)

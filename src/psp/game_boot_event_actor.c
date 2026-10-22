@@ -24,6 +24,10 @@ static int actor(const BH_PWORK *work)
         (member(work,sys->obwp,39936u/sizeof(O_WRK),sizeof(O_WRK))&&arena(work,sizeof(O_WRK)))||
         (member(work,sys->itwp,39936u/sizeof(O_WRK),sizeof(O_WRK))&&arena(work,sizeof(O_WRK))));
 }
+static int companion(const void *pointer)
+{
+    return member(pointer,ene,128,sizeof(*ene))||arena(pointer,sizeof(BH_PWORK));
+}
 static BH_PWORK *enemy(unsigned int index)
 {
     if(!sys||!rom||rom->ene_n<0||index>=(unsigned int)rom->ene_n||!rom->enep||
@@ -59,10 +63,17 @@ void recvxGameBootEventActorPrepare(unsigned int opcode,const unsigned char *com
         if(!bhCetask||!actor(bhCetask->work))
             recvxGameBootUnsupported("invalid actor event work");
         BH_PWORK *work=bhCetask->work;
-        if(opcode==43&&work->id==1&&!actor((BH_PWORK *)work->exp1)&&!arena(work->exp1,sizeof(BH_PWORK)))
+        if((opcode==43||(opcode==103&&(command[1]==143||command[1]==146)))&&work->id==1&&!companion(work->exp1))
             recvxGameBootUnsupported("invalid motion pause companion");
-        if(opcode==103&&command[1]==128&&(work->id>=128||!sys->emtp[work->id]))
+        if(opcode==103&&(command[1]==128||command[1]==143||command[1]==146)&&(work->id>=128||!sys->emtp[work->id]))
             recvxGameBootUnsupported("actor event has no loaded motion table");
+        if(opcode==103&&command[1]==148&&command[2]<=3){
+            if(!arena(work->exp0,0x60+sizeof(O_WRK *)))
+                recvxGameBootUnsupported("invalid actor event light context");
+            O_WRK *light;memcpy(&light,work->exp0+0x60,sizeof(light));
+            if(!actor((BH_PWORK *)light))
+                recvxGameBootUnsupported("invalid actor event light object");
+        }
     }else context(enemy(opcode==154?command[1]:command[2]));
 }
 

@@ -124,6 +124,13 @@ void recvxGameBootOverlayPolygon2D(NJS_POINT2COL *polygon, Int count, Float prio
 
 void njDrawPolygon2D(NJS_POINT2COL *polygon, Int count, Float priority, Uint32 attributes)
 {
+    if (polygon && count==3 && polygon->num==1 && polygon->p && polygon->col &&
+        attributes==0x60u && isfinite(priority)) {
+        NJS_POINT2 p[4]={polygon->p[0],polygon->p[1],polygon->p[2],polygon->p[2]};
+        NJS_COLOR c[4]={polygon->col[0],polygon->col[1],polygon->col[2],polygon->col[2]};
+        recvxGameBootDrawGradientQuad(p,c,-priority);
+        return;
+    }
     if (attributes & 0x80000000u) {
         NJS_TEXLIST *list;
         Uint32 number;

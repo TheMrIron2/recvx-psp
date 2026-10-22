@@ -16,6 +16,11 @@ static int arena(const void *pointer, size_t size)
     uintptr_t end = sys ? (uintptr_t)sys->endp : 0;
     return pointer && freemem && !(p & 3u) && p >= first && p <= end && size <= end - p;
 }
+static int local_vertices(const O_WRK *object,const void *pointer,size_t bytes)
+{
+    uintptr_t p=(uintptr_t)pointer,b=(uintptr_t)object;
+    return pointer&&p>=b&&p-b<=sizeof(*object)&&bytes<=sizeof(*object)-(p-b);
+}
 static int member(const void *pointer, const void *base, size_t count, size_t stride)
 {
     uintptr_t p = (uintptr_t)pointer, b = (uintptr_t)base;
@@ -54,7 +59,7 @@ void recvxGameBootEffectSpritePrepare(O_WRK *object, int textured)
         recvxGameBootUnsupported("invalid 3D effect vertex count");
     if (textured) {
         if (!object->tvp || (object->tvp == object->tv ? object->pn > 4 :
-            !arena(object->tvp, (size_t)object->pn * sizeof(*object->tvp))))
+            !local_vertices(object,object->tvp,(size_t)object->pn*sizeof(*object->tvp))&&!arena(object->tvp, (size_t)object->pn * sizeof(*object->tvp))))
             recvxGameBootUnsupported("invalid textured 3D effect vertices");
         if (!(object->flg & 0x800000u)) {
             if (!(object->stflg & 0x20u)) {

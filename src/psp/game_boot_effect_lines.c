@@ -55,3 +55,7 @@ void njDrawLine3D(NJS_POINT3COL *points, Int count, Uint32 attributes)
         recvxGameBootRenderLine(pair, (attributes & 0x40u) != 0);
     }
 }
+
+/* Ex uses the same segment count and per-endpoint colors as the public API. */
+void njDrawLine3DEx(NJS_POINT3COL *points,Int count,Uint32 attributes)
+{ njDrawLine3D(points,count,attributes); }

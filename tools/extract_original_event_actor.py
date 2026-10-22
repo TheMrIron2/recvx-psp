@@ -12,6 +12,7 @@ def prepare(destination):
     output=['#include "ps2/veronica/prog/event.h"',
             '#include "ps2/veronica/prog/main.h"',
             '#include "ps2/veronica/prog/face.h"',
+            '#include "ps2/veronica/prog/en11.h"',
             '#include "psp/engine_event_core.h"',
             '#include "psp/game_boot_event_actor.h"',
             '#include <stdio.h>']
@@ -31,12 +32,17 @@ def prepare(destination):
     function=extract_function(source,'Sub_controll')
     line=source.count('\n',0,source.index(function))+1
     starts=list(re.finditer(r'(?m)^    case\s+(\d+)\s*:',function))
-    selected={0,128,139,144,149}
+    selected={0,128,139,143,144,146,147,148,149}
     output.extend(['int Sub_controll(void)','{','    switch (*bhScePtr) {'])
     for i,match in enumerate(starts):
         if int(match[1]) not in selected:continue
         end=starts[i+1].start() if i+1<len(starts) else function.rfind('    }')
-        output.extend([f'#line {line+function.count(chr(10),0,match.start())} "{path.as_posix()}"',function[match.start():end]])
+        body=function[match.start():end]
+        # exp1 is a full linked zombie, not a byte-offset extension. Use its
+        # fields so the same handoff is valid on PSP and native test builds.
+        body=body.replace('((char*)bhCetask->work->exp1)[12] = 1;', '((BH_PWORK *)bhCetask->work->exp1)->mode0 = 1;')
+        body=body.replace('((void**)bhCetask->work->exp1)[215]', '((BH_PWORK *)bhCetask->work->exp1)->mnwP')
+        output.extend([f'#line {line+function.count(chr(10),0,match.start())} "{path.as_posix()}"',body])
         if int(match[1])==128:output.append('        __attribute__((fallthrough));')
     output.extend(['    default:', '        recvxEventCoreFailUnsupportedCommand(103, bhScePtr);',
                    '        return -1;','    }','    return 0;','}',''])

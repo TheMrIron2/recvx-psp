@@ -70,6 +70,9 @@ int main(void)
     SendSoundCommand(0);
     for(unsigned int command=4;command<10;++command)SendSoundCommand(command);
     assert(!midi_starts&&!adx_starts&&!adx_stops&&!controls);
+    CallSystemSe(0,(int)0x80000208u);assert(slot_seen==2&&sound_seen==(int)0x80000208u);
+    StopSystemSe();assert(stop_seen&&slot_seen==2);
+    midi_starts=0;
     for (int i = 0; i < 68; ++i) { PanTbl360[i] = (char)(i - 34); PanTbl360Vol[i] = -3; }
     ThreeDVolTbl[10] = -20;
     NJS_POINT3 p = {10, 0, 0};

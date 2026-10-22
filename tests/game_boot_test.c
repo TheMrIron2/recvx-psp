@@ -28,9 +28,11 @@
 #include "ps2/veronica/prog/effsub0.h"
 #include "ps2/veronica/prog/effsub5.h"
 #include "ps2/veronica/prog/effsub1.h"
+#include "ps2/veronica/prog/effsub1b.h"
 #include "ps2/veronica/prog/effsub2.h"
 #include "ps2/veronica/prog/effsub3.h"
 #include "ps2/veronica/prog/effsub6.h"
+#include "ps2/veronica/prog/effsub4.h"
 #include "ps2/veronica/prog/hitchkl.h"
 #include "ps2/veronica/prog/hitchk.h"
 #include "psp/game_boot_audio.h"
@@ -887,7 +889,7 @@ static void effect_control_task(void)
         eff[0].lkwkp = effect_fixture_case == 1 ? (unsigned char *)1 : (unsigned char *)plp;
         eff[0].lkono = 2;
     } else if (effect_fixture_case == 3) {
-        eff[0].flg = 1; eff[0].id = 144;
+        eff[0].flg = 1; eff[0].id = 225; eff[0].type = 255;
     } else if (effect_fixture_case == 4) {
         eff[0].flg = 1; eff[0].id = 20; eff[0].type = 450;
     } else if (effect_fixture_case == 5) {
@@ -1028,13 +1030,43 @@ static void callback_fault_task(void)
     case 90:e->mode0=2;e->ct0=2;bhEff205(e);break;
     case 91:e->mode0=1;e->ct0=24;bhEff207(e);break;
     case 92:e->lkono=513;bhEff192(e);break;
+    case 93:e->mode0=1;e->ct0=4;bhEff185(e);break;
+    case 94:e->mode0=1;e->ct0=21;bhEff209(e);break;
+    case 95:e->mode0=1;e->type=2;e->ct0=11;bhEff216(e);break;
+    case 96:e->type=3;bhEff217(e);break;
+    case 97:e->mode0=1;e->exp0=NULL;bhEff143(e);break;
+    case 98:e->mode0=1;sys->ond_cx=4;bhEff133(e);break;
+    case 99:e->mode0=1;e->hide[0]=4;bhEff138(e);break;
+    case 100:e->type=1;e->lkono=0;bhEff220(e);break;
+    case 101:e->mdlver=55;bhEff221(e);break;
+    case 102:e->mode0=1;e->lkwkp=NULL;bhEff136(e);break;
+    case 103:e->type=3;e->sx=0;bhEff219(e);break;
+    case 104:e->mode0=1;e->type=1;e->exp0=NULL;bhEff219(e);break;
+    case 105:e->mode0=1;e->ct0=13;e->exp0=NULL;bhEff131(e);break;
+    case 106:e->type=255;bhEff225(e);break;
+    case 107:e->sz=0;bhEff223(e);break;
+    case 108:e->lkono=0;bhEff236(e);break;
+    case 109:e->lkono=0;bhEff249(e);break;
+    case 110:e->type=255;bhEff305(e);break;
+    case 111:e->type=255;bhEff306(e);break;
+    case 112:((R07_WORK *)((OR_WORK *)e)->free4)->vtx_num=18;bhEff307((OR_WORK *)e);break;
+    case 113:((R08_WORK *)((OR_WORK *)e)->free4)->prm_a.vtx_num=17;bhEff308((OR_WORK *)e);break;
+    case 114:((R0B_WORK *)((OR_WORK *)e)->free4)->prm_a.vtx_num=1;bhEff30b((OR_WORK *)e);break;
+    case 115:bhEff30c((OR_WORK *)e);break;
+    case 116:e->mode0=1;e->exp0=NULL;bhEff_E06_Rinpun(e);break;
+    case 117:e->mode0=1;e->exp0=NULL;bhEff_E12_FireManager(e);break;
+    case 118:e->type=1;e->exp1=NULL;bhEff_E12_Fire(e);break;
+    case 119:e->exp0=NULL;bhEff_Sub365(e);break;
+    case 120:((D_WORK *)e->exp0)->num=41;bhEff_Sub365(e);break;
+
+
 
     }
     assert(0);
 }
 static void test_effect_callback_faults(const char *directory,void *arena,size_t arena_size)
 {
-    static const char *messages[]={"mode/type","auxiliary context","overlapping","mode/type","counts","buffers","vertex index","sand particle state","sand dust animation","UV table/frame","render queue is full","blood pool effect state","links an invalid actor","weapon effect state","explosion animation state","flame UV selector","projectile target","completion link","swap effect placement","water ripple buffer","UV table/frame","auxiliary context","debris emitter type","debris effect state","debris effect state","linked flame mode","linked flame emitter state","selector effect UV frame","gas particle color selector","monitor effect state","linked flame slot","links an invalid actor","UV scroll model","UV scroll command exceeds stream","UV table/frame","sprite animation mode","UV table/frame","UV table/frame","texture bank frame","bubble animation repeat count","bubble animation repeat count","emitter countdown","emitter countdown","initialization texture","quad orientation","UV/color parameters","entry id","UV table/frame","render queue is full","UV table/frame","UV table/frame","sprite repeat counter","sprite blend selector","sprite animation mode","UV table/frame","timed sprite lifetime","emitter interval","emitter interval","emitter interval","smoke color or velocity selector","smoke color or velocity selector","UV table/frame","emitter countdown","render queue is full","UV table/frame","UV table/frame","linked eye/drop effect mode","linked eye/drop effect mode","linked eye/drop matrix","fire sprite state","fire sprite state","UV table/frame","impact emitter phase","impact sprite frame","impact sprite UV pointer","auxiliary context","fire spark particle count","render queue is full","render queue is full","linked eye/drop matrix","eye particle state","late sprite animation frame","late sprite animation frame","late sprite variant","late sprite animation frame","render queue is full","late sprite animation frame","late sprite animation frame","linked particle emitter","linked particle lifetime/variant","late sprite animation frame","late sprite animation frame","burst particle count"};
+    static const char *messages[]={"mode/type","auxiliary context","overlapping","mode/type","counts","buffers","vertex index","sand particle state","sand dust animation","UV table/frame","render queue is full","blood pool effect state","links an invalid actor","weapon effect state","explosion animation state","flame UV selector","projectile target","completion link","swap effect placement","water ripple buffer","UV table/frame","auxiliary context","debris emitter type","debris effect state","debris effect state","linked flame mode","linked flame emitter state","selector effect UV frame","gas particle color selector","monitor effect state","linked flame slot","links an invalid actor","UV scroll model","UV scroll command exceeds stream","UV table/frame","sprite animation mode","UV table/frame","UV table/frame","texture bank frame","bubble animation repeat count","bubble animation repeat count","emitter countdown","emitter countdown","initialization texture","quad orientation","UV/color parameters","entry id","UV table/frame","render queue is full","UV table/frame","UV table/frame","sprite repeat counter","sprite blend selector","sprite animation mode","UV table/frame","timed sprite lifetime","emitter interval","emitter interval","emitter interval","smoke color or velocity selector","smoke color or velocity selector","UV table/frame","emitter countdown","render queue is full","UV table/frame","UV table/frame","linked eye/drop effect mode","linked eye/drop effect mode","linked eye/drop matrix","fire sprite state","fire sprite state","UV table/frame","impact emitter phase","impact sprite frame","impact sprite UV pointer","auxiliary context","fire spark particle count","render queue is full","render queue is full","linked eye/drop matrix","eye particle state","late sprite animation frame","late sprite animation frame","late sprite variant","late sprite animation frame","render queue is full","late sprite animation frame","late sprite animation frame","linked particle emitter","linked particle lifetime/variant","late sprite animation frame","late sprite animation frame","burst particle count","environmental animation frame","environmental animation frame","environmental animation frame","dust color variant","auxiliary context","puzzle selector state","oil puzzle LED","debris burst count","debris frame/slowdown","afterimage parent","snow density/area","auxiliary context","UV table/frame","table index out of range","moving sprite lifetime","enemy-attached sprite duration/placement","oriented sprite duration","table index out of range","table index out of range","spline trail state","spark particle state","blood mist state","attached effect model","auxiliary context","auxiliary context","fire manager link","auxiliary context","effect particle count"};
     RecvxLiveTaskProc saved=bhSysTaskJumpTab[0];
     RecvxInputState input={.analog_x=128,.analog_y=128};bhSysTaskJumpTab[0]=callback_fault_task;
     for(callback_fault_case=0;callback_fault_case<(int)(sizeof(messages)/sizeof(*messages));++callback_fault_case){
@@ -1045,13 +1077,13 @@ static void test_effect_callback_faults(const char *directory,void *arena,size_t
         assert(strstr(recvxGameBootFault(),messages[callback_fault_case]));
     }
     bhSysTaskJumpTab[0]=saved;
-    puts("PASS: 93 effect callback fault paths reject invalid modes/types, auxiliary contexts, overlaps, stage/buffer/vertex indices, UV pointers, parents and full queues");
+    puts("PASS: 121 effect callback fault paths reject invalid modes/types, auxiliary contexts, overlaps, stage/buffer/vertex indices, UV pointers, parents and full queues");
 }
 
 static void test_effect_control(const char *directory, void *arena, size_t arena_size)
 {
     const char *faults[] = {NULL, "effect links an invalid actor", "effect links an invalid actor joint",
-        "bhEff144", "invalid original effect texture mapping", "original effect render queue is full"};
+        "effect table index out of range", "invalid original effect texture mapping", "original effect render queue is full"};
     RecvxLiveTaskProc saved = bhSysTaskJumpTab[0];
     RecvxInputState input = {.analog_x = 128, .analog_y = 128};
     bhSysTaskJumpTab[0] = effect_control_task;
@@ -1316,6 +1348,54 @@ static void room_stream_task(void)
         ene[0].mtn_no=parent_motion;ene[0].mnwP=parent_motion_work;
         linked->mode0=linked_mode;linked->mode3=linked_submode;
         linked->frm_no=linked_frame;linked->mtn_no=linked_motion;bhScePtr=saved_script;
+
+        /* Replay the exact stair-room instruction reported by real hardware. */
+        unsigned char *sub_command=(unsigned char *)rom->evtp+2356;
+        assert(recvxGameBootSourceRemaining(sub_command)>=8&&sub_command[0]==103);
+        fprintf(stderr,"Stair-room task 2 opcode 103: pc=2356 command=%u operands=%u,%u,%u,%u,%u\n",
+            sub_command[1],sub_command[2],sub_command[3],sub_command[4],sub_command[5],sub_command[6]);
+        assert(sub_command[1]==143||sub_command[1]==146||sub_command[1]==147);
+        BH_PWORK original_parent=ene[0],original_linked=*linked;
+        BH_SCEWORK original_task=bhEtask[2];BH_SCEWORK *original_current=bhCetask;
+        bhCetask=&bhEtask[2];bhCetask->work=&ene[0];
+        bhCetask->mtn_md=13;bhCetask->mdflg=0x12340000;bhCetask->hokan_rate=7;
+        bhScePtr=sub_command;assert(bhSubCtr()==1);
+        assert(bhScePtr==sub_command+(sub_command[1]==143?6:8));
+        assert(ene[0].mode0==sub_command[2]&&ene[0].mode1==sub_command[3]&&ene[0].mode2==sub_command[4]);
+        if(sub_command[1]!=147){
+            assert(ene[0].mnwP==sys->emtp[1]&&linked->mnwP==sys->emtp[1]&&linked->mode0==1);
+            assert(ene[0].mtn_md==13&&ene[0].hokan_rate==7);
+        }
+        ene[0]=original_parent;*linked=original_linked;bhEtask[2]=original_task;
+        /* Also exercise the original light helper, with a registered effect
+           object and owned context, rather than the focused test's call spy. */
+        BH_PWORK saved_enemy=ene[127];O_WRK saved_light=eff[511];
+        unsigned char *saved_memp=sys->memp;
+        ene[127]=ene[0];ene[127].id=11;ene[127].exp0=bhGetFreeMemory(128,32);
+        O_WRK *light=&eff[511];memcpy(ene[127].exp0+0x60,&light,sizeof(light));
+        bhCetask=&bhEtask[2];bhCetask->work=&ene[127];
+        unsigned char light_command[]={103,148,0,0};
+        static const unsigned char light_modes[]={1,3,0,2};
+        for(unsigned int flag=0;flag<4;++flag){
+            light_command[2]=flag;bhScePtr=light_command;assert(bhSubCtr()==1);
+            assert(bhScePtr==light_command+4&&light->mode0==light_modes[flag]);
+        }
+        assert(light->ax==0x38e&&light->axp==0x38e);
+        ene[127]=saved_enemy;eff[511]=saved_light;sys->memp=saved_memp;
+        bhEtask[2]=original_task;bhCetask=original_current;bhScePtr=saved_script;
+
+        /* Drive the full zombie burst/neck-blood controller with the actual
+           relocated zombie joints and texture descriptors from the stair room. */
+        O_WRK *saved_blood_effects=malloc(sizeof(eff));SYS_WORK *saved_blood_sys=malloc(sizeof(*sys));
+        assert(saved_blood_effects&&saved_blood_sys);memcpy(saved_blood_effects,eff,sizeof(eff));*saved_blood_sys=*sys;
+        memset(eff,0,sizeof(eff));O_WRK *blood=&eff[0];blood->flg=1;blood->id=356;
+        blood->lkwkp=(unsigned char *)&ene[0];blood->px=ene[0].px;blood->py=ene[0].py;blood->pz=ene[0].pz;
+        for(int frame=0;frame<80&&blood->flg;++frame)bhEff_Sub356(blood);
+        assert(!blood->flg&&blood->mode0==5);
+        int blood_children=0;for(int i=1;i<512;++i)blood_children+=!!eff[i].flg;
+        assert(blood_children>=20);
+        memcpy(eff,saved_blood_effects,sizeof(eff));*sys=*saved_blood_sys;free(saved_blood_effects);free(saved_blood_sys);
+        puts("PASS: zombie effect 356 burst and all three neck-blood stages using real stair-room actor joints and textures");
 
         /* This fixture calls the enemy scheduler directly, so initialize the
            camera pass normally run by the full gameplay frame before drawing. */
@@ -2723,6 +2803,375 @@ static void test_effect_155_batch(void)
 }
 
 static O_WRK *effect_145_fixture(int id);
+static unsigned int packed_process_calls,packed_draw_calls;
+static void packed_process(void *work){int *value=work;*value+=3;++packed_process_calls;}
+static void packed_draw(OR_WORK *work){assert(work==(OR_WORK *)&eff[0]);++packed_draw_calls;}
+static void test_packed_effect_batch(void)
+{
+    RecvxBootTexture *palette_texture=(RecvxBootTexture *)recvxGameBootTextureGet(&sys->ef_tlist,0);
+    unsigned int saved_palette[256];memcpy(saved_palette,palette_texture->palette,sizeof(saved_palette));
+    O_WRK *saved=malloc(sizeof(eff));SYS_WORK *old=malloc(sizeof(*sys));CAM_WORK camera=cam;
+    assert(saved&&old);memcpy(saved,eff,sizeof(eff));*old=*sys;
+    NJS_MATRIX matrix;njGetMatrix(&matrix);
+    NJS_POINT3 pos={cam.wpx+20*cam.vx,cam.wpy+20*cam.vy,cam.wpz+20*cam.vz},dir={.2f,1,.3f};
+    fprintf(stderr,"Packed effects: sparks\n");
+    for(int type=0;type<4;++type){
+        effect_145_fixture(0);eff[0].flg=0;
+        bhSetEffGunSpark(&pos,&dir,0xffffffffu,0x00ffffffu,type);
+        OR_WORK *e=(OR_WORK *)&eff[0];assert(e->id==308&&e->flg);
+        for(int f=0;f<150&&e->flg;++f){
+            sys->ef_fncn=0;bhEff308(e);
+            if(e->flg&&sys->ef_fncn){recvxGameBootRenderBeginFrame();bhEff308Drw(e);assert(!recvxEngineOriginalFault());recvxGameBootRenderConsume();}
+        }
+        assert(!e->flg);
+    }
+    fprintf(stderr,"Packed effects: blood ribbons\n");
+    for(int type=0;type<6;++type){
+        O_WRK *slot=effect_145_fixture(0);slot->flg=0;
+        OR_WORK *e=rySetEffBlood(&plp->mlwP->owP[0].mtx,&pos,&dir,type);assert(e==(OR_WORK *)slot&&e->id==309);
+        R09_WORK *r=(R09_WORK *)e->free4;r->texP=&sys->ef_tlist;r->tex_id=0;
+        for(int f=0;f<180&&e->flg;++f){
+            sys->ef_fncn=0;bhEff309(e);
+            if(e->flg&&sys->ef_fncn){recvxGameBootRenderBeginFrame();bhEff309Drw(e);assert(!recvxEngineOriginalFault());recvxGameBootRenderConsume();}
+        }
+        assert(!e->flg);
+    }
+    fprintf(stderr,"Packed effects: blood mist\n");
+    for(int type=0;type<6;++type){
+        O_WRK *slot=effect_145_fixture(0);slot->flg=0;
+        OR_WORK *e=rySetEffBlood2(&plp->mlwP->owP[0].mtx,&pos,&dir,type);assert(e==(OR_WORK *)slot&&e->id==311);
+        R0B_WORK *r=(R0B_WORK *)e->free4;r->texP=&sys->ef_tlist;r->tex_id=0;
+        for(int f=0;f<500&&e->flg;++f){
+            sys->ef_fncn=0;bhEff30b(e);
+            if(e->flg&&sys->ef_fncn){recvxGameBootRenderBeginFrame();e->func(e);assert(!recvxEngineOriginalFault());recvxGameBootRenderConsume();}
+        }
+        assert(!e->flg);for(int i=1;i<512;++i)assert(!(eff[i].flg&2));
+    }
+    fprintf(stderr,"Packed effects: spline trails\n");
+    for(int textured=0;textured<2;++textured){
+        O_WRK *slot=effect_145_fixture(307);OR_WORK *e=(OR_WORK *)slot;
+        R07_WORK *r=(R07_WORK *)e->free4;r->eff_prm.mtxP=&plp->mlwP->owP[0].mtx;
+        r->eff_prm.src=pos;r->eff_prm.dst=(NJS_POINT3){pos.x+1,pos.y+1,pos.z};
+        r->eff_prm.frm_inc=.25f;r->eff_prm.col=0xffffffffu;r->eff_prm.tim=8;
+        r->eff_prm.texP=textured?&sys->ef_tlist:NULL;r->eff_prm.tex_id=0;
+        for(int f=0;f<50&&e->flg;++f){
+            sys->ef_fncn=0;bhEff307(e);
+            if(e->flg&&sys->ef_fncn){recvxGameBootRenderBeginFrame();njSetMatrix(NULL,cam.mtx);bhEff307Drw(e);assert(!recvxEngineOriginalFault());recvxGameBootRenderConsume();}
+        }
+        assert(!e->flg);
+    }
+    for(int type=0;type<3;++type){
+        OR_WORK *e=(OR_WORK *)effect_145_fixture(310);R0A_WORK *r=(R0A_WORK *)e->free4;
+        r->prm_a.type=type;r->prm_a.x_rang=r->prm_a.y_rang=1;r->prm_a.x_rate=r->prm_a.y_rate=.5f;
+        r->prm_a.add_ax=100;r->prm_a.add_ay=200;
+        sys->sp_flg|=1;sys->cb_flg&=~4u;
+        for(int f=0;f<30&&e->flg;++f)bhEff30a(e);
+        assert(type==2?!e->flg:!!e->flg);cam=camera;
+    }
+    O_WRK *shadow=effect_145_fixture(304);shadow->lkwkp=(unsigned char *)plp;
+    NJS_POINT3 *p=(NJS_POINT3 *)sys->memp;unsigned char *old_memp=sys->memp;
+    p[0]=(NJS_POINT3){plp->px-1,plp->py,plp->pz};p[1]=(NJS_POINT3){plp->px+1,plp->py,plp->pz};p[2]=(NJS_POINT3){plp->px,plp->py,plp->pz+1};
+    shadow->ct0=(int)(uintptr_t)&p[0];shadow->ct1=(int)(uintptr_t)&p[1];shadow->ct2=(int)(uintptr_t)&p[2];
+    sys->memp+=3*sizeof(*p);sys->ef_mdfn=0;bhEff304(shadow);
+    assert(isfinite(shadow->sx)&&isfinite(shadow->sy)&&sys->ef_mdfn<=1);sys->memp=old_memp;
+    O_WRK *slot=effect_145_fixture(312);OR_WORK *model=(OR_WORK *)slot;R0_WK *m=(R0_WK *)model->free4;
+    /* The OR overlay reuses the matrix bytes later, so its source transform
+       lives in the owned player pose, outside the packed payload. */
+    m->prm.mtxP=&plp->mlwP->owP[0].mtx;m->prm.texP=plp->mlwP->texP;
+    unsigned int joint=0;while(joint<plp->mlwP->obj_num&&!plp->mlwP->objP[joint].model)++joint;assert(joint<plp->mlwP->obj_num);
+    m->prm.mdlP=(NJS_MODEL *)plp->mlwP->objP[joint].model;
+    bhEff30c(model);assert(m->mode==1&&m->erase==-1);
+    recvxGameBootRenderBeginFrame();model->func(model);assert(!recvxEngineOriginalFault());recvxGameBootRenderConsume();
+    m->erase=0;bhEff30c(model);assert(!model->flg);
+    OR_WORK *custom=(OR_WORK *)effect_145_fixture(349);R49_WORK *c=(R49_WORK *)custom->free4;
+    c->fnc_prcP=packed_process;c->fnc_drwP=packed_draw;c->free[0]=7;sys->ef_fncn=0;
+    bhEff349(custom);assert(packed_process_calls==1&&c->free[0]==10&&sys->ef_fncn==1);
+    custom->func(custom);assert(packed_draw_calls==1);
+    memcpy(eff,saved,sizeof(eff));*sys=*old;cam=camera;njSetMatrix(NULL,&matrix);free(saved);free(old);
+    memcpy(palette_texture->palette,saved_palette,sizeof(saved_palette));
+    puts("PASS: four spark presets, six blood ribbons, six blood mist presets and auxiliary cleanup; textured/untextured spline trails, camera shakes, shadow contacts, attached models and registered custom callbacks");
+}
+static void test_remaining_effect_batch(void)
+{
+    O_WRK *saved=malloc(sizeof(eff));SYS_WORK *old=malloc(sizeof(*sys));BH_PWORK player=*plp;
+    assert(saved&&old);memcpy(saved,eff,sizeof(eff));*old=*sys;CAM_WORK camera=cam;
+    NJS_MATRIX matrix;njGetMatrix(&matrix);
+    static const struct {int id;void (*update)(O_WRK *);const char *name;} cases[]={
+        {222,bhEff222,"bhEff222"},
+        {223,bhEff223,"bhEff223"},
+        {224,bhEff224,"bhEff224"},
+        {225,bhEff225,"bhEff225"},
+        {226,bhEff226,"bhEff226"},
+        {227,bhEff227,"bhEff227"},
+        {228,bhEff228,"bhEff228"},
+        {229,bhEff229,"bhEff229"},
+        {230,bhEff230,"bhEff230"},
+        {231,bhEff231,"bhEff231"},
+        {232,bhEff232,"bhEff232"},
+        {233,bhEff233,"bhEff233"},
+        {234,bhEff234,"bhEff234"},
+        {235,bhEff235,"bhEff235"},
+        {236,bhEff236,"bhEff236"},
+        {237,bhEff237,"bhEff237"},
+        {238,bhEff238,"bhEff238"},
+        {239,bhEff239,"bhEff239"},
+        {240,bhEff240,"bhEff240"},
+        {241,bhEff241,"bhEff241"},
+        {242,bhEff242,"bhEff242"},
+        {243,bhEff243,"bhEff243"},
+        {244,bhEff244,"bhEff244"},
+        {245,bhEff245,"bhEff245"},
+        {246,bhEff246,"bhEff246"},
+        {247,bhEff247,"bhEff247"},
+        {248,bhEff248,"bhEff248"},
+        {249,bhEff249,"bhEff249"},
+        {303,bhEff303,"bhEff303"},
+        {305,bhEff305,"bhEff305"},
+        {306,bhEff306,"bhEff306"},
+        {99,bhEffBG,"bhEffBG"},
+        {250,bhEff_E00_Mince,"bhEff_E00_Mince"},
+        {251,bhEff_E00_DropBlood,"bhEff_E00_DropBlood"},
+        {252,bhEff_E00_Fire,"bhEff_E00_Fire"},
+        {257,bhEff_E00_Acid,"bhEff_E00_Acid"},
+        {298,bhEff_E00_AcidGenerator,"bhEff_E00_AcidGenerator"},
+        {297,bhEff_E00_BloodBurst,"bhEff_E00_BloodBurst"},
+        {296,bhEff_E00_Blood,"bhEff_E00_Blood"},
+        {272,bhEff_E00_Dust,"bhEff_E00_Dust"},
+        {256,bhEff_E03_Acid,"bhEff_E03_Acid"},
+        {258,bhEff_E03_Shadow,"bhEff_E03_Shadow"},
+        {259,bhEff_E05_Blood,"bhEff_E05_Blood"},
+        {260,bhEff_E06_Rinpun,"bhEff_E06_Rinpun"},
+        {261,bhEff_E11_SearchLight,"bhEff_E11_SearchLight"},
+        {270,bhEff_E16_LaserSight,"bhEff_E16_LaserSight"},
+        {263,bhEff_E12_Fire,"bhEff_E12_Fire"},
+        {265,bhEff_E12_FrameLiquid,"bhEff_E12_FrameLiquid"},
+        {266,bhEff_E12_FloorBlood2,"bhEff_E12_FloorBlood2"},
+        {262,bhEff_E12_FireManager,"bhEff_E12_FireManager"},
+        {274,bhEff_E12_Fire2,"bhEff_E12_Fire2"},
+        {275,bhEff_E12_Fire3,"bhEff_E12_Fire3"},
+        {276,bhEff_E12_BintaEffControl,"bhEff_E12_BintaEffControl"},
+        {267,bhEff_E13_Fluid,"bhEff_E13_Fluid"},
+        {268,bhEff_E14_Explosion,"bhEff_E14_Explosion"},
+        {269,bhEff_E14_Fire,"bhEff_E14_Fire"},
+        {271,bhEff_E14_Fire2,"bhEff_E14_Fire2"},
+        {273,bhEff_E14_Mucus,"bhEff_E14_Mucus"},
+        {299,bhEff_DamagePoint,"bhEff_DamagePoint"},
+        {350,bhEff_Sub350,"bhEff_Sub350"},
+        {351,bhEff_Sub351,"bhEff_Sub351"},
+        {352,bhEff_Sub352,"bhEff_Sub352"},
+        {353,bhEff_Sub353,"bhEff_Sub353"},
+        {354,bhEff_Sub354,"bhEff_Sub354"},
+        {355,bhEff_Sub355,"bhEff_Sub355"},
+        {356,bhEff_Sub356,"bhEff_Sub356"},
+        {360,bhEff_Sub360,"bhEff_Sub360"},
+        {361,bhEff_Sub361,"bhEff_Sub361"},
+        {362,bhEff_Sub362,"bhEff_Sub362"},
+        {363,bhEff_Sub363,"bhEff_Sub363"},
+        {364,bhEff_Sub364,"bhEff_Sub364"},
+        {365,bhEff_Sub365,"bhEff_Sub365"},
+        {366,bhEff_Sub366,"bhEff_Sub366"},
+        {367,bhEff_Sub367,"bhEff_Sub367"},
+        {368,bhEff_Sub368,"bhEff_Sub368"},
+        {369,bhEff_Sub369,"bhEff_Sub369"},
+        {370,bhEff_Sub370,"bhEff_Sub370"},
+        {371,bhEff_Sub371,"bhEff_Sub371"},
+        {372,bhEff_Sub372,"bhEff_Sub372"},
+        {373,bhEff_Sub373,"bhEff_Sub373"},
+        {398,bhEff_Sub398,"bhEff_Sub398"},
+    };
+    unsigned int updated=0,drawn=0;
+    for(size_t k=0;k<sizeof(cases)/sizeof(*cases);++k){
+        O_WRK *e=effect_145_fixture(cases[k].id);
+        e->sx=e->sy=e->sz=e->sxb=e->syb=e->szb=1;e->spd=1;e->aw=e->ah=1;
+        e->lkono=0;e->lkwkp=(unsigned char *)plp;e->mlwP=plp->mlwP;
+        e->txp[0]=plp->mlwP->texP;
+        for(int v=0;v<4;++v){e->tv[v].x=(v&1)?1:-1;e->tv[v].y=(v&2)?1:-1;}
+        e->px=cam.wpx+30*cam.vx;e->py=cam.wpy+30*cam.vy;e->pz=cam.wpz+30*cam.vz;
+        if(cases[k].id>=222&&cases[k].id<=249){
+            e->lkono=4;e->lkwkp=(unsigned char *)plp;e->mode1=1;
+            e->type=(cases[k].id==225||cases[k].id==227||cases[k].id==229||cases[k].id==232||cases[k].id==239||cases[k].id==246||cases[k].id==248)?0:1;
+            if(cases[k].id==227||cases[k].id==248){e->exp0=(unsigned char *)&eff[1];eff[1].flg=1;}
+            if(cases[k].id==225||cases[k].id==227||cases[k].id==229||cases[k].id==232||cases[k].id==239||cases[k].id==246||cases[k].id==248)e->mode1=0;
+        }
+        if(cases[k].id==355)e->exp0=(unsigned char *)plp;
+        if(cases[k].id>=365&&cases[k].id<=367){
+            eff[1].flg=2;e->exp0=(unsigned char *)&eff[1];
+            if(cases[k].id==365){EFFSUB365_WORK *p=(EFFSUB365_WORK *)e->exp0;p->dtbl.num=40;p->dtbl.exp0=(unsigned char *)p->vtx_pos;p->dtbl.exp1=(unsigned char *)p->size;}
+            if(cases[k].id==366){EFFSUB366_WORK *p=(EFFSUB366_WORK *)e->exp0;p->dtbl.num=16;p->dtbl.exp0=(unsigned char *)p->vtx_pos;p->dtbl.exp1=(unsigned char *)p->vtx_pos2;}
+            if(cases[k].id==367){EFFSUB367_WORK *p=(EFFSUB367_WORK *)e->exp0;p->dtbl.num=32;p->dtbl.exp0=(unsigned char *)p->vtx_pos;p->dtbl.exp1=(unsigned char *)p->size;}
+        }
+        int tested_draw=0;
+        for(int f=0;f<(cases[k].id==356?1:64)&&e->flg;++f){
+            sys->ef_trsn=sys->ef_fncn=sys->ef_opqn=sys->ef_linn=0;
+            cases[k].update(e);++updated;
+            if(cases[k].id==261&&f==0&&e->flg){e->mode0=1;e->axp=4096;}
+            assert(isfinite(e->px)&&isfinite(e->py)&&isfinite(e->pz));
+            if(cases[k].id==260&&f>0&&e->flg){
+                P_WRK *p=(P_WRK *)e->exp0;NJS_POINT3 mean={0};
+                for(int i=0;i<p->num;++i){mean.x+=p->pos[i].x;mean.y+=p->pos[i].y;mean.z+=p->pos[i].z;}
+                assert(fabsf(e->cspr.c.x-mean.x/p->num)<.0001f&&fabsf(e->cspr.c.y-mean.y/p->num)<.0001f&&fabsf(e->cspr.c.z-mean.z/p->num)<.0001f);
+            }
+            if(!tested_draw&&e->flg&&(sys->ef_trsn||sys->ef_fncn||sys->ef_opqn)){
+                int ani=e->ani_ct;e->ani_ct=0;
+                if(e->tex_id>=0&&e->tex_id<450)sys->ef_tn[e->tex_id]=0;
+                recvxGameBootRenderBeginFrame();njSetMatrix(NULL,cam.mtx);
+                if(sys->ef_trsn)bhDrawTrsEffect3D((unsigned int *)sys->ef_trs,sys->ef_trsn);
+                if(sys->ef_fncn&&e->func)e->func(e);
+                assert(!recvxEngineOriginalFault());recvxGameBootRenderConsume();e->ani_ct=ani;
+                recvxGameBootDrawDiscard();tested_draw=1;++drawn;
+            }
+        }
+        assert(sys->ef_trsn>=0&&sys->ef_trsn<=512&&sys->ef_fncn>=0&&sys->ef_fncn<=512);
+    }
+    O_WRK *fast=effect_145_fixture(223);fast->sz=100;sys->ef_trsn=0;
+    bhEff223(fast);assert(fast->ct1==1&&fast->flg);bhEff223(fast);assert(!fast->flg);
+    /* The retail callback is deliberately empty. */
+    bhEff_Sub357();
+    memcpy(eff,saved,sizeof(eff));*sys=*old;*plp=player;cam=camera;njSetMatrix(NULL,&matrix);free(saved);free(old);
+    printf("PASS: remaining ordinary effect families: %u updates, %u draw paths, sprite animation/sentinels, emitters, enemy blood/acid/fire/pollen, searchlights, laser sights and particle controllers\n",updated,drawn);
+}
+
+static void test_effect_130_batch(void)
+{
+    O_WRK *saved=malloc(sizeof(eff));SYS_WORK *old=malloc(sizeof(*sys));
+    assert(saved&&old);memcpy(saved,eff,sizeof(eff));*old=*sys;
+    CAM_WORK oldcam=cam;BH_PWORK oldplayer=*plp;NJS_MATRIX matrix;njGetMatrix(&matrix);
+    static const struct{int id,frames,variants;void (*update)(O_WRK *);} sprites[]={
+        {131,13,1,bhEff131},{186,4,6,bhEff186},{188,12,1,bhEff188},
+        {209,21,1,bhEff209},{216,14,6,bhEff216}};
+    unsigned int variants=0;
+    for(size_t k=0;k<sizeof(sprites)/sizeof(*sprites);++k)for(int type=0;type<sprites[k].variants;++type){
+        O_WRK *e=effect_145_fixture(sprites[k].id);e->type=type;e->sz=0;
+        for(int v=0;v<4;++v){e->tv[v].x=(v&1)?1:-1;e->tv[v].y=(v&2)?1:-1;}
+        e->px=cam.wpx+30*cam.vx;e->py=cam.wpy+30*cam.vy;e->pz=cam.wpz+30*cam.vz;
+        int frames=0;
+        while(e->flg&&frames<30){
+            sys->ef_trsn=0;sprites[k].update(e);if(!e->flg)break;
+            assert(sys->ef_trsn==1);
+            if(!frames){
+                sys->ef_tn[e->tex_id]=0;recvxGameBootRenderBeginFrame();njSetMatrix(NULL,cam.mtx);
+                bhDrawTrsEffect3D((unsigned int *)sys->ef_trs,1);
+                assert(!recvxEngineOriginalFault()&&recvxGameBootRenderFrame()->vertex_count>0);
+                recvxGameBootRenderConsume();
+            }
+            ++frames;
+        }
+        assert(!e->flg&&frames==(sprites[k].id==216&&type%3==2?10:sprites[k].frames));++variants;
+    }
+    O_WRK *e=effect_145_fixture(188);e->type=1;
+    for(int f=0;f<6;++f){sys->ef_trsn=0;bhEff188(e);assert((f<5)==!!e->flg);}
+    e=effect_145_fixture(184);e->py=50;e->type=0;int frames=0;
+    while(e->flg&&frames<1100){sys->ef_trsn=0;bhEff184(e);++frames;}assert(!e->flg&&frames>10&&frames<1100);
+    for(int type=1;type<=6;++type){
+        e=effect_145_fixture(185);e->type=type;
+        for(int f=0;f<12;++f){sys->ef_trsn=0;bhEff185(e);assert(sys->ef_trsn==1&&e->ct0==(f+1)%4);}
+    }
+    for(int kind=0;kind<2;++kind){
+        e=effect_145_fixture(210+kind);e->mode1=1;
+        for(int f=0;f<(kind?11:21);++f){sys->ef_trsn=0;if(kind)bhEff211(e);else bhEff210(e);}
+        assert(!e->type&&!e->mode1&&!e->mode0&&sys->ef_trsn==0);
+    }
+    for(int type=1;type<=17;++type){
+        e=effect_145_fixture(218);e->mode1=type;
+        for(int f=0;f<32;++f){sys->ef_trsn=0;bhEff218(e);assert(sys->ef_trsn==1&&e->ct0>=0&&e->ct0<14);}
+    }
+    e=effect_145_fixture(212);e->mode1=1;
+    for(int f=0;f<48;++f){sys->ef_trsn=0;bhEff212(e);assert(e->ct0==f%16);}
+    for(int type=1;type<=3;++type){e=effect_145_fixture(213);e->mode1=type;
+        for(int f=0;f<12;++f){sys->ef_trsn=0;bhEff213(e);assert(e->ct0==f%3);}}
+    e=effect_145_fixture(144);e->mdlver=2;
+    for(int f=0;f<20;++f){sys->ef_trsn=0;bhEff144(e);assert(sys->ef_trsn==1&&e->ani_ct==2&&e->ct1==f%6);}
+    e=effect_145_fixture(189);e->mode1=1;e->py=20;e->lkono=0;
+    for(int f=0;f<100&&(e->type||f==0);++f){sys->ef_trsn=0;bhEff189(e);if(!e->type)break;assert(e->ct0<10);}
+    assert(!e->type&&e->py==20);
+    e=effect_145_fixture(183);e->mode1=2;bhEff183(e);assert(eff[1].id==184&&eff[1].type==1);
+    for(int type=1;type<=4;++type){e=effect_145_fixture(187);e->mode1=type;bhEff187(e);assert(eff[1].id==188);}
+    e=effect_145_fixture(190);e->mode1=1;bhEff190(e);assert(eff[1].id==191);
+    e=effect_145_fixture(208);e->mode1=1;for(int f=0;f<7;++f)bhEff208(e);assert(eff[1].id==209);
+    e=effect_145_fixture(214);e->mode1=1;bhEff214(e);assert(eff[1].id==11&&!e->mode1);
+    for(int type=1;type<=9;++type){e=effect_145_fixture(215);e->mode1=type;bhEff215(e);
+        assert(eff[1].id==(type<=6?216:217)&&eff[1].type==(type-1)%3+(type<=6?(type-1)/3*3:0));}
+    for(int type=0;type<3;++type){
+        e=effect_145_fixture(217);e->type=type;bhEff217(e);P_WRK *p=(P_WRK *)e->exp0;
+        assert(p&&p->num==16);int lifetime=e->ct0;
+        for(int f=0;f<=lifetime;++f){sys->ef_fncn=0;bhEff217(e);}
+        assert(!e->flg&&!p->flg);
+    }
+    e=effect_145_fixture(143);bhEff143(e);P_WRK *dust=(P_WRK *)e->exp0;
+    assert(dust&&dust->num==16&&e->mode0==1);bhEff143(e);e->mode1=1;
+    for(int f=0;f<60&&e->mode1;++f){sys->ef_fncn=0;bhEff143(e);}
+    assert(!e->mode1&&e->mode0==1);
+    for(int i=0;i<16;++i)dust->pos[i]=(NJS_POINT3){cam.wpx+30*cam.vx,cam.wpy+30*cam.vy,cam.wpz+30*cam.vz};
+    e->tex_id=0;recvxGameBootRenderBeginFrame();bhEff143_sub(e);
+    assert(recvxGameBootRenderFrame()->vertex_count==96);recvxGameBootRenderConsume();
+    for(int type=1;type<=3;++type){
+        e=effect_145_fixture(219);e->mode1=type;e->ax=32760;e->sx=8;sys->ef_tn[409]=0;
+        bhEff219(e);EFF5SNOWRECT *snow=(EFF5SNOWRECT *)e->exp0;
+        assert(snow&&snow->lSnowTotalMax==850&&snow->lSnowGrpMax==9&&snow->lSnowExistCrnt==850);
+        for(int f=0;f<3;++f){sys->ef_fncn=0;bhEff219(e);assert(sys->ef_fncn==1);}
+        recvxGameBootRenderBeginFrame();njSetMatrix(NULL,cam.mtx);DrawEff5SnowRect(e);
+        assert(!recvxEngineOriginalFault());recvxGameBootRenderConsume();
+        e->ax=-1;for(int f=0;f<150;++f){sys->ef_fncn=0;bhEff219(e);}assert(!snow->lSnowExistCrnt);
+        DeleteEff5SnowRect(snow);assert(!snow->flg);
+    }
+    e=effect_145_fixture(220);e->mode1=1;e->lkono=4;bhEff220(e);
+    for(int child=1;child<=4;++child)assert(eff[child].id==221&&eff[child].tex_id==417);
+    for(int frame=0;frame<55;++frame){
+        e=effect_145_fixture(221);e->mdlver=frame;e->loy=.5f;e->flr_no=7;bhEff221(e);
+        NJS_TEXTUREH_VTX *v=(NJS_TEXTUREH_VTX *)e->tvp;
+        for(int i=0;i<4;++i)assert(isfinite(v[i].u)&&v[i].u>=0&&v[i].v>=0&&v[i].v<=1);
+        sys->ef_tn[e->tex_id]=0;
+        e->px=cam.wpx+30*cam.vx;e->py=cam.wpy+30*cam.vy;e->pz=cam.wpz+30*cam.vz;e->spd=e->py-10;
+        recvxGameBootRenderBeginFrame();bhDrawEff221(e);
+        assert(!recvxEngineOriginalFault()&&recvxGameBootRenderFrame()->vertex_count>0);
+        recvxGameBootRenderConsume();
+        for(int f=0;f<100&&e->flg;++f){sys->ef_fncn=0;bhEff221(e);}
+        assert(!e->flg);
+    }
+    /* The dial puzzle restores gameplay flags and publishes the 128 answer. */
+    e=effect_145_fixture(133);e->mode1=1;sys->ond_cx=3;sys->pad_ps=0;
+    sys->ond_n[0]=1;sys->ond_n[1]=2;sys->ond_n[2]=8;unsigned int flags=sys->sp_flg;
+    bhEff133(e);assert(e->mode0==1);e->mode0=2;bhEff133(e);
+    assert(!e->mode0&&sys->sp_flg==flags&&bhCkFlg(sys->ev_flg,58));
+    e=effect_145_fixture(134);e->mode1=1;e->lkono=0;sys->pad_ps=sys->pad_on=0;
+    bhEff134(e);assert(e->mode0==1&&e->func==(void *)bhDraw134);
+    sys->ef_tn[44]=0;recvxGameBootDrawDiscard();bhDraw134(e);
+    size_t overlay_count;recvxGameBootDraws(&overlay_count);assert(overlay_count==10);
+    e=effect_145_fixture(137);e->mode1=1;e->type=0;bhEff137(e);
+    assert(e->mode0==10&&e->func==(void *)bhDraw137);
+    sys->ef_tn[440]=4;recvxGameBootDrawDiscard();bhDraw137(e);
+    recvxGameBootDraws(&overlay_count);assert(overlay_count>20);cam=oldcam;
+    e=effect_145_fixture(138);e->mode1=1;unsigned int background=rom->bak_col;
+    bhEff138(e);assert(e->mode0==1&&e->ct0==2&&e->clp_jno[0]==3&&e->clp_jno[1]==5);
+    sys->ef_tn[441]=0;recvxGameBootDrawDiscard();bhDraw138(e);
+    recvxGameBootDraws(&overlay_count);assert(overlay_count>10);recvxGameBootDrawDiscard();
+    e->mode0=11;bhEff138(e);assert(!e->mode0&&rom->bak_col==background);
+    /* Borrow a real loaded joint and check the six-frame snapshot ring. */
+    int slot=-1,joint=-1;
+    for(int a=0;a<16&&slot<0;++a)if(plp->mdl[a].objP)for(unsigned int j=0;j<plp->mdl[a].obj_num;++j)
+        if(plp->mdl[a].objP[j].model&&plp->mdl[a].objP[j].model->vlist){slot=a;joint=j;break;}
+    assert(slot>=0);
+    e=effect_145_fixture(135);e->flg|=0x80;e->mode1=1;e->lkwkp=(unsigned char *)plp;e->type=slot;e->lkono=joint;
+    bhEff135(e);assert(e->mode0==1&&e->exp0);bhEff135(e);
+    O_WRK *ghost=&eff[1];assert(ghost->id==136&&ghost->type==0);bhEff136(ghost);
+    size_t bytes=recvxGameBootEffectVlistBytes((int *)ghost->exp0);assert(bytes>4&&ghost->ct0==5);
+    assert(ghost->exp0!=(unsigned char *)plp->mdl[slot].objP[joint].model->vlist);
+    assert(!memcmp(ghost->exp0,plp->mdl[slot].objP[joint].model->vlist,8));
+    NJS_CNK_MODEL *mesh=plp->mdl[slot].objP[joint].model;
+    size_t polygon_bytes=recvxGameBootSourceRemaining(mesh->plist);assert(polygon_bytes);
+    void *polygon_backup=malloc(polygon_bytes);assert(polygon_backup);memcpy(polygon_backup,mesh->plist,polygon_bytes);
+    int *vertices=mesh->vlist;
+    recvxGameBootRenderBeginFrame();bhDraw136(ghost);assert(!recvxEngineOriginalFault()&&mesh->vlist==vertices);
+    recvxGameBootRenderConsume();memcpy(mesh->plist,polygon_backup,polygon_bytes);free(polygon_backup);
+    for(int f=0;f<6;++f){sys->ef_fncn=0;bhEff136(ghost);}assert(!ghost->flg);
+    memset(ef_Zanzo,0,6*sizeof(*ef_Zanzo));
+    /* A flying bolt advances until cancelled; no fake impact is required. */
+    e=effect_145_fixture(130);e->type=4;e->px=e->pxb=500;e->py=e->pyb=500;e->pz=e->pzb=500;e->loz=1;
+    sys->cb_flg|=4;bhEff130(e);assert(!e->flg&&e->pz==501);
+    memcpy(eff,saved,sizeof(eff));*sys=*old;cam=oldcam;*plp=oldplayer;njSetMatrix(NULL,&matrix);free(saved);free(old);
+    printf("PASS: 32 new effects: %u finite sprite variants, water impacts, button/fire loops, child spawns, dust/snow wind and density, 55 debris tiles, puzzle state, afterimage snapshots and projectile cancellation\n",variants);
+}
+
 static void test_effect_191_batch(void)
 {
     O_WRK *saved=malloc(sizeof(eff));SYS_WORK *old=malloc(sizeof(*sys));
@@ -3391,6 +3840,9 @@ int main(int argc, char **argv)
     test_effect_155_batch();
     test_effect_170_batch();
     test_effect_191_batch();
+    test_effect_130_batch();
+    test_remaining_effect_batch();
+    test_packed_effect_batch();
     test_effect_145_batch();
     test_effect_collision_services();
     test_effect_callback_lifetimes();

@@ -1070,16 +1070,20 @@ static int validate_core_instruction(unsigned int opcode)
             return -1;
         }
         if ((opcode == 43 && command > 1) ||
-            (opcode == 103 && command != 0 && command != 128 && command != 139 && command != 144 && command != 149)) {
+            (opcode == 103 && command != 0 && command != 128 && command != 139 && command != 143 && command != 144 && command != 146 && command != 147 && command != 148 && command != 149)) {
             set_fault(RECVX_EVENT_FAULT_UNSUPPORTED, (uint8_t)opcode, bhScePtr);
             return -1;
         }
-        if (opcode == 103 && command == 149 && !has_task_bytes(bhScePtr, 4)) {
+        if (opcode == 103) {
+            extent=(command==143)?6:(command==146||command==147)?8:
+                   (command==148||command==149)?4:2;
+        } else extent=2;
+        if (!has_task_bytes(bhScePtr, extent)) {
             set_fault(RECVX_EVENT_FAULT_TRUNCATED, (uint8_t)opcode, bhScePtr);
             return -1;
         }
-        if ((opcode == 103 && command == 128 && (bhCetask->work->id >= 128 || !sys->emtp[bhCetask->work->id])) ||
-            (opcode == 43 && bhCetask->work->id == 1 && bhCetask->work->exp1 == NULL)) {
+        if ((opcode == 103 && (command == 128 || command == 143 || command == 146) && (bhCetask->work->id >= 128 || !sys->emtp[bhCetask->work->id])) ||
+            ((opcode == 43 || (opcode == 103 && (command == 143 || command == 146))) && bhCetask->work->id == 1 && bhCetask->work->exp1 == NULL)) {
             set_fault(RECVX_EVENT_FAULT_BAD_OPERAND, (uint8_t)opcode, bhScePtr);
             return -1;
         }

@@ -224,6 +224,12 @@ int main(void)
            "public Ninja polygon bridge draws the original ranking fade");
     expect(polygon.num == 4 && points[1].x == 0,
            "public polygon normalization preserves caller data");
+    clear();polygon.num=1;
+    points[0]=(NJS_POINT2){320,336};points[1]=(NJS_POINT2){304,360};points[2]=(NJS_POINT2){336,360};
+    njDrawPolygon2D(&polygon,3,-1.4f,0x60);
+    expect(draw_count==1&&captured[0].color_gradient&&near(captured[0].depth,1.4f)&&
+        captured[0].points[2].x==336&&captured[0].points[3].x==336,
+        "crane puzzle arrow keeps its triangle with a degenerate fourth corner");
     printf("original game overlays: %u checks passed\n", checks);
     return 0;
 }

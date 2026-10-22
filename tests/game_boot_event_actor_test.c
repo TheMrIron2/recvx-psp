@@ -24,6 +24,10 @@ static unsigned char arena[8192] __attribute__((aligned(64)));
 unsigned char *freemem=arena;
 static unsigned char section[128],animation[4+8+164+4+8+164+4];
 static MN_WORK motion;
+static int light_calls,light_flag;
+static BH_PWORK *light_actor;
+void bhEne11_LightControl(BH_PWORK *work,int flag)
+{++light_calls;light_flag=flag;light_actor=work;}
 static jmp_buf fault_jump;
 static int rejecting;
 static char reason[192];
@@ -156,10 +160,82 @@ static void test_player_object_link(void)
     tick();tick();assert(sys->obwp[1].lox==1&&recvxEventCoreTaskPc(0)==31);
 }
 
+static void setup_task2(const unsigned char *body,size_t count)
+{
+    setup(body,count);
+    memset(section,0,sizeof(section));
+    for(unsigned int i=0;i<5;++i)u32(section+i*4,20+i*2);
+    for(unsigned int i=20;i<28;i+=2)section[i]=255;
+    memcpy(section+28,body,count);
+    recvxEventCoreReset();assert(!recvxEventCoreBindSection(section,28+count));
+    assert(!Event_exec(2,2));bhEtask[2].work=&ene[7];
+}
+static void test_sub_control(void)
+{
+    const unsigned int commands[]={143,146,147},lengths[]={6,8,8};
+    for(unsigned int k=0;k<3;++k)for(unsigned int zombie=0;zombie<2;++zombie){
+        unsigned char body[]={103,commands[k],2,3,4,5,6,0xff,254,255,0};
+        unsigned int length=lengths[k];body[length]=254;body[length+1]=255;body[length+2]=0;
+        setup_task2(body,length+3);
+        BH_SCEWORK *task=&bhEtask[2];BH_PWORK *a=&ene[7];
+        if(zombie){a->id=1;a->exp1=(unsigned char *)&ene[8];state.emtp[1]=&motion;}
+        a->flg=a->stflg=UINT32_MAX;a->type=0xabcd;a->ct2=0x12345678;
+        a->mnwP=NULL;a->mtn_md=1;a->mdflg=2;a->hokan_rate=3;
+        task->mode0=7;task->mode1=9;task->mtn_md=13;task->mdflg=0x12345678;task->hokan_rate=31;
+        tick();assert(!recvxEventCoreGetFault()->code&&recvxEventCoreTaskPc(2)==28+length+1);
+        assert(a->mode0==2&&a->mode1==3&&a->mode2==4);
+        assert(a->mode3==(k==0?0:k==1?6:5));
+        assert(a->type==(k==2?0xab06:0xab05));
+        if(k<2){
+            assert(a->mnwP==&motion&&a->ct2==0x12345600&&!(a->flg&0x200000)&&!(a->stflg&0x10000));
+            assert(!task->mode0&&!task->mode1&&a->mtn_md==13&&a->hokan_rate==31);
+            assert(a->mdflg==(k==0?0x12345678u:2u));
+            if(zombie)assert(ene[8].mode0==1&&ene[8].mnwP==&motion);
+        }else{
+            assert(a->mnwP==NULL&&a->ct2==0x12345678&&a->flg==UINT32_MAX&&a->stflg==UINT32_MAX);
+            assert(task->mode0==7&&task->mode1==9&&a->mtn_md==1&&a->mdflg==2&&a->hokan_rate==3);
+            if(zombie)assert(!ene[8].mode0&&!ene[8].mnwP);
+        }
+        tick();assert(!bhEtask[2].status&&recvxEventCoreTaskPc(2)==28+length+3);
+        for(unsigned int truncated=1;truncated<length;++truncated){
+            setup_task2(body,truncated);ene[7].mode0=7;
+            core_fault(RECVX_EVENT_FAULT_TRUNCATED);
+            assert(recvxEventCoreTaskPc(2)==28&&ene[7].mode0==7);
+        }
+    }
+    for(unsigned int kind=0;kind<2;++kind){
+        unsigned char body[]={103,kind?146:143,1,2,3,4,5,0,255,0};
+        unsigned int length=kind?8:6;body[length]=255;body[length+1]=0;
+        setup_task2(body,length+2);state.emtp[91]=NULL;
+        core_fault(RECVX_EVENT_FAULT_BAD_OPERAND);assert(!ene[7].mode0&&recvxEventCoreTaskPc(2)==28);
+        setup_task2(body,length+2);ene[7].id=128;
+        core_fault(RECVX_EVENT_FAULT_BAD_OPERAND);
+        setup_task2(body,length+2);ene[7].id=1;state.emtp[1]=&motion;ene[7].exp1=NULL;
+        core_fault(RECVX_EVENT_FAULT_BAD_OPERAND);
+        setup_task2(body,length+2);ene[7].id=1;state.emtp[1]=&motion;ene[7].exp1=(unsigned char *)4;
+        REJECT(bhEventScheduler2(),"companion");assert(!ene[7].mode0);
+    }
+    for(unsigned int flag=0;flag<256;++flag){
+        unsigned char body[]={103,148,flag,0xff,255,0};
+        setup_task2(body,sizeof(body));
+        O_WRK *light=&eff[4];memcpy(ene[7].exp0+0x60,&light,sizeof(light));
+        int before=light_calls;tick();assert(light_calls==before+1&&light_flag==(int)flag&&light_actor==&ene[7]);
+        assert(recvxEventCoreTaskPc(2)==34);
+    }
+    const unsigned char light[]={103,148,0,0,255,0};
+    for(unsigned int length=1;length<4;++length){setup_task2(light,length);core_fault(RECVX_EVENT_FAULT_TRUNCATED);}
+    setup_task2(light,sizeof(light));ene[7].exp0=NULL;REJECT(bhEventScheduler2(),"light context");
+    setup_task2(light,sizeof(light));REJECT(bhEventScheduler2(),"light object");
+    const unsigned char unknown[]={103,142,255,0};
+    setup_task2(unknown,sizeof(unknown));core_fault(RECVX_EVENT_FAULT_UNSUPPORTED);
+    puts("PASS: opcode 103 task 2/script 2 commands 143/146/147 actor modes, motion handoff/interpolation and linked zombie synchronization; 148 light dispatch, exact PCs, yield/resume, truncated commands and invalid contexts");
+}
+
 int main(void)
 {
     test_frame_check();
     test_player_object_link();
+    test_sub_control();
     const unsigned char pause[]={43,0,255,0};
     setup(pause,sizeof(pause));ene[7].id=1;ene[7].exp1=(unsigned char *)&ene[8];
     tick();assert(ene[7].mode3==4&&ene[8].mode3==4);
