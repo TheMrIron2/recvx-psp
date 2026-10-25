@@ -64,5 +64,82 @@ def check(object_path, skin=False):
     print(f'PASS: {transforms} compiled VFPU transforms ({directions} normals) preserve Ninja matrix layout')
 
 
+
+def check_resident(object_path):
+    assembly = subprocess.check_output(['psp-objdump', '-d', object_path], text=True)
+    instructions=[]
+    for line in assembly.splitlines():
+        match=re.match(r'\s*[0-9a-f]+:\s+([0-9a-f]{8})\s+(\S+)\s*(.*)',line)
+        if match: instructions.append(match.groups())
+    loads=0
+    for start in range(len(instructions)-11):
+        block=instructions[start:start+12]
+        if all(name=='lv.q' and operand.startswith(f'C{3+i//4}{i%4}0.q,{(i%4)*16}(')
+               for i,(_,name,operand) in enumerate(block)):
+            loads+=1
+    assert loads>=2, 'expected resident matrix loads for renderer and self-check'
+    ranges=0; bounds=0
+    seen={2:0,3:0,4:0,5:0}
+    matrix=[0,2,0,0,-3,0,0,0,0,0,0.5,0,7,-9,11,1]
+    point=[0.5,3,1.5,1]
+    metric=[2,0.25,-0.125,0,0.25,3,0.375,0,-0.125,0.375,4,0,0,0,0,1]
+    for i,(encoding,name,operands) in enumerate(instructions):
+        if name=='vmin.t' and operands=='C600.t,C600.t,C620.t':
+            assert instructions[i+1][1:]==('vmax.t','C610.t,C610.t,C620.t')
+            for axis in range(3):
+                assert instructions[i-3+axis][1]=='lv.s' and instructions[i-3+axis][2].startswith(f'S62{axis}.s,{axis*4}(')
+            stores=[operand for _,op,operand in instructions[i+2:i+20] if op=='sv.s'][:6]
+            assert len(stores)==6
+            for axis,operand in enumerate(stores):
+                assert operand.startswith(f'S6{axis//3}{axis%3}.s,{axis%3*4}('),stores
+            bounds+=1
+        if name=='vabs.t' and operands=='C620.t,C620.t':
+            assert instructions[i-1][1:]==('vdot.t','S630.s,C600.t,C620.t')
+            for axis in range(3):
+                assert instructions[i+1+axis][1]=='lv.s' and instructions[i+1+axis][2].startswith(f'S60{axis}.s,{axis*4}(')
+            assert [entry[1:] for entry in instructions[i+4:i+8]]==[
+                ('vdot.t','S631.s,C600.t,C620.t'),('vadd.s','S631.s,S631.s,S631.s'),
+                ('vsub.s','S632.s,S630.s,S631.s'),('vadd.s','S633.s,S630.s,S631.s')]
+            assert instructions[i+8][1]=='sv.s' and instructions[i+8][2].startswith('S632.s,0(')
+            assert instructions[i+9][1]=='sv.s' and instructions[i+9][2].startswith('S633.s,4(')
+            ranges+=1
+        if name not in ('vtfm4.q','vtfm3.t'):continue
+        opcode=int(encoding,16)
+        destination,source,vector=opcode&127,(opcode>>8)&127,(opcode>>16)&127
+        bank=(source>>2)&7
+        if bank not in seen:continue
+        assert source&32 and not(source&3), operands
+        if bank in (3,4):
+            assert name=='vtfm4.q' and destination==28 and vector==29,operands
+            expected_w='vone.s' if bank==3 else 'vzero.s'
+            assert instructions[i-1][1:]==(expected_w,'S713.s'),operands
+            w=int(bank==3);v=point[:3]+[w]
+            result=[sum(matrix[col*4+row]*v[col] for col in range(4)) for row in range(4)]
+            assert result==[-9+7*w,1-9*w,0.75+11*w,w],result
+        elif bank==2:
+            assert name=='vtfm4.q' and destination==29 and vector==24,operands
+            assert instructions[i-1][1:]==('vdot.t','S631.s,C600.t,C600.t'),operands
+            assert instructions[i-4][1:]==('vone.s','S603.s'),operands
+            delta=[1.5,1,1.25,1]
+            coeff=[1,-2,0.5,0,2,1,-1,0,3,0,2,0,4,-3,5,0]
+            shared=sum(delta[row]*sum(metric[col*4+row]*delta[col] for col in range(3)) for row in range(3))
+            result=[shared+sum(coeff[col*4+row]*delta[col] for col in range(4)) for row in range(4)]
+            assert result==[shared+11.25,shared-5,shared+7.25,shared],result
+        else:
+            assert name=='vtfm3.t' and destination==26 and vector==24,operands
+            previous=instructions[i-1][1:]
+            assert previous in (('vsub.t','C600.t,C600.t,C610.t'),('vone.s','S603.s')),operands
+            delta=[1.5,1,1.25]
+            transformed=[sum(metric[col*4+row]*delta[col] for col in range(3)) for row in range(3)]
+            result=sum(delta[row]*transformed[row] for row in range(3))
+            expected=2*delta[0]**2+3*delta[1]**2+4*delta[2]**2+0.5*delta[0]*delta[1]-0.25*delta[0]*delta[2]+0.75*delta[1]*delta[2]
+            assert result==expected,(result,expected)
+        seen[bank]+=1
+    assert bounds>=2, "expected strided XYZ min/max kernel and runtime self-check"
+    assert ranges>=2, "expected box-distance interval kernel and runtime self-check"
+    assert all(count>=2 for count in seen.values()),seen
+    print(f'PASS: resident model/normal/metric VFPU layouts and {loads} matrix-load sequences: {seen}; box interval kernels={ranges}, min/max kernels={bounds}')
+
 if __name__ == '__main__':
-    check(sys.argv[1], '--skin' in sys.argv[2:])
+    if '--resident' in sys.argv[2:]:check_resident(sys.argv[1])
+    else:check(sys.argv[1], '--skin' in sys.argv[2:])

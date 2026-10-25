@@ -14,8 +14,8 @@ static struct {
     unsigned char vertices[512];
     unsigned char polygons[4096];
 } arena;
-static RecvxGameChunkVertex triangles[16][3];
-static RecvxGameChunkMaterial materials[16];
+static RecvxGameChunkVertex triangles[64][3];
+static RecvxGameChunkMaterial materials[64];
 static unsigned int emitted, checks;
 static const void *source_pointer;
 static size_t source_size;
@@ -32,7 +32,7 @@ static void putfloat(unsigned char *p, float value)
 static int close_to(float a, float b) { return fabsf(a - b) < 0.00001f; }
 static int emit(void *context, const RecvxGameChunkMaterial *material, const RecvxGameChunkVertex vertices[3])
 {
-    check(context == &work); check(emitted < 16);
+    check(context == &work); check(emitted < 64);
     memcpy(triangles[emitted], vertices, sizeof(triangles[0])); materials[emitted++] = *material;
     return 0;
 }
@@ -81,9 +81,94 @@ static int parse(void) { return recvxGameBootChunkParse(&arena.model, emit, &wor
 static void failed(int code, const char *message)
 { check(parse() == code); check(recvxGameBootChunkFault() && strstr(recvxGameBootChunkFault(), message)); }
 
+static unsigned int joined_calls,decline_joined;
+static int joined_emit(void *context,const RecvxGameChunkMaterial *m,const RecvxGameChunkVertex *v,unsigned int count,unsigned int reversed)
+{
+    ++joined_calls;if(decline_joined)return 0;
+    for(unsigned int i=2;i<count;++i){
+        if(v[i-2].source_index==v[i-1].source_index||v[i].source_index==v[i-2].source_index||v[i].source_index==v[i-1].source_index)continue;
+        unsigned int a=i-2,b=i-1;
+        if(((i-2)&1u)^reversed){unsigned int swap=a;a=b;b=swap;}
+        RecvxGameChunkVertex face[3]={v[a],v[b],v[i]};emit(context,m,face);
+    }
+    return 1;
+}
+static void joined_tests(void)
+{
+    for(unsigned int type=64;type<=66;++type)for(unsigned int signs=0;signs<8;++signs){
+        reset(51);arena.polygons[0]=8;put16(arena.polygons+2,0);
+        unsigned char *p=arena.polygons+4,*cursor=p+6;
+        p[0]=type;p[1]=0x18;put16(p+4,12|(2u<<14));
+        for(unsigned int strip_index=0;strip_index<12;++strip_index){
+            unsigned int count=3+strip_index%3;
+            put16(cursor,signs&(1u<<(strip_index%3))?65536u-count:count);cursor+=2;
+            for(unsigned int i=0;i<count;++i){
+                put16(cursor,i%4);cursor+=2;
+                if(type!=64){put16(cursor,strip_index*43+i*7);put16(cursor+2,strip_index*17+i*11);cursor+=4;}
+                if(i>=2){put16(cursor,0xabcd);put16(cursor+2,0x1234);cursor+=4;}
+            }
+        }
+        put16(p+2,(cursor-p-4)/2);put16(cursor,255);
+        check(parse()==0);unsigned int expected_count=emitted;
+        RecvxGameChunkVertex expected[64][3];RecvxGameChunkMaterial expected_materials[64];
+        memcpy(expected,triangles,sizeof(expected));memcpy(expected_materials,materials,sizeof(expected_materials));
+        emitted=joined_calls=decline_joined=0;recvxGameBootChunkReset();
+        check(recvxGameBootChunkParseJoinedStrips(&arena.model,emit,joined_emit,&work)==0);
+        check(joined_calls<12&&emitted==expected_count);
+        check(!memcmp(expected,triangles,emitted*sizeof(*triangles)));
+        check(!memcmp(expected_materials,materials,emitted*sizeof(*materials)));
+        emitted=joined_calls=0;decline_joined=1;recvxGameBootChunkReset();
+        check(recvxGameBootChunkParseJoinedStrips(&arena.model,emit,joined_emit,&work)==0);
+        check(emitted==expected_count&&!memcmp(expected,triangles,emitted*sizeof(*triangles)));
+        check(!memcmp(expected_materials,materials,emitted*sizeof(*materials)));
+        put16(p+8,4);emitted=0;
+        check(recvxGameBootChunkParseJoinedStrips(&arena.model,emit,joined_emit,&work)==-1);
+        check(strstr(recvxGameBootChunkFault(),"vertex index")!=NULL);
+    }
+}
+
+static void join_capacity_tests(void)
+{
+    const unsigned int counts[][2]={{31,32},{32,31},{62,3},{30,31}};
+    for(unsigned int type=64;type<=66;++type)for(unsigned int signs=0;signs<4;++signs)
+    for(unsigned int test=0;test<sizeof(counts)/sizeof(counts[0]);++test){
+        reset(51);arena.polygons[0]=8;put16(arena.polygons+2,0);
+        unsigned char *p=arena.polygons+4,*cursor=p+6;p[0]=type;p[1]=0x18;put16(p+4,2|(2u<<14));
+        for(unsigned int s=0;s<2;++s){
+            unsigned int count=counts[test][s];put16(cursor,signs&(1u<<s)?65536u-count:count);cursor+=2;
+            for(unsigned int i=0;i<count;++i){
+                put16(cursor,i%4);cursor+=2;
+                if(type!=64){put16(cursor,i*971);put16(cursor+2,i*719);cursor+=4;}
+                if(i>=2){put16(cursor,0xabcd);put16(cursor+2,0x1234);cursor+=4;}
+            }
+        }
+        put16(p+2,(cursor-p-4)/2);put16(cursor,255);
+        check(parse()==0);unsigned int expected_count=emitted;
+        RecvxGameChunkVertex expected[64][3];memcpy(expected,triangles,sizeof(expected));
+        for(unsigned int decline=0;decline<2;++decline){
+            emitted=joined_calls=0;decline_joined=decline;recvxGameBootChunkReset();
+            check(recvxGameBootChunkParseJoinedStrips(&arena.model,emit,joined_emit,&work)==0);
+            check(emitted==expected_count&&!memcmp(expected,triangles,emitted*sizeof(*triangles)));
+            if(test<3)check(recvxGameBootChunkJoinSkippedVertices()==counts[test][0]);
+        }
+    }
+}
+static void finite_word_tests(void)
+{
+    const unsigned int bad[]={0x7f800000u,0xff800000u,0x7fc12345u,0x7f800001u};
+    const unsigned int good[]={0u,0x80000000u,1u,0x807fffffu,0x7f7fffffu,0xff7fffffu};
+    for(unsigned int format=0;format<2;++format)for(unsigned int field=0;field<6;++field){
+        unsigned int type=format?41:51,header=format?8:64,normal=format?12:16;
+        unsigned int offset=header+(field<3?field*4:normal+(field-3)*4);
+        for(unsigned int i=0;i<sizeof(bad)/sizeof(bad[0]);++i){reset(type);put32(arena.vertices+offset,bad[i]);failed(-1,"vertex or normal");}
+        for(unsigned int i=0;i<sizeof(good)/sizeof(good[0]);++i){reset(type);put32(arena.vertices+offset,good[i]);check(parse()==0);}
+    }
+}
+
 int main(void)
 {
     size_t n;
+    joined_tests();join_capacity_tests();finite_word_tests();
     reset(51); check(parse() == 0); check(emitted == 2);
     check(triangles[0][0].x == 0 && triangles[0][1].x == 1 && triangles[0][2].x == 2);
     check(triangles[1][0].x == 2 && triangles[1][1].x == 1 && triangles[1][2].x == 3);

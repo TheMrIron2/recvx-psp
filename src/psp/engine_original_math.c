@@ -162,3 +162,13 @@ void njLinear(Float *idata,Float *odata,NJS_SPLINE *attr,Float frame)
     for(int axis=0;axis<3;++axis)result[axis]=idata[axis]+(idata[3+axis]-idata[axis])*frame;
     for(int axis=0;axis<3;++axis)odata[axis]=result[axis];
 }
+
+/* Original njGetPlaneNormal2 winding, also used by searchlight billboards. */
+void njGetPlaneNormal2(NJS_POINT3 *a,NJS_POINT3 *b,NJS_POINT3 *c,NJS_VECTOR *normal)
+{
+    NJS_VECTOR first={b->x-a->x,b->y-a->y,b->z-a->z};
+    NJS_VECTOR second={c->x-b->x,c->y-b->y,c->z-b->z};
+    normal->x=first.y*second.z-first.z*second.y;
+    normal->y=first.z*second.x-first.x*second.z;
+    normal->z=first.x*second.y-first.y*second.x;
+}

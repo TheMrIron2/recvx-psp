@@ -81,6 +81,11 @@ int main(void)
     assert(!recvxGameBootSaveStorageAny());
     assert(CreateSaveScreen(&save_screen,NULL)==&save_screen);
     assert(!save_step(&save_screen,0) && !save_screen.usExitFlag);
+    save_step(&save_screen,1);
+    assert(save_screen.sCursorY==14&&save_screen.pSelectFileWindow->slDispTopNumber==10&&
+           save_screen.pSelectFileWindow->sCursol==4);
+    save_step(&save_screen,0);save_step(&save_screen,2);
+    assert(save_screen.sCursorY==0&&save_screen.pSelectFileWindow->slDispTopNumber==0);
     assert(!save_step(&save_screen,0x1000));finish_save(&save_screen);
     assert(sys->save_ct==2 && (sys->itm[2]&255)==3 && !checkpoints);
     CreateSaveScreen(&save_screen,NULL);
@@ -120,6 +125,9 @@ int main(void)
     snprintf(blocking,sizeof(blocking),"%s/saves/SAVEDATA-00.bin.tmp",root);assert(!mkdir(blocking,0700));
     int count=sys->save_ct;unsigned int ink=sys->itm[2];
     assert(recvxGameBootSaveSlotWrite(0)<0 && sys->save_ct==count && sys->itm[2]==ink);
+    CreateSaveScreen(&save_screen,NULL);save_step(&save_screen,0x800);save_step(&save_screen,0);
+    save_step(&save_screen,1);save_step(&save_screen,0x800);save_step(&save_screen,0);
+    assert(save_screen.ulState==37&&!save_screen.usSaveEnd&&sys->save_ct==count&&sys->itm[2]==ink);
     assert(recvxGameBootSaveSlotRead(0,&saved)==1 && saved.save_ct==count);assert(!rmdir(blocking));
     /* Crash recovery uses the previous verified image if primary rename was interrupted. */
     snprintf(name,sizeof(name),"%s/saves/SAVEDATA-00.bin",root);
@@ -128,6 +136,8 @@ int main(void)
     assert(!remove(backup));assert(!recvxGameBootSaveSlotRead(0,&saved));
     /* Checksummed but semantically invalid state is refused too. */
     saved.ply_id=127;write_image(name,&saved);assert(recvxGameBootSaveSlotRead(0,&saved)<0);
+    CreateLoadScreen(&load_screen,NULL);load_step(&load_screen,0x800);
+    assert(load_screen.ulState==32&&!load_screen.usSaveEnd&&sys->time==456);
     file=fopen(name,"wb");assert(file);assert(fwrite("truncated",1,9,file)==9);assert(!fclose(file));
     assert(recvxGameBootSaveSlotRead(0,&saved)<0);assert(!remove(name));
     game();sys->save_ct=99;sys->itm[2]|=0x08000000;

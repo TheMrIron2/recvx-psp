@@ -20,6 +20,8 @@ static struct {
     O_WRK objects[32], items[32];
     NJS_CNK_OBJECT nodes[64];
     O_WORK matrices[64];
+    LGT_WORK lights[4];
+    NJS_CNK_MODEL fade_model;unsigned char fade_material[12];
     unsigned char hair[0x5000];
     unsigned char allocations[0x10000];
 } data;
@@ -27,6 +29,9 @@ SYS_WORK *sys = &work;
 ROM_WORK *rom = &room;
 BH_PWORK *plp = &player;
 BH_PWORK ene[128];
+CAM_WORK cam;
+static int wall_calls,wall_hit;
+static float wall_length;
 O_WRK eff[512];
 unsigned char *freemem;
 unsigned char pl_sleep_cnt;
@@ -47,6 +52,16 @@ void CallSystemSe(int se, unsigned int flags)
 { assert(se == 0 && flags == 0x80000240u); ++sounds; }
 int bhSetEffectTb(EF_WORK *effect, NJS_POINT3 *offset, unsigned char *link, int joint)
 { assert(effect->id == 2 && !offset && !link && !joint); ++effects; return 0; }
+
+int bhCheckL2Wall(NJS_LINE *line,unsigned int flags,float *length)
+{
+    assert(flags==1024&&isfinite(line->px)&&isfinite(line->vx));
+    float distance=sqrtf(line->vx*line->vx+line->vy*line->vy+line->vz*line->vz);
+    assert(fabsf(distance-200)<0.01f);++wall_calls;*length=wall_length;return wall_hit;
+}
+
+void npSetAllMatAlphaColor(NJS_CNK_OBJECT *objects,int count,unsigned char alpha)
+{assert(count==1&&objects->model==&data.fade_model);((unsigned char *)objects->model->plist)[7]=alpha;}
 
 #define REJECT(call, message) do { \
     fault_name = NULL; expecting_fault = 1; \
@@ -70,6 +85,7 @@ static void model(O_WRK *op, unsigned int node, unsigned int count)
 static void reset(void)
 {
     memset(&work, 0, sizeof(work)); memset(&room, 0, sizeof(room));
+    memset(&cam,0,sizeof(cam));wall_calls=wall_hit=0;wall_length=0;
     memset(&player, 0, sizeof(player)); memset(&data, 0, sizeof(data));
     freemem = (unsigned char *)&data; sys->endp = freemem + sizeof(data);
     sys->memp = data.allocations; sys->obwp = data.objects; sys->itwp = data.items;
@@ -146,6 +162,45 @@ static void wall_and_box(void)
     assert(sounds == 1 && (sys->cb_flg & 0x40000) && op->type == 0 && op->ax == 0);
 }
 
+static void searchlight_controller(void)
+{
+    reset();rom->obj_n=1;rom->evlp=data.lights;rom->evl_n=4;
+    O_WRK *op=&data.objects[0];op->flg=1;op->type=6;op->aspd=1;op->px=2;op->py=3;op->pz=4;
+    cam.wpx=12;cam.wpy=3;cam.wpz=4;
+    bhControlObjItm();
+    assert(wall_calls==1&&op->mlwP->objP[2].ang[2]==-16384);
+    assert(close_to(data.lights[1].nr,20)&&close_to(data.lights[1].fr,30));
+    assert(fabsf(data.lights[1].pz+166)<0.001f&&close_to(data.lights[1].px,2));
+    wall_hit=1;wall_length=140;bhControlObjItm();
+    assert(close_to(data.lights[1].nr,14)&&close_to(data.lights[1].fr,24));
+    assert(fabsf(data.lights[1].pz+106)<0.001f);
+    wall_length=20;bhControlObjItm();
+    assert(close_to(data.lights[1].pz,op->pz)&&close_to(data.lights[1].nr,10)&&close_to(data.lights[1].fr,20));
+    wall_hit=0;op->ay=16384;bhControlObjItm();
+    assert(fabsf(data.lights[1].px+168)<0.001f&&fabsf(data.lights[1].pz-4)<0.03f);
+    int prior=wall_calls;op->aspd=0;rom->evlp=NULL;cam.wpx=-10;bhControlObjItm();assert(wall_calls==prior);
+    op->mlwP->obj_num=2;REJECT(bhControlObjItm(),"searchlight model");
+    op->mlwP->obj_num=4;op->aspd=4;rom->evlp=data.lights;REJECT(bhControlObjItm(),"searchlight event light");
+    op->aspd=1;rom->evlp=(LGT_WORK *)1;REJECT(bhControlObjItm(),"searchlight event light");
+    op->aspd=0;cam.wpx=NAN;REJECT(bhControlObjItm(),"searchlight model or camera");
+    puts("PASS: original searchlight dispatch, camera-facing joint, wall/no-wall beam placement, near/far light ranges, rotated beam and invalid model/light boundaries");
+}
+
+static void alpha_fade_controller(void)
+{
+    reset();rom->obj_n=1;O_WRK *op=&data.objects[0];op->flg=0x200001;op->type=0;
+    op->mlwP->objP[0].model=&data.fade_model;data.fade_model.plist=(short *)data.fade_material;
+    int joints[2]={0,1};memcpy(&op->pv[0],joints,sizeof(joints));op->pv[1].x=200;op->pv[1].y=4;
+    for(int frame=1;frame<=4;++frame){bhControlObjItm();assert(data.fade_material[7]==frame*50);}
+    assert(!(op->flg&0x200000)&&op->pv[1].y==0);
+    op->flg|=0x200000;op->pv[1].x=0;op->pv[1].y=2;
+    bhControlObjItm();assert(data.fade_material[7]==100);bhControlObjItm();assert(!data.fade_material[7]&&!(op->flg&0x200000));
+    op->flg|=0x200000;op->pv[1].x=128;op->pv[1].y=0;bhControlObjItm();assert(data.fade_material[7]==128&&!(op->flg&0x200000));
+    op->flg|=0x200000;op->pv[1].y=1;joints[0]=4;memcpy(&op->pv[0],joints,sizeof(joints));
+    REJECT(bhControlObjItm(),"object alpha fade");
+    puts("PASS: original object alpha interpolation, fade-in/out, completion flags and joint range rejection");
+}
+
 static void invalid_state(void)
 {
     O_WRK *volatile op;
@@ -169,8 +224,8 @@ static void invalid_state(void)
     reset(); rom->obj_n = 1; op = &data.objects[0]; op->flg = 1; op->type = 12; sys->mwal_n = 64;
     REJECT(bhControlObjItm(), "wall allocation");
     op->mode0 = 1; op->ct0 = 64; REJECT(bhControlObjItm(), "wall index");
-    op->type = 0; op->flg = 0x200001; REJECT(bhControlObjItm(), "bhControlAlphaFadeObject");
-    op->flg = 1; op->px = NAN; REJECT(bhControlObjItm(), "transform");
+    op->type = 0; op->flg = 0x200001; op->pv[1].x=NAN; REJECT(bhControlObjItm(), "object alpha fade");
+    op->pv[1].x=0;op->flg = 1; op->px = NAN; REJECT(bhControlObjItm(), "transform");
     reset(); rom->obj_n = 1; op = &data.objects[0]; op->flg = 0x81; op->id = 1211;
     op->lkwkp = (unsigned char *)&player; sys->pletcp = NULL;
     REJECT(bhControlObjItm(), "hair allocation");
@@ -189,7 +244,7 @@ static void invalid_state(void)
 
 int main(void)
 {
-    ordinary_objects_and_items(); linked_equipment(); wall_and_box(); invalid_state();
+    ordinary_objects_and_items(); linked_equipment(); wall_and_box(); searchlight_controller(); alpha_fade_controller(); invalid_state();
     puts("PASS: original object/item scheduling, rotation, pickup animation, queues, linked weapon action/hair matrices, moving walls, item-box sound, and invalid work boundaries");
     return 0;
 }

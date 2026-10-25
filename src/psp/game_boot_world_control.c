@@ -1,4 +1,5 @@
 #include <math.h>
+#include <string.h>
 #include "psp/game_boot.h"
 #include "ps2/veronica/prog/main.h"
 #include "ps2/veronica/prog/objitm.h"
@@ -105,4 +106,35 @@ void recvxGameBootWorldHairPrepare(O_WRK *op)
     } else if (!owned(op->exp0, 0x4000) || !owned(op->exp3, sizeof(HAIR_WORK)) ||
         (op->mode0 == 1 && (op->ct0 < 0 || op->ct0 >= 128)))
         recvxGameBootUnsupported("invalid linked hair state");
+}
+
+/* The searchlight billboard uses three consecutive model joints and may
+   drive a room event-light entry selected by the authored animation speed. */
+void recvxGameBootWorldSearchLightPrepare(O_WRK *op)
+{
+    recvxGameBootWorldModelPrepare(op);
+    if(op->mlwP->obj_num<3||!isfinite(cam.wpx)||!isfinite(cam.wpy)||!isfinite(cam.wpz))
+        recvxGameBootUnsupported("invalid original searchlight model or camera");
+    if(op->aspd>0&&(!rom||rom->evl_n<=op->aspd||rom->evl_n>512||
+        !owned(rom->evlp,(size_t)rom->evl_n*sizeof(*rom->evlp))))
+        recvxGameBootUnsupported("invalid original searchlight event light");
+}
+
+void recvxGameBootWorldAlphaPrepare(O_WRK *op)
+{
+    recvxGameBootWorldModelPrepare(op);
+    int joints[2];memcpy(joints,&op->pv[0],sizeof(joints));
+    if(joints[0]<0||joints[1]<0||(unsigned int)joints[0]>op->mlwP->obj_num||
+       (unsigned int)joints[1]>op->mlwP->obj_num-(unsigned int)joints[0]||
+       !isfinite(op->pv[1].x)||!isfinite(op->pv[1].y))
+        recvxGameBootUnsupported("invalid original object alpha fade");
+    /* Zero-duration requests set the target in this update without dividing
+       by zero in the original interpolation. */
+    if(op->pv[1].y<=0)op->pv[1].y=1;
+    for(int i=0;i<joints[1];++i){
+        NJS_CNK_OBJECT *object=&op->mlwP->objP[joints[0]+i];
+        if(object->model&&!(object->evalflags&8)&&
+           (!owned(object->model,sizeof(*object->model))||!owned(object->model->plist,8)))
+            recvxGameBootUnsupported("invalid original object alpha material");
+    }
 }

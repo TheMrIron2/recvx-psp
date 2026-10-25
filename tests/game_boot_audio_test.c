@@ -65,6 +65,10 @@ SceUID sceKernelCreateThread(const char *name, SceKernelThreadEntry entry, int p
 int sceKernelStartThread(SceUID id, SceSize size, void *args) { (void)id; (void)size; (void)args; return fail_thread_start ? -123 : 0; }
 int sceKernelWaitThreadEnd(SceUID id, SceUInt *timeout) { (void)id; (void)timeout; ++waits; return 0; }
 int sceKernelDeleteThread(SceUID id) { (void)id; return 0; }
+SceUInt sceKernelGetSystemTimeLow(void) { static SceUInt clock; return ++clock; }
+int sceKernelReferThreadStatus(SceUID id,SceKernelThreadInfo *info)
+{ assert(id==2&&info->size==sizeof(*info));info->runClocks.low=123;info->runClocks.hi=1;return 0; }
+
 int sceAudioChReserve(int channel, int samples, int format) { (void)channel; (void)samples; (void)format; return 0; }
 int sceAudioChRelease(int channel) { (void)channel; return 0; }
 int sceAudioOutputBlocking(int channel, int volume, void *data) { (void)channel; (void)volume; (void)data; return 0; }
@@ -158,6 +162,7 @@ int main(int argc, char **argv)
 {
     unsigned int before, time;
     assert(argc == 2); assert(!recvxAudioInit(argv[1])); assert(!recvxAudioOutputInit());
+    assert(recvxAudioOutputStats().cpu_us==((UINT64_C(1)<<32)|123));
     /* The reported 80420016 regression: idle stops and paused replacements. */
     recvxAudioStopAll(0); assert(!invalid_keyoffs && !recvxAudioNativeError());
     assert(!recvxAudioMount());
@@ -317,6 +322,13 @@ int main(int argc, char **argv)
     recvxAudioStopMidi(3);loop_starts=starts;render(600);assert(starts==loop_starts);
     assert(!recvxAudioPlayMidi(3,0x203,0,0));render(600);assert(starts>=loop_starts+3);
     recvxAudioStopMidi(3);
+    /* Typewriter programs are room-local: room 1/8 supplies all three. */
+    bank(1080);
+    for(unsigned int sequence=0x42;sequence<=0x44;++sequence) {
+        before=starts;
+        assert(!recvxAudioPlayMidi(2,(int)(0x80000200u|sequence),0,0));
+        render(300);assert(starts>before);recvxAudioStopMidi(2);
+    }
     test_sequence_loops(argv[1]);
     recvxAudioOutputShutdown(); assert(!invalid_keyoffs && waits == 1);
     fail_thread_start = 1; assert(recvxAudioOutputInit() == -1); assert(waits == 1);

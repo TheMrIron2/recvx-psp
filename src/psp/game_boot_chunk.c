@@ -1,4 +1,5 @@
 #include <limits.h>
+#include <float.h>
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -10,10 +11,15 @@
 extern size_t recvxGameBootSkinRemaining(const void *) __attribute__((weak));
 extern size_t recvxGameBootMorphRemaining(const void *) __attribute__((weak));
 
+_Static_assert(sizeof(float)==4&&FLT_RADIX==2&&FLT_MANT_DIG==24&&FLT_MAX_EXP==128,"chunk floats must use IEEE binary32");
+_Static_assert(sizeof(RecvxGameChunkVertex)==40&&_Alignof(RecvxGameChunkVertex)>=4,"decoded vertices require aligned words");
+
 #define CHUNK_COMMAND_LIMIT 65536u
 #define CHUNK_TRIANGLE_LIMIT 65536u
 
 static const char *chunk_fault;
+static unsigned int join_skipped_vertices;
+unsigned int recvxGameBootChunkJoinSkippedVertices(void){return join_skipped_vertices;}
 static RecvxGameChunkMaterial current_material = {
     .diffuse = 0xffffffffu, .ambient = 0xffffffffu, .specular = 0x11ffffffu,
     .texture = UINT_MAX, .sampler = 4, .blend_source = 8, .blend_destination = 6
@@ -23,9 +29,26 @@ static unsigned int u16(const unsigned char *p)
 { return p[0] | ((unsigned int)p[1] << 8); }
 static unsigned int u32(const unsigned char *p)
 { return p[0] | ((unsigned int)p[1] << 8) | ((unsigned int)p[2] << 16) | ((unsigned int)p[3] << 24); }
-static float f32(const unsigned char *p)
+static int finite_word(const unsigned char *p)
 {
-    uint32_t bits = u32(p);
+    uint32_t bits;
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    memcpy(&bits,__builtin_assume_aligned(p,4),sizeof(bits));
+#else
+    bits=u32(p);
+#endif
+    return (bits&0x7f800000u)!=0x7f800000u;
+}
+static inline float f32(const unsigned char *p)
+{
+    /* Vertex streams were checked for word alignment and have word-sized
+       headers/strides. Preserve bits with one aligned load on Allegrex. */
+    uint32_t bits;
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    memcpy(&bits,__builtin_assume_aligned(p,4),sizeof(bits));
+#else
+    bits=u32(p);
+#endif
     float result;
     memcpy(&result, &bits, sizeof(result));
     return result;
@@ -56,7 +79,7 @@ static void blending(RecvxGameChunkMaterial *material, unsigned int flags)
 
 void recvxGameBootChunkReset(void)
 {
-    chunk_fault = NULL;
+    chunk_fault = NULL;join_skipped_vertices=0;
     current_material = (RecvxGameChunkMaterial){
         .diffuse = 0xffffffffu, .ambient = 0xffffffffu, .specular = 0x11ffffffu,
         .texture = UINT_MAX, .sampler = 4, .blend_source = 8, .blend_destination = 6};
@@ -138,7 +161,7 @@ static int vertices(const NJS_CNK_MODEL *model, VertexSource *source)
     for (unsigned int i = 0; i < source->count; ++i) {
         const unsigned char *v = source->data + i * source->stride;
         for (unsigned int a = 0; a < 3; ++a)
-            if (!isfinite(f32(v + a * 4)) || !isfinite(f32(v + source->normal + a * 4)))
+            if (!finite_word(v + a * 4) || !finite_word(v + source->normal + a * 4))
                 return fail("invalid chunk vertex or normal", -1);
     }
     return 0;
@@ -151,14 +174,91 @@ static int vertex(const VertexSource *source, unsigned int index, float u, float
     if (index < source->first || index - source->first >= source->count)
         return fail("chunk strip vertex index exceeds its vertex chunk", -1);
     p = source->data + (index - source->first) * source->stride;
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    /* Coordinates are validated float bits, not arithmetic. Integer copies
+       avoid six FPU load/store interlocks for every strip occurrence. */
+    typedef uint32_t ChunkWord __attribute__((__may_alias__));
+    const ChunkWord *position=(const ChunkWord *)p,*normal=(const ChunkWord *)(p+source->normal);
+    ChunkWord *words=(ChunkWord *)out;
+    words[0]=position[0];words[1]=position[1];words[2]=position[2];
+    words[3]=normal[0];words[4]=normal[1];words[5]=normal[2];
+    out->u=u;out->v=v;out->color=0xffffffffu;out->source_index=index;
+#else
     *out = (RecvxGameChunkVertex){
         .x = f32(p), .y = f32(p + 4), .z = f32(p + 8),
         .nx = f32(p + source->normal), .ny = f32(p + source->normal + 4),
         .nz = f32(p + source->normal + 8), .u = u, .v = v, .color = 0xffffffffu, .source_index=index};
+#endif
     return 0;
 }
 
-int recvxGameBootChunkParse(const NJS_CNK_MODEL *model, RecvxGameChunkEmit emit, void *context)
+/* Join short authored strips before invoking the renderer. Repeated source
+   vertices preserve every face/order while preventing bridge fragments. Keep
+   the working set small enough for Allegrex's data cache. */
+#define JOINED_STRIP_MAX 64u
+static int joined_strips(const VertexSource *source,const unsigned char **cursor,const unsigned char *end,
+    unsigned int *remaining_strips,unsigned int type,unsigned int attributes,unsigned int *triangle_count,
+    RecvxGameChunkEmitStrip strip,void *context,const RecvxGameChunkMaterial *material)
+{
+    /* Decide whether a second strip fits before decoding the first. The
+       original fallback otherwise immediately decoded the same strip again. */
+    const unsigned char *probe=*cursor;
+    if(end-probe<2)return fail("truncated chunk strip length",-1);
+    unsigned int encoded=u16(probe),first=encoded&0x8000u?65536u-encoded:encoded;
+    if(first<3)return fail("invalid chunk strip length",-1);
+    unsigned int occupied=first+!!(encoded&0x8000u);
+    if(occupied>JOINED_STRIP_MAX)return 2;
+    if(*remaining_strips<2){join_skipped_vertices+=first;return 2;}
+    size_t bytes=2u+first*(type==64?2u:6u)+(first-2)*attributes*2u;
+    if(bytes>(size_t)(end-probe))return fail("truncated chunk strip vertex",-1);
+    probe+=bytes;
+    if(end-probe<2)return fail("truncated chunk strip length",-1);
+    encoded=u16(probe);unsigned int second=encoded&0x8000u?65536u-encoded:encoded;
+    if(second<3)return fail("invalid chunk strip length",-1);
+    if(second+!!(encoded&0x8000u)+2+(occupied&1u)>JOINED_STRIP_MAX-occupied){
+        join_skipped_vertices+=first;return 2;
+    }
+    RecvxGameChunkVertex decoded[JOINED_STRIP_MAX];
+    const unsigned char *scan=*cursor;
+    unsigned int count=0,groups=0,triangles=0;
+    while(groups<*remaining_strips){
+        if(end-scan<2)return fail("truncated chunk strip length",-1);
+        unsigned int encoded=u16(scan),flip=!!(encoded&0x8000u);
+        unsigned int length=flip?65536u-encoded:encoded;
+        if(length<3)return fail("invalid chunk strip length",-1);
+        unsigned int bridge=count?2+(count&1u):0;
+        if(length+flip+bridge>JOINED_STRIP_MAX-count)break;
+        scan+=2;
+        unsigned int base=count+bridge+flip;
+        for(unsigned int i=0;i<length;++i){
+            size_t bytes=(type==64?2u:6u)+(i>=2?attributes*2u:0u);
+            if(bytes>(size_t)(end-scan))return fail("truncated chunk strip vertex",-1);
+            float u=0,v=0;
+            if(type!=64){float scale=type==65?0.003921569f:0.0009775171f;u=u16(scan+2)*scale;v=u16(scan+4)*scale;}
+            int result=vertex(source,u16(scan),u,v,&decoded[base+i]);if(result)return result;
+            if(i>=2&&decoded[base+i-2].source_index!=decoded[base+i-1].source_index&&
+               decoded[base+i].source_index!=decoded[base+i-2].source_index&&decoded[base+i].source_index!=decoded[base+i-1].source_index)++triangles;
+            scan+=bytes;
+        }
+        if(count){
+            RecvxGameChunkVertex last=decoded[count-1];
+            unsigned int odd=count&1u;
+            decoded[count++]=last;if(odd)decoded[count++]=last;
+            decoded[count++]=decoded[base];
+        }
+        if(flip)decoded[count++]=decoded[base];
+        count+=length;++groups;
+    }
+    if(groups<2)return 2; /* Retain the original single-strip path. */
+    if(triangles>CHUNK_TRIANGLE_LIMIT-*triangle_count)return fail("chunk triangle budget exceeded",-1);
+    int handled=strip(context,material,decoded,count,0);
+    if(handled<0)return fail("chunk strip sink rejected geometry",-1);
+    if(!handled)return 0;
+    *cursor=scan;*remaining_strips-=groups;*triangle_count+=triangles;return 1;
+}
+
+static int parse_strips(const NJS_CNK_MODEL *model, RecvxGameChunkEmit emit, RecvxGameChunkEmitStrip strip, void *context,int join)
+
 {
     VertexSource source;
     RecvxGameChunkMaterial material = current_material;
@@ -225,13 +325,50 @@ int recvxGameBootChunkParse(const NJS_CNK_MODEL *model, RecvxGameChunkEmit emit,
             batch.flags = flags;
             if (type == 64) batch.texture = UINT_MAX;
             else if (batch.texture == UINT_MAX) return fail("textured chunk strip has no texture selection", -1);
-            while (strips--) {
+            int joining=join&&strip;
+            while (strips) {
+                if(joining&&strips>1){
+                    int grouped=joined_strips(&source,&cursor,end,&strips,type,attributes,&triangles,strip,context,&batch);
+                    if(grouped<0)return grouped;
+                    if(grouped==1)continue;
+                    if(grouped==0)joining=0; /* Bound work when light masks differ. */
+                }
+                --strips;
                 unsigned int encoded, length, previous_indices[2] = {0, 0};
                 RecvxGameChunkVertex previous[2] = {0};
                 if (end - cursor < 2) return fail("truncated chunk strip length", -1);
                 encoded = u16(cursor); cursor += 2;
                 length = encoded & 0x8000u ? 65536u - encoded : encoded;
                 if (length < 3) return fail("invalid chunk strip length", -1);
+                if(strip&&length<=RECVX_GAME_CHUNK_STRIP_MAX){
+                    RecvxGameChunkVertex decoded[RECVX_GAME_CHUNK_STRIP_MAX];
+                    const unsigned char *scan=cursor;unsigned int valid_triangles=0;
+                    for(unsigned int i=0;i<length;++i){
+                        size_t bytes=(type==64?2u:6u)+(i>=2?attributes*2u:0u);
+                        if(bytes>(size_t)(end-scan))return fail("truncated chunk strip vertex",-1);
+                        float u=0,v=0;
+                        if(type!=64){float scale=type==65?0.003921569f:0.0009775171f;u=u16(scan+2)*scale;v=u16(scan+4)*scale;}
+                        if((result=vertex(&source,u16(scan),u,v,&decoded[i])))return result;
+                        if(i>=2&&decoded[i-2].source_index!=decoded[i-1].source_index&&
+                           decoded[i].source_index!=decoded[i-2].source_index&&decoded[i].source_index!=decoded[i-1].source_index)++valid_triangles;
+                        scan+=bytes;
+                    }
+                    if(valid_triangles>CHUNK_TRIANGLE_LIMIT-triangles)return fail("chunk triangle budget exceeded",-1);
+                    int handled=strip(context,&batch,decoded,length,!!(encoded&0x8000u));
+                    if(handled<0)return fail("chunk strip sink rejected geometry",-1);
+                    if(!handled){
+                        /* The sink declined, but decoded vertices and the
+                           complete strip have already been validated. */
+                        for(unsigned int i=2;i<length;++i){
+                            unsigned int a=i-2,b=i-1,d=i;
+                            if(decoded[a].source_index==decoded[b].source_index||decoded[a].source_index==decoded[d].source_index||decoded[b].source_index==decoded[d].source_index)continue;
+                            if(((i-2u)&1u)^!!(encoded&0x8000u)){unsigned int swap=a;a=b;b=swap;}
+                            RecvxGameChunkVertex triangle[3]={decoded[a],decoded[b],decoded[d]};
+                            if(emit&&emit(context,&batch,triangle))return fail("chunk triangle sink rejected geometry",-1);
+                        }
+                    }
+                    triangles+=valid_triangles;cursor=scan;continue;
+                }
                 for (unsigned int i = 0; i < length; ++i) {
                     RecvxGameChunkVertex value;
                     unsigned int index;
@@ -267,3 +404,11 @@ int recvxGameBootChunkParse(const NJS_CNK_MODEL *model, RecvxGameChunkEmit emit,
     }
     return fail("chunk polygon command budget exceeded", -1);
 }
+
+int recvxGameBootChunkParseStrips(const NJS_CNK_MODEL *model,RecvxGameChunkEmit emit,RecvxGameChunkEmitStrip strip,void *context)
+{return parse_strips(model,emit,strip,context,0);}
+int recvxGameBootChunkParseJoinedStrips(const NJS_CNK_MODEL *model,RecvxGameChunkEmit emit,RecvxGameChunkEmitStrip strip,void *context)
+{return parse_strips(model,emit,strip,context,1);}
+
+int recvxGameBootChunkParse(const NJS_CNK_MODEL *model,RecvxGameChunkEmit emit,void *context)
+{return recvxGameBootChunkParseStrips(model,emit,NULL,context);}

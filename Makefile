@@ -710,9 +710,10 @@ build/host/game-boot-audio-test: tests/game_boot_audio_test.c src/psp/game_boot_
 		tests/game_boot_audio_test.c src/psp/game_boot_audio.c src/psp/game_boot_movie_audio.c src/psp/game_boot_audio_psp.c -lm -o $@
 
 .PHONY: game-boot-vfpu-check
-game-boot-vfpu-check: $(BUILD_DIR)/src/psp/game_boot_mask_anim.o $(BUILD_DIR)/src/psp/game_boot_skin.o
+game-boot-vfpu-check: $(BUILD_DIR)/src/psp/game_boot_mask_anim.o $(BUILD_DIR)/src/psp/game_boot_skin.o $(BUILD_DIR)/src/psp/game_boot_render.o
 	python3 tools/check_game_boot_vfpu.py $<
 	python3 tools/check_game_boot_vfpu.py $(BUILD_DIR)/src/psp/game_boot_skin.o --skin
+	python3 tools/check_game_boot_vfpu.py $(BUILD_DIR)/src/psp/game_boot_render.o --resident
 
 .PHONY: game-boot-runtime-check
 game-boot-runtime-check: $(TARGET).elf
@@ -816,7 +817,7 @@ build/host/game_boot_draw_skin_original.c: tools/extract_original_draw_skin.py t
 build/host/game_boot_effect_draw_original.c: tools/extract_original_effect_draw.py tools/extract_original_boot_initializers.py src/ps2/veronica/prog/effect.c
 	python3 $< $@
 
-$(HOST_BOOT_TEST): tests/game_boot_test.c $(HOST_BOOT_SOURCES) build/host/game_boot_unported.S build/host/game_boot_tables.c build/host/game_boot_initializers.c $(HOST_HEADERS) include/psp/game_boot.h Makefile
+$(HOST_BOOT_TEST): tests/game_boot_test.c tests/game_boot_cull_check.h $(HOST_BOOT_SOURCES) build/host/game_boot_unported.S build/host/game_boot_tables.c build/host/game_boot_initializers.c $(HOST_HEADERS) include/psp/game_boot.h Makefile
 	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -Dasm=__asm__ -DRECVX_GAME_BOOT_HOST_TEST -DRECVX_GAME_BOOT -DRECVX_ENGINE_SHARED_EVENT_CORE -DRECVX_EVENT_CORE_HOST_TEST -Wno-error -fno-pie -no-pie \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
 		-ffunction-sections -fdata-sections $< $(HOST_BOOT_SOURCES) \
@@ -846,7 +847,7 @@ build/host/i386-include/gnu/stubs-32.h:
 	@mkdir -p $(dir $@)
 	@touch $@
 
-$(HOST_BOOT_ABI_TEST): tests/game_boot_test.c tests/game_boot_i386_start.S $(HOST_BOOT_SOURCES) \
+$(HOST_BOOT_ABI_TEST): tests/game_boot_test.c tests/game_boot_cull_check.h tests/game_boot_i386_start.S $(HOST_BOOT_SOURCES) \
 		build/host/game_boot_unported_i386.S build/host/game_boot_tables.c \
 		build/host/game_boot_initializers.c build/host/i386-include/gnu/stubs-32.h \
 		$(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
@@ -1155,7 +1156,7 @@ game-boot-gu-test: build/host/game-boot-gu-test
 	ASAN_OPTIONS=detect_leaks=0 $<
 
 GAME_BOOT_RENDER_TEST_SOURCES := tests/game_boot_render_test.c src/psp/game_boot_fog.c src/psp/game_boot_render.c src/psp/game_boot_chunk.c src/psp/game_boot_render_texture.c src/psp/engine_original_lighting_psp.c src/psp/engine_original_view.c src/psp/engine_original_matrix_cpu.c src/psp/engine_original_math.c src/psp/engine_original_fault.c
-build/host/game-boot-render-test: $(GAME_BOOT_RENDER_TEST_SOURCES) $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
+build/host/game-boot-render-test: $(GAME_BOOT_RENDER_TEST_SOURCES) tests/game_boot_cull_check.h $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
 	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_GAME_BOOT_HOST_TEST -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
 		-ffunction-sections -fdata-sections $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
 

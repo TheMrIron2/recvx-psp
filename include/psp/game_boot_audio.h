@@ -6,6 +6,11 @@
 #define RECVX_AUDIO_FRAMES 256
 int recvxAudioInit(const char *directory);
 void recvxAudioShutdown(void);
+typedef struct RecvxAudioOutputStats {
+    uint64_t cpu_us;
+    uint32_t grains,render_us,wait_us;
+} RecvxAudioOutputStats;
+RecvxAudioOutputStats recvxAudioOutputStats(void);
 int recvxAudioOutputInit(void);
 void recvxAudioOutputShutdown(void);
 void recvxAudioLock(void);

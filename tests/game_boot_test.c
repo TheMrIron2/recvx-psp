@@ -24,6 +24,7 @@
 #include "psp/game_boot_enemy.h"
 #include "psp/game_boot_save_storage.h"
 #include "psp/game_boot_render.h"
+#include "game_boot_cull_check.h"
 #include "psp/game_boot_effect_callbacks.h"
 #include "ps2/veronica/prog/effsub0.h"
 #include "ps2/veronica/prog/effsub5.h"
@@ -113,18 +114,30 @@ void recvxGameBootPresent(void)
     unsigned char pixels[480 * 272 * 3] = {0};
     const RecvxBootDraw *draws = recvxGameBootDraws(&count);
     const RecvxBootRenderFrame *frame = recvxGameBootRenderFrame();
-    if (frame->vertex_count) {
+    if (frame->vertex_count || frame->gpu_vertex_count) {
         const RecvxBootRenderFrame *scene = frame;
-        assert(scene->vertex_count > 0 && scene->batch_count > 0);
+        assert(scene->batch_count > 0);
+        size_t gpu_total=0;
         size_t total = 0, triangles = 0, model_triangles = 0, shadow_triangles = 0, composites = 0;
         for (size_t batch = 0; batch < scene->batch_count; ++batch) {
-            assert(scene->batches[batch].first == total && scene->batches[batch].count <= 65535);
             const RecvxBootRenderBatch *draw = &scene->batches[batch];
+            assert(draw->first == (draw->gpu==1?gpu_total:total) && draw->count <= 65535);
+            if(draw->gpu==1){
+                assert(draw->kind==RECVX_RENDER_TRIANGLES&&draw->gpu_state.light_count<=4);
+                assert(draw->first+draw->count<=scene->gpu_vertex_count);
+                for(unsigned int v=0;v<draw->count;++v){
+                    const RecvxBootGpuVertex *p=&scene->gpu_vertices[draw->first+v];
+                    assert(isfinite(p->x)&&isfinite(p->y)&&isfinite(p->z)&&isfinite(p->nx)&&isfinite(p->ny)&&isfinite(p->nz));
+                }
+            }
             if (draw->kind == RECVX_RENDER_SHADOW_START || draw->kind == RECVX_RENDER_SHADOW_END)
                 assert(draw->count == 0);
             else if (draw->kind == RECVX_RENDER_LINES || draw->kind == RECVX_RENDER_SHADOW_COMPOSITE) {
                 assert(draw->count % 2 == 0);
                 if (draw->kind == RECVX_RENDER_SHADOW_COMPOSITE) ++composites;
+            } else if(draw->gpu_strip){
+                assert(draw->gpu==1&&draw->count>=3);
+                triangles+=draw->count-2;model_triangles+=draw->count-2;
             } else {
                 assert(draw->count % 3 == 0); triangles += draw->count / 3;
                 if (draw->kind == RECVX_RENDER_SHADOW_ADD || draw->kind == RECVX_RENDER_SHADOW_SUBTRACT)
@@ -132,9 +145,9 @@ void recvxGameBootPresent(void)
                 else if (draw->kind == RECVX_RENDER_TRIANGLES) model_triangles += draw->count / 3;
             }
             if (draw->texture) assert(draw->texture->source && draw->texture->pixels);
-            total += draw->count;
+            if(draw->gpu==1)gpu_total+=draw->count;else total += draw->count;
         }
-        assert(total == scene->vertex_count);
+        assert(total == scene->vertex_count&&gpu_total==scene->gpu_vertex_count);
         if((sys->ts_flg&0x80)&&(swork.statusflg&0x10)){
             ++inventory_model_frames;
             if(inventory_model_frames==1){
@@ -1312,6 +1325,32 @@ static void room_stream_task(void)
         bhSetMemPvpTexture(sys->txlp[i],sys->txdp[i],sys->txloff[i]);++sys->txr_ct;
     }
     bhFinishRoom();
+    if(index==3){
+        CAM_WORK saved_camera=cam;int searchlights=0;
+        for(int object=0;object<rom->obj_n;++object){
+            O_WRK *op=&sys->obwp[object];
+            if(op->type!=6||!(op->flg&1u))continue;
+            cam.wpx=op->px+20;cam.wpy=op->py+10;cam.wpz=op->pz+15;
+            bhObj006(op);++searchlights;
+            assert(!recvxGameBootFault()&&!recvxEngineOriginalFault());
+            for(unsigned int joint=0;joint<op->mlwP->obj_num;++joint){
+                NJS_CNK_OBJECT *node=&op->mlwP->objP[joint];
+                if(!node->model||(node->evalflags&8))continue;
+                bhSetAlphaFadeObject(op,joint,1,128,4);
+                for(int frame=0;frame<4;++frame)bhControlAlphaFadeObject(op);
+                assert(!(op->flg&0x200000)&&((unsigned char *)node->model->plist)[7]==128);
+                break;
+            }
+            assert(op->mlwP->objP[2].ang[2]>=-65536&&op->mlwP->objP[2].ang[2]<=65536);
+            if(op->aspd>0){
+                const LGT_WORK *light=&rom->evlp[op->aspd];
+                assert(isfinite(light->px)&&isfinite(light->py)&&isfinite(light->pz));
+                assert(light->nr>=10&&light->fr==light->nr+10);
+            }
+        }
+        cam=saved_camera;assert(searchlights>0);
+        puts("PASS: room 0/3 searchlight controllers with relocated models, real room wall collision and event light entries");
+    }
     if(index==2){
         /* Returning from a room animation restores the persistent table before
            normal control replaces the event motion number. These are actual
@@ -2064,6 +2103,9 @@ static void test_loaded_typewriter(const char *directory)
     memset(sys->typ_exp,0,sizeof(TYP_WORK));sys->typ_md0=sys->typ_md1=0;
     sys->ss_flg&=~0x200u;sys->typ_flg=0;sys->ts_flg=0;sys->cb_flg=0;
     sys->stg_no=1;sys->rom_no=8;sys->ev_flg[1]&=~(0x80000000u>>(56%32));
+    /* The selected save room owns the original typewriter MIDI instruments;
+       opening/cinematic rooms legitimately leave programs 66..68 empty. */
+    recvxAudioService();RequestRoomSoundBank(1,8,0);recvxGameBootSoundTick();
     sys->itm[(unsigned char)sys->ply_id*16+11]=(31u<<16)|3;
     unsigned int count=sys->save_ct;
     bhSysTaskJumpTab[0]=typewriter_screen_task;sys->tk_flg=1;typewriter_keys=0;
@@ -2089,6 +2131,7 @@ static void test_loaded_typewriter(const char *directory)
     snprintf(name,sizeof(name),"%s/saves",root);assert(!rmdir(name));assert(!rmdir(data));assert(!rmdir(root));
     assert(!recvxGameBootSaveStorageInit(directory));
     bhSysTaskJumpTab[0]=old_task;*sys=*saved;free(saved);*(TYP_WORK *)sys->typ_exp=saved_work;
+    RequestRoomSoundBank(sys->stg_no,sys->rom_no,sys->rcase);recvxGameBootSoundTick();
     puts("PASS: in-game retail typewriter artwork, original fonts/slot UI, confirmation, native save, typed room-name animation, sound and room-texture return");
 }
 
@@ -3706,9 +3749,9 @@ int main(int argc, char **argv)
        slot exists; verify both menu directions before choosing New Game. */
     if(recvxGameBootSaveStorageAny()){
         assert(AdvWork.Cursor[0]==0);
-        /* Enter through the real title menu before the font pages are loaded,
-           display the load slots, then cancel without modifying any save. */
-        assert(!sys->ef_tlist.nbTexture);
+        /* Enter through the real title menu, display the load slots, then
+           cancel without modifying any save. Font handles left by ADV are
+           reloaded by the original typewriter resource initializer. */
         press(&input,RECVX_BUTTON_CROSS);
         for(i=0;i<200&&sys->typ_md0!=1;++i)tick(&input);
         assert(sys->typ_md0==1&&(sys->ss_flg&0x200));
@@ -3900,6 +3943,11 @@ int main(int argc, char **argv)
     if (recvxGameBootFault()) assert(recvxGameBootTick(&input) == -1); /* A fault cannot advance or fake a room. */
 #if UINTPTR_MAX == UINT32_MAX
     unsigned int initial_presentations = presentations;
+    int gpu_scene_check=getenv("RECVX_GPU_SCENE_CHECK")!=NULL;
+    int gpu_cull_check=getenv("RECVX_GPU_CULL_CHECK")!=NULL;
+    int gpu_native_check=getenv("RECVX_GPU_NATIVE_LIGHTING")!=NULL;
+    RecvxBootRenderStats before_gpu=recvxGameBootRenderStats();
+    if(gpu_scene_check){recvxGameBootRenderGpuEnable(1);recvxGameBootRenderGpuNativeStripsEnable(1);recvxGameBootRenderGpuStripCacheEnable(1);recvxGameBootRenderGroupCullEnable(gpu_cull_check);recvxGameBootRenderNativeLightingEnable(gpu_native_check);}
     for (i = 0; i < extra_frames && !recvxGameBootFault(); ++i) {
         recvxGameBootTick(&input); recvxOriginalEngineClockAdvance(2, 1);
     }
@@ -3910,6 +3958,28 @@ int main(int argc, char **argv)
     assert(game_frames > 1 && game_frames <= extra_frames + 1);
     assert(presentations >= initial_presentations + extra_frames);
     fprintf(stderr, "Movie presentations (hardware call model): %u\n", movie_presentations);
+    if(gpu_scene_check){
+        RecvxBootRenderStats after_gpu=recvxGameBootRenderStats();
+        fprintf(stderr,"GPU scene check: vertices=%u lit_vertices=%u fallback_triangles=%u CPU_positions=%u CPU_shades=%u cache_hits=%u cache_misses=%u culled_vertices=%u culled_triangles=%u\n",
+            after_gpu.gpu_vertices-before_gpu.gpu_vertices,after_gpu.gpu_lit_vertices-before_gpu.gpu_lit_vertices,
+            after_gpu.gpu_fallback_triangles-before_gpu.gpu_fallback_triangles,
+            after_gpu.position_transforms-before_gpu.position_transforms,after_gpu.shaded_vertices-before_gpu.shaded_vertices,
+            after_gpu.gpu_strip_cache_hits-before_gpu.gpu_strip_cache_hits,after_gpu.gpu_strip_cache_misses-before_gpu.gpu_strip_cache_misses,
+            after_gpu.gpu_culled_vertices-before_gpu.gpu_culled_vertices,after_gpu.gpu_culled_triangles-before_gpu.gpu_culled_triangles);
+        if(gpu_cull_check){
+            assert(after_gpu.gpu_culled_groups>before_gpu.gpu_culled_groups&&cull_reference_groups);
+            fprintf(stderr,"Verified rejected groups against independent double-precision clip coordinates: %u\n",cull_reference_groups);
+        }else if(gpu_native_check){
+            assert(after_gpu.gpu_native_light_vertices>before_gpu.gpu_native_light_vertices);
+            assert(after_gpu.gpu_overflow_vertices==before_gpu.gpu_overflow_vertices&&after_gpu.shaded_vertices==before_gpu.shaded_vertices);
+            assert(after_gpu.gpu_classifications==before_gpu.gpu_classifications&&after_gpu.normal_transforms==before_gpu.normal_transforms);
+            fprintf(stderr,"Native GE lighting: vertices=%u CPU overflow=0 CPU shades=0 CPU classifications=0 CPU normal transforms=0\n",after_gpu.gpu_native_light_vertices-before_gpu.gpu_native_light_vertices);
+        }else{
+            assert(after_gpu.gpu_vertices>before_gpu.gpu_vertices&&after_gpu.gpu_lit_vertices>before_gpu.gpu_lit_vertices);
+            assert(after_gpu.gpu_strip_cache_hits>before_gpu.gpu_strip_cache_hits);
+        }
+        recvxGameBootRenderNativeLightingEnable(0);recvxGameBootRenderGroupCullEnable(0);recvxGameBootRenderGpuEnable(0);
+    }
     test_loaded_player_restore();
     test_loaded_arm_ik();
     test_loaded_player_interactions();

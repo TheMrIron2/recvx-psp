@@ -25,6 +25,15 @@ static int thread_started, loaded_codec, loaded_sas;
 static unsigned int keyed_voices;
 static const char *error_call;
 static volatile int running;
+static RecvxAudioOutputStats output_stats;
+RecvxAudioOutputStats recvxAudioOutputStats(void)
+{
+    RecvxAudioOutputStats result=output_stats;
+    SceKernelThreadInfo info={.size=sizeof(info)};
+    if(audio_thread>=0&&sceKernelReferThreadStatus(audio_thread,&info)>=0)
+        result.cpu_us=((uint64_t)info.runClocks.hi<<32)|info.runClocks.low;
+    return result;
+}
 static int16_t buffers[2][RECVX_AUDIO_FRAMES * 2] __attribute__((aligned(64)));
 static int checked_at(int result, const char *call)
 {
@@ -101,8 +110,12 @@ static int output_thread(SceSize size, void *args)
     (void)size; (void)args;
     while (running) {
         int result;
+        unsigned int started=sceKernelGetSystemTimeLow();
         recvxAudioLock(); recvxAudioRender(buffers[buffer], RECVX_AUDIO_FRAMES); recvxAudioUnlock();
+        unsigned int rendered=sceKernelGetSystemTimeLow();
+        output_stats.render_us+=rendered-started;++output_stats.grains;
         result = sceAudioOutputBlocking(audio_channel, PSP_AUDIO_VOLUME_MAX, buffers[buffer]);
+        output_stats.wait_us+=sceKernelGetSystemTimeLow()-rendered;
         if (result < 0) { checked(result); break; }
         buffer ^= 1;
     }
@@ -113,6 +126,7 @@ int recvxAudioOutputInit(void)
     int result;
     if (ready) return 0;
     last_error = 0; error_call = NULL; keyed_voices = 0;
+    memset(&output_stats,0,sizeof(output_stats));
     result = sceUtilityLoadModule(PSP_MODULE_AV_AVCODEC);
     if (result < 0 && (unsigned int)result != 0x80111102u) return checked(result);
     loaded_codec = result >= 0;
@@ -150,6 +164,7 @@ void recvxAudioOutputShutdown(void)
 }
 #else
 /* Call/ownership test double: advances voice durations, does not decode. */
+RecvxAudioOutputStats recvxAudioOutputStats(void){return (RecvxAudioOutputStats){0};}
 void recvxAudioNativeFlush(const void *data, size_t size) { (void)data; (void)size; }
 static uint64_t remaining[32];
 static unsigned int rates[32], ended;

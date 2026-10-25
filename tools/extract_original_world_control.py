@@ -20,8 +20,10 @@ def prepare(destination):
               'extern void recvxGameBootWorldModelPrepare(O_WRK *op);',
               'extern void recvxGameBootWorldQueueCheck(int *count, size_t capacity);',
               'extern void recvxGameBootWorldWallPrepare(O_WRK *op);',
-              'extern void recvxGameBootWorldHairPrepare(O_WRK *op);']
-    implemented = {'bhObjDmy', 'bhObj002', 'bhObj003', 'bhObj011', 'bhObj012', 'bhObjItmBox',
+              'extern void recvxGameBootWorldHairPrepare(O_WRK *op);',
+              'extern void recvxGameBootWorldSearchLightPrepare(O_WRK *op);',
+              'extern void recvxGameBootWorldAlphaPrepare(O_WRK *op);']
+    implemented = {'bhObjDmy', 'bhObj002', 'bhObj003', 'bhObj006', 'bhObj011', 'bhObj012', 'bhObjItmBox',
                    'bhObjClpn', 'bhObjWssg', 'bhObjWpn'}
     table_text = []
     for name in ['bhJumpObject', 'bhJumpObject2']:
@@ -35,7 +37,7 @@ def prepare(destination):
         table_text = [re.sub(r'\b' + name + r'\b', 'world_' + name, table) for table in table_text]
     output += table_text
     output += [extract_table(Path('src/ps2/veronica/prog/weapon.c'), r'const int WpnAngTab\[21\]\[3\]')]
-    jobs = [(path, ['bhControlObjItm', 'bhObjDmy', 'bhObj002', 'bhObj003', 'bhObj011',
+    jobs = [(path, ['bhControlObjItm', 'bhControlAlphaFadeObject', 'bhObjDmy', 'bhObj002', 'bhObj003', 'bhObj006', 'bhObj011',
                     'bhObj012', 'bhObjItmBox', 'bhObjClpn', 'bhObjWssg']),
             (Path('src/ps2/veronica/prog/player.c'), ['bhCalcHair']),
             (Path('src/ps2/veronica/prog/weapon.c'), ['bhObjWpn', 'bhActionWeapon'])]
@@ -51,12 +53,14 @@ def prepare(destination):
                 for queue in ['hlg', 'spc', 'nlg']:
                     function = function.replace(f'sys->ob_{queue}[sys->ob_{queue}n++] = op;',
                         f'recvxGameBootWorldQueueCheck(&sys->ob_{queue}n, sizeof(sys->ob_{queue}) / sizeof(sys->ob_{queue}[0]));\n                                sys->ob_{queue}[sys->ob_{queue}n++] = op;')
-                function = function.replace('bhControlAlphaFadeObject(op);',
-                    'recvxGameBootUnsupported("bhControlAlphaFadeObject");')
                 function = function.replace('if ((!(op->mdflg & 0x1)) && (op->mlwP->objP != NULL))',
                     'recvxGameBootWorldModelPrepare(op);\n                    if ((!(op->mdflg & 0x1)) && (op->mlwP->objP != NULL))')
                 function = function.replace('bhCalcModel((BH_PWORK*)op);',
                     'recvxGameBootWorldModelPrepare(op);\n                    bhCalcModel((BH_PWORK*)op);\n                    if (recvxEngineOriginalFault()) recvxGameBootUnsupported(recvxEngineOriginalFault());')
+            elif name == 'bhControlAlphaFadeObject':
+                guard = 'recvxGameBootWorldAlphaPrepare(op);'
+            elif name == 'bhObj006':
+                guard = 'recvxGameBootWorldSearchLightPrepare(op);'
             elif name == 'bhObj012':
                 guard = 'recvxGameBootWorldWallPrepare(op);'
             elif name == 'bhObjClpn':

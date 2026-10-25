@@ -563,3 +563,12 @@ void njMirror(NJS_MATRIX *matrix,NJS_PLANE *plane)
     for(int row=0;row<3;++row)reflection[12+row]=(float)(factor*distance*normal[row]);
     multiply_matrix(*matrix,reflection);
 }
+
+/* Portable equivalent of njplus.c: clear translation and retain rotation. */
+void npClrTranslate(void)
+{
+    NJS_MATRIX matrix;
+    njGetMatrix(&matrix);
+    matrix[12]=matrix[13]=matrix[14]=0;
+    njSetMatrix(NULL,&matrix);
+}

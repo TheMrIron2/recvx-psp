@@ -1,4 +1,12 @@
 #include "psp/live_task_dispatch.h"
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+#include <pspkernel.h>
+#endif
+
+static RecvxLiveTaskStats task_stats;
+RecvxLiveTaskStats recvxLiveTaskStats(void) { return task_stats; }
+void recvxProfileGameStage(unsigned int stage, uint32_t elapsed_us)
+{ if(stage<7)task_stats.game_us[stage]+=elapsed_us; }
 
 uint32_t recvxRunLiveTaskSlots(const volatile unsigned int *active_mask,
                                const volatile unsigned int *paused_mask,
@@ -18,7 +26,13 @@ uint32_t recvxRunLiveTaskSlots(const volatile unsigned int *active_mask,
             continue;
         if (jump_table[slot] == 0)
             return unsupported | bit;
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+        unsigned int started=sceKernelGetSystemTimeLow();
+#endif
         jump_table[slot]();
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+        task_stats.us[slot]+=sceKernelGetSystemTimeLow()-started;
+#endif
     }
     return unsupported;
 }

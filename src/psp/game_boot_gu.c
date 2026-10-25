@@ -1,4 +1,5 @@
 #include <math.h>
+#include <string.h>
 #include <pspgu.h>
 #include <pspgum.h>
 #include <pspdisplay.h>
@@ -11,7 +12,8 @@
 
 #define SHADOW_OFFSET (5u * 512u * 272u * 2u)
 static void *scene_buffer;
-static int frame_drawn, model_depth_drawn;
+static int frame_drawn, model_depth_drawn,target_shadow;
+static unsigned int segment_wait_us;
 static float model_depth_a, model_depth_b;
 static RecvxBootGuStats gu_stats;
 RecvxBootGuStats recvxGameBootGuStats(void){return gu_stats;}
@@ -109,9 +111,9 @@ static int blend_factor(int factor)
 }
 
 static void shadow_target(void)
-{ sceGuDrawBufferList(GU_PSM_5551, (void *)SHADOW_OFFSET, 512); }
+{ target_shadow=1;sceGuDrawBufferList(GU_PSM_5551, (void *)SHADOW_OFFSET, 512); }
 static void scene_target(void)
-{ sceGuDrawBufferList(GU_PSM_8888, scene_buffer, 512); }
+{ target_shadow=0;sceGuDrawBufferList(GU_PSM_8888, scene_buffer, 512); }
 static void shadow(const RecvxBootRenderFrame *frame, const RecvxBootRenderBatch *batch)
 {
     sceGuDisable(GU_FOG);
@@ -158,9 +160,54 @@ static void shadow(const RecvxBootRenderFrame *frame, const RecvxBootRenderBatch
     }
 }
 
+/* Check actual SDK command bytes, leaving room for one complete batch/UI
+   draw. Reuse command storage only after GE has consumed the previous list. */
+static void list_room(void)
+{
+    int used=sceGuCheckList();
+    if(used<0||(size_t)used>sizeof(display_list))recvxGameBootUnsupported("invalid original GU command cursor");
+    if((size_t)used+8192u<=sizeof(display_list))return;
+    unsigned int waiting=microseconds();
+    sceGuFinish();sceGuSync(0,0);
+    segment_wait_us+=microseconds()-waiting;++gu_stats.list_splits;
+    sceGuStart(GU_DIRECT,display_list);
+    /* sceGuStart reissues the display framebuffer address. A modifier mask
+       can still be active, so restore its target and format explicitly. */
+    if(target_shadow)shadow_target();else scene_target();
+}
+
+static void gpu_state(const RecvxBootRenderBatch *batch)
+{
+    if(!batch->gpu){
+        sceGumMatrixMode(GU_MODEL);sceGumLoadIdentity();sceGuDisable(GU_LIGHTING);return;
+    }
+    const RecvxBootGpuState *g=&batch->gpu_state;
+    ScePspFMatrix4 model __attribute__((aligned(16)));
+    memcpy(&model,g->model,sizeof(model));
+    sceGumMatrixMode(GU_MODEL);sceGumLoadMatrix(&model);
+    if(!g->lit){sceGuDisable(GU_LIGHTING);if(batch->gpu==1)sceGuColor(g->diffuse);return;}
+    sceGuEnable(GU_LIGHTING);
+    sceGuLightMode(GU_SINGLE_COLOR);sceGuColorMaterial(g->vertex_ambient?GU_AMBIENT:0);
+    sceGuAmbient(g->vertex_ambient?0xffffffffu:g->ambient);
+    sceGuModelColor(0,g->diffuse,g->diffuse,g->specular);
+    if(g->specular)sceGuSpecular(g->shininess);
+    sceGuMaterial(GU_AMBIENT,g->diffuse); /* Includes material alpha. */
+    for(unsigned int i=0;i<4;++i){
+        if(i>=g->light_count||!(batch->gpu_mask&(1u<<i))){sceGuDisable(GU_LIGHT0+i);continue;}
+        const RecvxBootGpuLight *l=&g->lights[i];
+        ScePspFVector3 position={l->position[0],l->position[1],l->position[2]};
+        sceGuLight(i,l->point?GU_POINTLIGHT:GU_DIRECTIONAL,g->specular?GU_DIFFUSE_AND_SPECULAR:GU_DIFFUSE,&position);
+        sceGuLightColor(i,GU_AMBIENT,0);
+        sceGuLightColor(i,GU_SPECULAR,g->specular?l->color:0);
+        sceGuLightColor(i,GU_DIFFUSE,l->color);
+        sceGuLightAtt(i,l->point?0:1,0,l->quadratic);
+        sceGuEnable(GU_LIGHT0+i);
+    }
+}
+
 static void models(const RecvxBootRenderFrame *frame)
 {
-    if (!frame->vertex_count) return;
+    if (!frame->vertex_count && !frame->gpu_vertex_count) return;
     model_depth_drawn = 1;
     model_depth_a = frame->projection[10];
     model_depth_b = frame->projection[14];
@@ -169,11 +216,13 @@ static void models(const RecvxBootRenderFrame *frame)
     sceGumMatrixMode(GU_VIEW); sceGumLoadIdentity();
     sceGumMatrixMode(GU_MODEL); sceGumLoadIdentity();
     sceGuEnable(GU_DEPTH_TEST); sceGuDepthMask(GU_FALSE);
+    sceGuEnable(GU_CLIP_PLANES);
     sceGuDisable(GU_LIGHTING);
     sceGuEnable(GU_ALPHA_TEST); sceGuAlphaFunc(GU_GREATER, 0, 255);
     const RecvxBootTexture *bound_texture=NULL;
     for (size_t i = 0; i < frame->batch_count; ++i) {
         const RecvxBootRenderBatch *batch = &frame->batches[i];
+        list_room();gpu_state(batch);
         if (batch->kind >= RECVX_RENDER_SHADOW_START) {
             shadow(frame, batch);
             bound_texture=NULL; /* Shadow passes replace texture format/state. */
@@ -242,10 +291,15 @@ static void models(const RecvxBootRenderFrame *frame)
                 sceGuPixelMask(0);
                 sceGuAlphaFunc(GU_GREATER, 0, 255);
             }
-        } else sceGumDrawArray(batch->kind == RECVX_RENDER_LINES ? GU_LINES : GU_TRIANGLES,
+        } else if(batch->gpu==1) sceGumDrawArray(batch->gpu_strip?GU_TRIANGLE_STRIP:GU_TRIANGLES,
+            GU_TEXTURE_32BITF|GU_COLOR_8888|GU_NORMAL_32BITF|GU_VERTEX_32BITF|GU_TRANSFORM_3D,
+            batch->count,NULL,frame->gpu_vertices+batch->first);
+        else sceGumDrawArray(batch->kind == RECVX_RENDER_LINES ? GU_LINES : GU_TRIANGLES,
             GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
             batch->count, NULL, frame->vertices + batch->first);
     }
+    sceGumMatrixMode(GU_MODEL);sceGumLoadIdentity();sceGuDisable(GU_LIGHTING);
+    sceGuDisable(GU_CLIP_PLANES);
     sceGuDisable(GU_FOG);
     sceGuDisable(GU_DEPTH_TEST); sceGuDisable(GU_CULL_FACE); sceGuDisable(GU_ALPHA_TEST);
     sceGuEnable(GU_BLEND);
@@ -283,11 +337,11 @@ void recvxGameBootPresent(void)
     size_t count, i;
     const RecvxBootDraw *draws = recvxGameBootDraws(&count);
     const RecvxBootRenderFrame *frame = recvxGameBootRenderFrame();
-    if (65536u + frame->batch_count * 512u + count * 1024u > sizeof(display_list))
-        recvxGameBootUnsupported("original GU command list exceeds capacity");
+    if(frame->batch_count>16384u||count>65536u)recvxGameBootUnsupported("invalid original GU queue size");
+    segment_wait_us=0;
     sceKernelDcacheWritebackAll();
-    sceGuStart(GU_DIRECT, display_list);
-    sceGuClearColor(frame->vertex_count ? abgr(recvxEngineOriginalViewBackgroundColor()) : 0xff000000);
+    sceGuStart(GU_DIRECT, display_list);scene_target();
+    sceGuClearColor((frame->vertex_count || frame->gpu_vertex_count) ? abgr(recvxEngineOriginalViewBackgroundColor()) : 0xff000000);
     sceGuClearDepth(0);
     if (!frame_drawn || recvxGameBootCaptureActive()) {
         sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
@@ -320,6 +374,7 @@ void recvxGameBootPresent(void)
         if(pass){sceGuEnable(GU_ALPHA_TEST);sceGuAlphaFunc(GU_EQUAL,255,255);sceGuPixelMask(0xffffffffu);}
         else {sceGuDisable(GU_ALPHA_TEST);sceGuPixelMask(0);}
         for (i = 0; i < count; ++i) {
+            list_room();
             const RecvxBootDraw *d = &draws[i];
             const QUAD *q = &d->quad;
             const RecvxBootTexture *t = d->texture;
@@ -362,8 +417,8 @@ void recvxGameBootPresent(void)
     sceGuFinish();
     unsigned int submitted=microseconds();
     sceGuSync(0,0);
-    gu_stats.build_us+=submitted-started;
-    gu_stats.wait_us+=microseconds()-submitted;
+    gu_stats.build_us+=submitted-started-segment_wait_us;
+    gu_stats.wait_us+=microseconds()-submitted+segment_wait_us;
     recvxGameBootMovieFrameConsumed();
     recvxGameBootRenderConsume();
 }

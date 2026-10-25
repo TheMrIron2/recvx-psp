@@ -420,6 +420,37 @@ The static mesh reader flattens the first MLB into room geometry; actor support 
 The current lighting pass chooses one directional and up to three point lights and assigns lighting per triangle.
 It is an approximation, not the original VU lighting implementation. Make visual exceptions measurable using reference captures from representative rooms and story scenes.
 
+The full-game chunk renderer submits local-space geometry with GE model
+transforms and clipping. Diffuse/ambient lighting uses up to four native GE
+lights. Material RGB is folded into ambient and light components before GE
+quantization; brighter-than-unit lights are split into identical GE slots
+whose components add before vertex-color clamping. If those slots are full,
+only excess energy is evaluated through a cached VFPU normal transform and
+added as vertex ambient color. The main lights, final color clamp, geometry
+transforms and clipping stay on GE. Slots are reserved for later source
+lights so one bright directional light cannot displace all point lights.
+Bright point lights instead scale inverse-square attenuation to fit one GE
+slot. Their overflow correction is needed only within the enlarged near
+sphere. Local-space distance tests skip CPU position/normal work for distant
+vertices, and point directions use VFPU normalization. `overflow_vertices`
+counts cached ambient evaluations. Sampled `perf_chunk` counters separate
+material preparation, emission and vertex work. Per-source-vertex light masks
+are cached within each model/material draw, including cutoff boundary bits;
+`classified` records new classifications. Repeated strip vertices reuse them,
+while each new draw invalidates animated/deformed geometry. Saturated ambient channels
+need no further positive light contribution. Nonuniform models receive a normal correction so GE produces the
+original inverse-transpose direction. Rectangular custom view cones become
+scissor bounds; GE clips triangles against the near/far planes. Retail
+specular, flat face colors, signed light contributions, and triangles
+crossing a point light's far cutoff retain CPU color calculations, then use
+GE model transforms and clipping with prelit vertices. GE light/material
+colors have 8-bit precision. The path is enabled on PSP; host reference
+rendering defaults to CPU. `RECVX_GPU_SCENE_CHECK=1` enables it during the
+native ABI test's sustained opening sequence. `perf_gpu` in `boot.log` reports
+native-lit and prelit submissions; `perf_gpu_fallback` identifies CPU color
+work. Model/material/light state is snapshotted, and identity transforms and
+disabled lighting are restored before view-space geometry, shadows and UI.
+
 For performance work:
 
 - Instrument CPU simulation, skinning, lighting, command submission, GE waits,
@@ -716,3 +747,268 @@ Add PSP build and portable-test CI alongside the existing decomp progress
 workflow. Keep synthetic tests public and run full supplied-ISO validation
 locally or in a private asset-equipped environment. Pin toolchain and asset
 format versions so release packages can identify incompatible data cleanly.
+
+The full-game world-object dispatcher includes the original `bhObj006`
+searchlight controller: camera-facing beam joint, 200-unit wall probe, beam
+endpoint and event-light near/far updates. Its three joints and selected
+event-light entry are validated before use. Native room 0/3 fixtures exercise
+the controller against relocated assets and the real room collision service.
+
+Compatible strips of up to 256 vertices use bulk submission: decode and pack
+each strip vertex once. PSP builds submit profitable strips directly to the
+GE, preserving authored triangle order and joining compatible strips with
+degenerate bridges. Leading duplicates preserve encoded/reflected winding.
+Short or degenerate-heavy strips retain triangle lists when strips would
+submit more vertices. Mixed cutoff masks, flat/special lighting and longer
+strips retain triangle emission. The host can enable native strips through
+`recvxGameBootRenderGpuNativeStripsEnable` for reference comparisons. `perf_bulk` reports accepted triangles, attempts and
+sampled cost. Regression comparisons cover reversed strips, mirrored and
+nonuniform models, HDR point lighting, and textured UV/color data.
+
+Short authored strips within one material command are joined into groups of
+at most 64 vertices before decoding/shading callbacks. Degenerate bridges and
+parity duplicates preserve original face order, winding, UVs and per-face
+attribute-word consumption. Rejected groups return to individual strips;
+grouping stops for that command after a rejection to bound repeated work.
+The old parser API remains available for reference comparisons. Dedicated
+checks compare all three strip formats, signed lengths, seams, grouped limits,
+rejected groups and malformed indices against original triangle emission.
+The native scene fixture drops from 705,600 to 122,400 bulk callbacks over
+1,200 frames; this measures CPU call reduction, not hardware FPS.
+
+Prepared GPU strips have a bounded 2 MiB data cache, plus fixed key tables.
+Exact source-vertex/UV comparisons and complete CPU-lighting input keys allow
+unchanged scenery to reuse its packed vertices, point-light classification
+and overflow colors across frames. Changes to inputs used by CPU lighting or
+normal correction invalidate the relevant entry; GE transforms, native
+lighting, texture, fog, clip and blend batch state are still captured live. The decoder continues validating the
+source stream on every draw. `perf_bulk cache_hits/cache_misses` measures reuse
+on hardware. Vertex floats use aligned word loads after stream alignment and
+extent validation. Regression tests compare cached and uncached geometry and
+GPU lighting state across input mutations; FPS still requires hardware logs.
+
+Lighting response caching separates geometry-dependent distances, Lambert
+response and point cutoff masks from current RGB, ambient and HDR gain.
+Brightness changes reuse the response while recomputing the final color and
+near-sphere correction each draw. Responses are filled lazily when a changing
+gain first brings a vertex into range. Geometry, transform and light-placement
+keys still invalidate stale responses. The fixed 4096-entry response cache is
+bounded; the per-draw vertex cache is 32 bytes per entry. Volatile shaders stop
+rewriting packed snapshots until their inputs repeat. `perf_bulk light_hits`
+and `light_misses` measure response reuse separately from packed-strip reuse. A changing
+lighting basis bypasses persistent response lookups until it repeats, avoiding
+extra cache traffic on changing transforms/lights; `light_bypass` records it.
+The overflow routine is kept out of the hot vertex-classification function.
+Tests compare cached/fresh output through flicker, deformation, moving lights,
+range changes and a growing near sphere; hardware FPS remains unverified.
+
+Bulk geometry processing retains model, inverse-transpose normal and metric
+matrices in VFPU banks M3/M4/M5 for the vertex loop. Point-light squared
+metric distances use a VFPU 3x3 transform plus dot product; overflow position
+and unit-normal transforms reuse the resident matrices. M6/M7 remain scratch
+for existing helpers. The renderer reserves these banks and retains them across the model
+until material preparation changes, then clears resident mode before
+individual-triangle fallback. A hardware startup model/normal/metric self-check
+falls back to existing math on failure. `perf_chunk vfpu_distances` reports
+actual metric kernel use. Portable comparisons cover rotations, reflections,
+nonuniform scale and cutoff crossings; the compiled register-layout check is
+part of `game-boot-vfpu-check`. Hardware frame-time gains remain unverified.
+
+Uncached rigid GPU strips retain only preflight colors, then pack directly
+into the submitted GE vertex queue after light-mask validation. This removes
+the intermediate 36-byte-per-vertex packed array and its subsequent reads.
+Cached strips and nonuniform normal correction retain their prepared path.
+Bit copies use alias-safe aligned integer words, avoiding float copy
+interlocks and unaligned memcpy expansion on Allegrex. `perf_chunk direct_vertices` reports use. Native audio remains SAS compressed playback;
+`perf_threads` adds main/audio scheduled runtime and audio render/blocking
+wall times to distinguish CPU work from preemption in existing wall timers.
+No frame-rate gain is claimed without a new hardware run.
+
+Native point-light distances share one quadratic term per vertex. A second
+resident matrix (M2) evaluates the four linear/constant light terms together;
+overflow near-sphere checks reuse matching native-light results. Coefficients
+are prepared once per model material around the first group's vertex origin.
+An absolute metric-norm error bound detects cancellation and hard-cutoff
+neighborhoods, refining those distances with the existing translated metric.
+Near-sphere boundaries also retain the stable calculation. The runtime VFPU
+self-check and compiled-layout checks cover the extra matrix/kernel. Portable
+comparisons include four HDR point lights, rotation, nonuniform scale, hard
+cutoffs and large coordinates. `distance_batches`, `refinements` and `reused`
+report execution in `perf_chunk`. Hardware frame-time gains remain unverified.
+
+Model cache admission tracks consecutive matrix changes. After three changes,
+materials whose CPU lighting or normal correction depends on that matrix skip
+persistent key construction and packed-cache lookups. A repeated matrix
+immediately re-enables admission; GE-only local geometry remains eligible
+while moving. Comparisons verify both moving-model output and stable recovery.
+`perf_vertex` reports source calls, sampled classification and overflow-light
+elapsed times (about 1/64 calls), bulk output elapsed time (1/8 groups), and
+model-cache bypasses. A hashed sampling schedule avoids always measuring the
+same source indices. These are estimates, include timer/preemption overhead,
+and should not be treated as an exact additive breakdown. Startup logs the
+minimum wall cost of a timer call across three short calibration loops.
+
+Object alpha fades now use the original `bhControlAlphaFadeObject` scheduler
+and the existing bounded Ninja material-alpha writer. Joint spans and model
+material reads are validated; zero-duration requests complete immediately.
+Room 0/3 native fixtures exercise alpha updates on real searchlight models.
+
+The GU adapter checks actual command bytes with `sceGuCheckList` and splits
+large submissions before the fixed command buffer fills. It synchronizes
+before reusing that storage, preserves scene/modifier targets, and consumes
+frame-owned geometry only after the last list. Split wait time is counted
+as GE wait; `gu_splits_total` reports the cumulative split count.
+
+Real-PSP vertex phase profiles identified roughly 28 ms of classification and
+14 ms of overflow lighting in a 67 ms frame. Strip groups now compute a
+conservative light bound from their actual decoded vertex AABB (including
+skinned geometry). The full model metric bounds nonuniform scale and shear;
+outward floating-point margins leave ambiguous/cutoff groups on the existing
+vertex path. Uniform groups share their native light mask. Point overflow
+lights whose expanded rejection sphere cannot reach the group are skipped;
+when all overflow contributions are zero, packing uses one constant ambient
+color without source-cache, distance or lighting calls. Normal validity and
+face-normal fallback remain checked. Group flags clear before triangle
+fallback. `perf_groups classified_vertices` and `constant_vertices` report
+removed vertex work. Reference comparisons cover 256 combinations of HDR
+lights, near/far ranges, cutoff crossings, rotations, reflections, nonuniform
+scale, large coordinates and invalid normals. Hardware FPS gains require a
+new run; the prior distance batching alone did not improve the measured FPS.
+
+The next hardware run confirmed classification fell to about 9--11 ms,
+with gameplay chunk rendering still about 37--48 ms. Uniform groups now
+use a separate spill-only vertex path, avoiding the full classifier stack,
+native-distance arrays and duplicate source-cache probe. Group bounds also
+retain the proof that an overflow point light's early rejection cannot fire.
+Such lights skip per-vertex metric prechecks while retaining the original
+transformed distance, normalized direction/normal, dot product, attenuation
+and color accumulation. Unknown bounds retain all original checks. Native
+distance coefficients are prepared only for groups that need classification.
+`perf_groups metric_skips` counts removed overflow metric checks; `bounds_us`
+reports sampled bound preparation time. Portable byte comparisons cover
+256 variants, plus an enclosing HDR point-light case that asserts fewer
+metric evaluations with identical output. FPS gains require another PSP run.
+
+Slow gameplay samples after that pass still spent 35--47 ms in chunk
+rendering, including 6--9 ms preparing group bounds. Group bounds now use
+squared metric intervals: for center displacement d and box offset u,
+(d+u)'Q(d+u) = d'Qd + 2u'Qd + u'Qu. The resident VFPU computes the center
+term and an absolute linear bound; the existing box quadratic bound and
+outward roundoff margins complete the interval. No bound square roots are
+needed. Matching native/overflow lights share one interval. The runtime
+self-check verifies this kernel and preservation of M2; compiled checks
+verify the metric transform, absolute dot, doubling, interval subtraction/
+addition and scalar stores. Portable containment checks cover 27 box samples
+under 64 metrics with shear, nonuniform scale and reflections.
+
+Within a uniform group, a 32-slot source-index map reuses already validated
+spill colors directly, before probing the larger source cache or entering
+lighting code. UVs, geometry, source order and per-vertex normals remain
+authored; collisions verify the source index before reuse. A 24-vertex
+strip fixture verifies 21 such reuses with byte-identical output. Existing
+256-case renderer comparisons also exercise the scalar bound fallback.
+`perf_groups range_queries` and `reused_vertices` expose the new work counts;
+hardware frame-time improvement remains to be measured.
+
+The next slow room submits approximately 20,000 vertices / 10,000 triangles
+per frame, with 60--66 ms of chunk CPU time; audio scheduled runtime is
+about 2 ms. Uncached GPU groups now share their decoded AABB with a
+conservative viewport rejection test before light classification, overflow
+shading and packing. Local planes derive from the exact GE projection and
+model transform; a two-pixel guard and roundoff bounds based on uncombined
+transform terms protect viewport edges and depth-plane cancellation. No
+authored model radius is used, so deformation and reflected/nonuniform
+transforms are covered. Intersecting/uncertain groups and cached geometry
+retain GE clipping. `perf_cull` reports rejected groups, vertices and
+triangles; triangle accounting retains the original nondegenerate count.
+Portable tests exercise all six planes, edge/camera/near/far crossings,
+enclosing triangles, off-center inventory projection, stale model bounds,
+deformation and bright-light rejection before vertex lighting. The native
+GPU scene fixture enables this path and reports rejected geometry. Hardware
+CPU/FPS gains remain unverified until the next real PSP run.
+
+Cull validation uses an independent double-precision model/handedness/
+projection calculation for every source vertex of every rejected group,
+checking both full-float and GE float24-truncated matrix coefficients.
+Roundoff guards include GE matrix quantization and uncombined depth terms.
+The frozen native GPU scene fixture is entirely off-screen under its current
+projection, so its original GPU-submission/cache assertions run with culling
+disabled; a separate RECVX_GPU_CULL_CHECK run validates rejection decisions
+instead. The standard visible-geometry renderer fixtures retain their
+byte comparisons. Hardware GE whole-primitive rejection semantics were
+cross-checked against PPSSPP's primary implementation and hardware-probe
+notes: https://github.com/hrydgard/ppsspp/blob/master/GPU/Software/Clipper.cpp .
+
+Real PSP samples in the dense room still show about 65 ms of chunk work:
+roughly 16 ms of overflow lighting and 10 ms of group bounds. Off-screen
+rejection removes only about 1,000 of 10,000 triangles in this view, so it
+does not resolve the dominant visible workload. Nonpersistent overflow
+lighting now uses a direct evaluator without the generic eight-light
+metric/distance/dot response arrays and lazy flags. Final source-color
+caching and the original per-light rejection, transform, normalization,
+attenuation, RGB accumulation and quantization remain. Reusable responses
+retain the generic evaluator. The compiled direct evaluator uses a 96-byte
+stack frame versus 248 bytes for the generic path; hardware timing remains
+to be measured. Sixty-four direct/reference cases cover directional and
+point HDR overflow, near/far transitions, reflection, nonuniform scale and
+invalid normals, in addition to the existing 256 combined comparisons.
+
+The group XYZ min/max scan now uses the resident VFPU's scratch M6, with
+strided word loads that ignore normal/color/UV fields. M2--M5 remain intact.
+Startup self-checks include asymmetric 40-byte records with NaN padding
+and recheck the resident light matrix afterward. Compiled checks verify
+min/max register operands and stores; portable tests cover counts 0--70.
+Scalar scans remain available when resident VFPU checks are disabled/fail.
+`perf_cull fast_overflow_vertices` and `vfpu_bound_vertices` report use of
+these paths. No real-hardware FPS gain is claimed before the next log.
+
+The subsequent dense-room log shows about 59 ms of chunk work, bounds down
+to roughly 6 ms, and overflow lighting around 13 ms. Chunk decoding now
+checks whether two strips fit the joined group before decoding the first
+strip. A failed capacity probe previously decoded that strip speculatively
+and immediately decoded it again in the single-strip path. Declined strip
+callbacks now emit original triangles from their validated decoded array
+instead of decoding the source again. Source/normal coordinates are aligned
+integer bit copies; validation checks binary32 exponent bits directly,
+avoiding FPU comparisons and copy interlocks while still rejecting NaNs and
+infinities. Layout/binary32 static assertions guard these assumptions.
+
+Capacity-edge comparisons cover three strip types, signed lengths, per-face
+attributes, accepted and declined callbacks, original winding and exact UVs.
+Finite tests cover all six coordinate/normal fields in both vertex formats,
+including signed zeros, subnormals, largest finite values and NaN/infinity
+patterns. `perf_cull join_decode_saved` counts avoided speculative source
+decodes; `matrix_us` separately times normal-matrix setup for the next
+hardware investigation. No new hardware FPS claim is made.
+
+Native GE lighting is now the PSP default (`recvxGameBootRenderNativeLightingEnable`
+retains the prior path for comparison). Supported chunk materials submit
+ambient, directional, point, diffuse and specular lighting to GE with no CPU
+Lambert/attenuation/overflow evaluation, no per-vertex light masks or distance
+batches, and no light-response/packed-shader cache keys or snapshots. Native
+geometry still supports reflected/nonuniform models, material alpha, flat
+faces, and absent vertex normals. Face construction/corrected local normals
+are geometry preparation; GE evaluates the lighting and normalizes normals.
+
+GE has four unit-color light slots. The mapper retains a directional light
+and chooses the strongest point sources at the model origin if more than
+four sources are active. Spare slots duplicate HDR components; excess point
+brightness scales native quadratic attenuation, preserving its far inverse-
+square tail. Close-range overbright saturation, PS2 hard far cutoffs, source
+lights beyond the four-slot budget and PS2-specific specular ramps are
+adapted to GE behavior rather than evaluated on the CPU. These cases can
+look different. Native specular uses material tint/31-over-128 energy and a
+clamped shininess exponent; adapter tests verify specular light/material
+state and reset it for subsequent diffuse draws. Hardware lighting behavior
+was checked against the primary PPSSPP implementation:
+https://github.com/hrydgard/ppsspp/blob/master/GPU/Software/Lighting.cpp .
+
+Sixty-four native renderer cases cover seven lights, stable source selection,
+HDR, far boundaries, texture/specular materials, all four public draw modes,
+flat and missing normals, reflections, nonuniform scale, material alpha and
+changing lights. They assert no CPU shading, overflow or classification.
+The full-game fixture's RECVX_GPU_NATIVE_LIGHTING mode asserts these same
+CPU counters across sustained gameplay. `perf_native_lighting` reports native
+vertices, HDR sources and omitted lights. Startup prints the renderer build
+time so hardware logs can be matched to the actual loaded build. Real PSP
+frame-rate gains require a new hardware run.

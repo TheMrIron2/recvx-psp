@@ -13,12 +13,19 @@ def prepare(destination):
     output = ['/* Generated from original sources; keep gameplay/render branches intact. */',
               '#if defined(RECVX_ENGINE_GAME_CALLBACK_TEST) || defined(RECVX_ENGINE_PASSIVE_RENDER)',
               '#error "Game boot requires the complete original gameplay/render sequence"',
-              '#endif', headers]
+              '#endif', headers, '#include "psp/live_task_dispatch.h"']
     for path, names in [(game, ['bhMainSequence']),
                         (Path('src/ps2/veronica/prog/screen.c'),
                          ['bhControlScreenFade', 'bhControlCinesco'])]:
         for name in names:
             line, function = extract(path.read_text(), name)
+            if name == 'bhMainSequence':
+                stages = [('bhControlEnemy',0), ('bhControlPlayer',1), ('bhControlEffect',2),
+                          ('bhControlObjItm',3), ('bhControlCamera',4), ('bhControlLight',5),
+                          ('bhAllDrawModel',6), ('bhDrawSmallScreenRenderTexture',6),
+                          ('bhDrawFullScreenRenderTexture',6), ('bhEtcMirrorDrawModel',6)]
+                for call, stage in stages:
+                    function = function.replace(call+'();', f'RECVX_PROFILE_GAME({stage}, {call}());')
             output += [f'#line {line} "{path.as_posix()}"', function, '']
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text('\n'.join(output))

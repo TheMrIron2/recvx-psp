@@ -15,6 +15,9 @@
 typedef struct { float u, v; unsigned int color; float x, y, z; } SpriteVertex;
 typedef struct {
     int primitive, format, count, depth, cull, blend, alpha, textured, shade, fog;
+    int lighting,lights[4],clip;
+    unsigned int material,ambient;
+    float model[16];
     int wrap_u, wrap_v, filter_min, filter_mag, source, destination, operation;
     int target_format, depth_mask, depth_function, texture_format, texture_swizzle, texture_component,texture_function;
     int alpha_function, alpha_reference;
@@ -38,13 +41,23 @@ static uint32_t movie_surface[512*512] __attribute__((aligned(64)));
 
 static RecvxBootRenderVertex vertices[64] __attribute__((aligned(16)));
 static RecvxBootRenderBatch batches[32];
+static RecvxBootGpuVertex gpu_vertices[12] __attribute__((aligned(16)));
+static unsigned int gpu_material,gpu_ambient;
+static float model_matrix[16];
+static unsigned int light_colors[4],native_specular,light_specular[4];
+static int light_components[4];
+static float native_shininess;
+static float light_quadratic[4];
+static ScePspFVector3 light_positions[4];
 static RecvxBootRenderFrame frame;
 static RecvxBootDraw overlays[2];
 static size_t overlay_count;
 static RecvxBootTexture texture, wide;
 static unsigned char pixels[1024 * 32] __attribute__((aligned(16)));
 static unsigned char memory[32768] __attribute__((aligned(16)));
-static Submission submissions[64], ui_depth_submissions[64];
+static Submission submissions[4096], ui_depth_submissions[64];
+static int list_checks,force_check_limit,force_splits_next_frame;
+static unsigned int list_starts,list_syncs;
 static size_t ui_depth_count;
 static size_t submission_count, memory_used;
 static int enabled[32], list_active, finished, synchronized, consumed, cache_flushed;
@@ -98,14 +111,20 @@ void sceGuTerm(void) { terminated = 1; ++calls; }
 int sceGuStart(int mode, void *list)
 {
     assert(mode == GU_DIRECT && !((uintptr_t)list & 15u) && !list_active);
-    list_active = 1; finished = synchronized = 0; start_at = ++calls; return 0;
+    list_active = 1; finished = synchronized = 0; start_at = ++calls;list_checks=0;++list_starts;
+    draw_address=context_draw_address;return 0;
+}
+int sceGuCheckList(void)
+{
+    assert(list_active);
+    return force_check_limit&&++list_checks>=force_check_limit?1024*1024-4096:0;
 }
 int sceGuFinish(void)
 { assert(list_active); finished = 1; finish_at = ++calls; return 0; }
 int sceGuSync(int mode, int what)
 {
     assert(mode == 0 && what == 0 && finished && list_active);
-    list_active = 0; synchronized = 1; sync_at = ++calls; return 0;
+    list_active = 0; synchronized = 1; sync_at = ++calls;++list_syncs;return 0;
 }
 void sceGuCopyImage(int format,int sx,int sy,int width,int height,int stride,void *source,int dx,int dy,int dest_stride,void *destination)
 {
@@ -202,13 +221,30 @@ void sceGuClear(int flags)
     clears[clear_count].target=draw_address; clears[clear_count].color=clear_color;
     clears[clear_count++].at=++calls;
 }
+void sceGuLightMode(int mode){assert(mode==GU_SINGLE_COLOR);++calls;}
+static int color_material;
+void sceGuColorMaterial(int mode){assert(!mode||mode==GU_AMBIENT);color_material=mode;++calls;}
+void sceGuAmbient(unsigned int color){gpu_ambient=color;++calls;}
+void sceGuModelColor(unsigned int emissive,unsigned int ambient,unsigned int diffuse,unsigned int specular)
+{assert(!emissive&&ambient==diffuse);native_specular=specular;++calls;}
+void sceGuMaterial(int mode,int color){assert(mode==GU_AMBIENT);gpu_material=color;++calls;}
+void sceGuColor(unsigned int color){gpu_material=color;++calls;}
+void sceGuSpecular(float power){assert(isfinite(power)&&power>=1&&power<=128);native_shininess=power;++calls;}
+void sceGuLight(int i,int type,int components,const ScePspFVector3 *p)
+{assert(i>=0&&i<4&&(type==GU_DIRECTIONAL||type==GU_POINTLIGHT)&&(components==GU_DIFFUSE||components==GU_DIFFUSE_AND_SPECULAR));light_components[i]=components;light_positions[i]=*p;++calls;}
+void sceGuLightColor(int i,int components,unsigned int color)
+{assert(i>=0&&i<4);if(components==GU_DIFFUSE)light_colors[i]=color;else if(components==GU_SPECULAR)light_specular[i]=color;else assert(!color);++calls;}
+void sceGuLightAtt(int i,float constant,float linear,float quadratic)
+{assert(i>=0&&i<4&&!linear&&(constant==0||constant==1));light_quadratic[i]=quadratic;++calls;}
 void sceGumMatrixMode(int mode) { matrix_mode = mode; ++calls; }
 void sceGumLoadIdentity(void)
-{ assert(matrix_mode == GU_VIEW || matrix_mode == GU_MODEL); identities[matrix_mode] = 1; ++calls; }
+{ assert(matrix_mode == GU_VIEW || matrix_mode == GU_MODEL); identities[matrix_mode] = 1;
+  if(matrix_mode==GU_MODEL){memset(model_matrix,0,sizeof(model_matrix));for(int i=0;i<4;++i)model_matrix[i*5]=1;} ++calls; }
 void sceGumLoadMatrix(const ScePspFMatrix4 *matrix)
 {
-    assert(matrix_mode == GU_PROJECTION && matrix);
-    memcpy(projection, matrix, sizeof(projection)); matrix_loaded[matrix_mode] = 1; ++calls;
+    assert((matrix_mode == GU_PROJECTION || matrix_mode == GU_MODEL) && matrix);
+    memcpy(matrix_mode==GU_PROJECTION?projection:model_matrix,matrix,sizeof(projection));
+    identities[matrix_mode]=0;matrix_loaded[matrix_mode] = 1; ++calls;
 }
 static Submission *submission(int primitive, int format, int count, const void *indices, const void *data)
 {
@@ -225,6 +261,9 @@ static Submission *submission(int primitive, int format, int count, const void *
     s->alpha = enabled[GU_ALPHA_TEST]; s->textured = enabled[GU_TEXTURE_2D];
     s->fog=enabled[GU_FOG]; s->fog_near=fog_near; s->fog_far=fog_far; s->fog_color=fog_color;
     s->shade = shade_model;
+    s->clip=enabled[GU_CLIP_PLANES];s->lighting=enabled[GU_LIGHTING];s->material=gpu_material;s->ambient=gpu_ambient;
+    memcpy(s->model,model_matrix,sizeof(model_matrix));
+    for(int i=0;i<4;++i)s->lights[i]=enabled[GU_LIGHT0+i];
     s->wrap_u = wraps[0]; s->wrap_v = wraps[1]; s->filter_min = filters[0]; s->filter_mag = filters[1];
     s->source = blend_source; s->destination = blend_destination;
     s->alpha_function=alpha_func; s->alpha_reference=alpha_value; s->color_mask=color_mask;
@@ -242,7 +281,13 @@ static Submission *submission(int primitive, int format, int count, const void *
 void sceGumDrawArray(int primitive, int format, int count, const void *indices, const void *data)
 {
     submission(primitive, format, count, indices, data);
-    assert(matrix_loaded[GU_PROJECTION] && identities[GU_VIEW] && identities[GU_MODEL]);
+    assert(matrix_loaded[GU_PROJECTION] && identities[GU_VIEW]);
+    if(format==(GU_TEXTURE_32BITF|GU_COLOR_8888|GU_NORMAL_32BITF|GU_VERTEX_32BITF|GU_TRANSFORM_3D)){
+        assert((primitive==GU_TRIANGLES||primitive==GU_TRIANGLE_STRIP)&&matrix_loaded[GU_MODEL]);
+        assert((const RecvxBootGpuVertex *)data>=gpu_vertices&&(const RecvxBootGpuVertex *)data+count<=gpu_vertices+frame.gpu_vertex_count);
+        last_model_at=++calls;return;
+    }
+    assert(!enabled[GU_LIGHTING]);
     assert((primitive == GU_TRIANGLES || primitive == GU_LINES) && format ==
         (GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D));
     assert((const RecvxBootRenderVertex *)data >= vertices && (const RecvxBootRenderVertex *)data + count <= vertices + frame.vertex_count);
@@ -266,7 +311,7 @@ void sceGuDrawArray(int primitive, int format, int count, const void *indices, c
 
 static void reset_frame(void)
 {
-    recvxGameBootDisplayBeginFrame();
+    recvxGameBootDisplayBeginFrame();force_check_limit=force_splits_next_frame;force_splits_next_frame=0;
     memset(vertices, 0, sizeof(vertices)); memset(batches, 0, sizeof(batches)); memset(overlays, 0, sizeof(overlays));
     memset(submissions, 0, sizeof(submissions)); memset(&frame, 0, sizeof(frame));
     movie_pixels = NULL;
@@ -274,7 +319,7 @@ static void reset_frame(void)
     clear_count = texsync_at = texflush_at = clut_loads = 0;
     first_sprite_at = last_model_at = consume_at = 0;
     memset(matrix_loaded, 0, sizeof(matrix_loaded)); memset(identities, 0, sizeof(identities));
-    frame.vertices = vertices; frame.batches = batches;
+    frame.vertices = vertices; frame.batches = batches;frame.gpu_vertices=gpu_vertices;
     texture = (RecvxBootTexture){.pixels = pixels, .width = 64, .height = 32, .tile_width = 64, .tile_count = 1};
     wide = (RecvxBootTexture){.pixels = pixels, .width = 1024, .height = 32, .tile_width = 512, .tile_count = 2};
     for (unsigned int i = 0; i < 16; ++i) frame.projection[i] = i * 0.25f - 2;
@@ -399,10 +444,25 @@ static void inventory_preview_layers(void)
 static void empty_and_capacity(void)
 {
     reset_frame(); recvxGameBootPresent(); assert(consumed && !submission_count && !memory_used && clear_color == 0xff000000);
-    reset_frame(); frame.batch_count = 5000; expecting_fault = 1;
+    reset_frame(); frame.batch_count = 16385; expecting_fault = 1;
     if (!setjmp(fault)) { recvxGameBootPresent(); assert(!"expected GU capacity stop"); }
-    expecting_fault = 0; assert(strstr(fault_name, "command list exceeds capacity"));
+    expecting_fault = 0; assert(strstr(fault_name, "invalid original GU queue size"));
     assert(!consumed && !submission_count && !cache_flushed && !list_active);
+}
+
+static void segmented_frame(void)
+{
+    force_splits_next_frame=100;reset_frame();
+    size_t count=2000;RecvxBootRenderBatch *many=calloc(count,sizeof(*many));assert(many);
+    for(size_t i=0;i<count;++i)many[i]=(RecvxBootRenderBatch){.count=3};
+    frame.vertex_count=3;frame.batch_count=count;frame.batches=many;
+    unsigned int starts=list_starts,syncs=list_syncs;
+    RecvxBootGuStats before=recvxGameBootGuStats();
+    recvxGameBootPresent();
+    assert(submission_count==count&&consumed&&list_starts>starts+1&&list_syncs>syncs+1);
+    assert(recvxGameBootGuStats().list_splits>before.list_splits);
+    for(size_t i=0;i<count;++i)assert(submissions[i].target==context_draw_address&&submissions[i].target_format==GU_PSM_8888);
+    free(many);
 }
 
 static void blend_mappings(void)
@@ -688,9 +748,56 @@ static void specular_modulation(void)
     assert(clut_loads==1); /* RGB scale is independent of immutable texture bindings. */
 }
 
+static void native_specular_lighting(void)
+{
+    reset_frame();frame.gpu_vertex_count=3;frame.batch_count=1;
+    batches[0]=(RecvxBootRenderBatch){.gpu=1,.gpu_mask=1,.count=3,.gpu_state={
+        .lit=1,.native_lighting=1,.diffuse=0x80ffffff,.ambient=0xff102030,.specular=0xff3e3e3e,.shininess=17,.light_count=1,
+        .lights={{{0,0,1},0,0xff80c0ff,0}}}};
+    recvxGameBootPresent();assert(submission_count==1&&submissions[0].lighting);
+    assert(native_specular==0xff3e3e3e&&native_shininess==17&&color_material==0);
+    assert(light_components[0]==GU_DIFFUSE_AND_SPECULAR&&light_specular[0]==0xff80c0ff);
+    reset_frame();frame.gpu_vertex_count=3;frame.batch_count=1;
+    batches[0]=(RecvxBootRenderBatch){.gpu=1,.gpu_mask=1,.count=3,.gpu_state={.lit=1,.diffuse=~0u,.light_count=1}};
+    recvxGameBootPresent();assert(!native_specular&&!light_specular[0]&&light_components[0]==GU_DIFFUSE);
+}
+
+static void gpu_lighting_batches(void)
+{
+    reset_frame();frame.vertex_count=3;frame.gpu_vertex_count=6;frame.batch_count=3;
+    batches[0]=(RecvxBootRenderBatch){.gpu=1,.gpu_mask=3,.count=3,.gpu_state={
+        .lit=1,.light_count=2,.diffuse=0x80123456,.ambient=0xff102030,
+        .model={1,0,0,0,0,-1,0,0,0,0,-1,0,7,8,9,1},
+        .lights={{{0,0,1},0,0xff0000ff,0},{{1,2,3},0.04f,0xff00ff00,1}}}};
+    batches[1]=(RecvxBootRenderBatch){.count=3};
+    batches[2]=batches[0];batches[2].first=3;batches[2].gpu_state.lit=0;batches[2].gpu_strip=1;
+    recvxGameBootPresent();assert(submission_count==3);
+    assert(submissions[0].clip&&submissions[0].lighting&&submissions[0].lights[0]&&submissions[0].lights[1]);
+    assert(!submissions[0].lights[2]&&!submissions[0].lights[3]);
+    assert(submissions[0].material==0x80123456&&submissions[0].ambient==0xff102030);
+    assert(submissions[0].model[12]==7&&submissions[0].model[5]==-1);
+    assert(light_colors[0]==0xff0000ff&&light_colors[1]==0xff00ff00);
+    assert(fabsf(light_quadratic[1]-0.04f)<1e-6f&&light_positions[1].y==2);
+    assert(!submissions[1].lighting&&submissions[1].model[12]==0&&submissions[1].model[5]==1);
+    assert(!submissions[2].lighting&&submissions[2].pointer==gpu_vertices+3&&submissions[2].primitive==GU_TRIANGLE_STRIP);
+    assert(!enabled[GU_CLIP_PLANES]&&!enabled[GU_LIGHTING]&&identities[GU_MODEL]&&consumed);
+    reset_frame();frame.gpu_vertex_count=3;frame.batch_count=1;
+    batches[0]=(RecvxBootRenderBatch){.gpu=1,.count=3,.gpu_state={.lit=1,.vertex_ambient=1,.diffuse=0x80123456,.ambient=0xff102030}};
+    recvxGameBootPresent();assert(color_material==GU_AMBIENT&&submissions[0].ambient==~0u&&submissions[0].lighting);
+
+    reset_frame();frame.vertex_count=3;frame.batch_count=1;
+    batches[0]=(RecvxBootRenderBatch){.gpu=2,.count=3,.gpu_state={.model={1,0,0,0,0,-1,0,0,0,0,-1,0,5,0,0,1}}};
+    recvxGameBootPresent();assert(submission_count==1&&!submissions[0].lighting&&submissions[0].model[12]==5);
+
+    reset_frame();frame.gpu_vertex_count=3;frame.batch_count=1;
+    batches[0]=(RecvxBootRenderBatch){.gpu=1,.count=3,.gpu_state={.diffuse=~0u}};
+    recvxGameBootPresent();assert(submission_count==1&&clear_color==0xff332211u);
+}
+
 int main(void)
 {
-    display_init(); specular_modulation(); shared_texture_batches(); models_then_overlays(); blend_mappings(); authored_half_fog(); ordinary_depth_fog(); screen_gradient_triangles(); translucent_screen_depth(); shadow_protocol();
+    display_init(); gpu_lighting_batches();native_specular_lighting(); specular_modulation(); shared_texture_batches(); models_then_overlays(); blend_mappings(); authored_half_fog(); ordinary_depth_fog(); screen_gradient_triangles(); translucent_screen_depth(); shadow_protocol();
+    segmented_frame();force_splits_next_frame=2;shadow_protocol();
     reset_frame(); frame.vertex_count=3; frame.batch_count=1;
     batches[0]=(RecvxBootRenderBatch){.count=3,.texture=&texture,.kind=RECVX_RENDER_SCREEN_OFFSET,
         .attributes=0x1b,.blend_source=8,.blend_destination=6,.fog_color=0x102030,.scissor={0,0,480,272}};
