@@ -1147,3 +1147,52 @@ work about 47.5 ms; display intervals remained about 50.1 ms (~20 FPS).
 Geometry parsing/submission was about 25.3 ms and GE wait about 8.84 ms. All
 19,419 submitted vertices used the direct strip path. The direct skin change
 reduces work but does not yet cross the 33.3 ms deadline for 30 FPS.
+
+
+The next geometry pass combines direct-normal eligibility with the existing
+source finite-validation scan. Six source words are loaded once; unusual
+normal magnitudes retain the original squared-length decision. Zero normals
+only disable eligibility: later source vertices still undergo finite checks.
+The renderer consumes this per-parse proof instead of rescanning normals.
+`validate_us` now includes that eligibility work, so compare total parse/tick
+cost rather than treating that field alone as an identical workload.
+
+Direct strip writes now hoist source layout/color into a destination span,
+write the queue cursor once per strip and keep nonuniform normal correction
+on the original path. A successful raw probe supplies the material/sampler
+for its immediate submission, removing the repeated setup call. Raw-batch
+record arrays are populated before use instead of being fully zeroed for each
+header-only probe. Source/data checks remain live on every draw; there is no
+persistent geometry cache. Startup identifies `direct native strips v2`.
+Expanded tests cover normal-eligibility boundaries and late non-finite inputs,
+both vertex layouts, both UV formats, reflected/nonuniform strips and exact
+triangle expansion. Full native submission and independent culling checks
+pass across 1,201 gameplay frames. Hardware speedup remains to be measured.
+
+
+Room texture overflow backups no longer allocate a second full TIM2/pixel
+snapshot on the heap. They retain the existing source/pixel buffers, copying
+only bounded descriptor/name/palette metadata. Release detaches those buffers
+from reusable slots; restore reattaches them without decoding or allocating.
+Attached saves keep their live owner; abandoned detached saves free each unique
+allocation once. Alias names and menu textures with matching IDs/banks remain
+distinct owners. A checked arena token retains bump/rewind behavior. Saved
+list metadata can be restored even when menu data has reused its arena storage.
+Tests force malloc to fail during retained save/restore, track exact frees,
+exercise alias/slot reuse, palette edits, corrupted tokens, 260 repeated
+restores and shutdown/reset. Inline arena snapshots remain supported.
+
+The live-source registry also replaces its sixteen-read aging ring with sorted
+non-overlapping spans and binary lookup. Persistent system message text no
+longer loses its bounds after unrelated item/weapon reads. New overlapping
+reads split the existing spans and preserve untouched data on either side;
+they do not invalidate a complete expanded room when ADV reuses its middle.
+The first full-game check caught that complete-record invalidation would lose
+live polygon data, motivating the span split. This also addresses the missing
+source bounds behind the reported room 0/2 enemy/facial-record guard; real
+index/count/work-slot checks remain enforced, with added fault details.
+Regressions retain message text after 64 later loads and enemy/message views
+around an overlapping ADV-style read. File, message-controller, actor-event,
+texture ownership tests and full native gameplay pass. Startup identifies
+`resource ownership: retained room textures; split live source ranges`.
+Hardware confirmation of the reported stops remains pending.

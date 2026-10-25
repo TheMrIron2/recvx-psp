@@ -30,9 +30,17 @@ static int companion(const void *pointer)
 }
 static BH_PWORK *enemy(unsigned int index)
 {
+    size_t bytes=0;unsigned int work=UINT32_MAX;
+    if(sys&&rom&&rom->ene_n>=0&&index<(unsigned int)rom->ene_n&&rom->enep){
+        bytes=recvxGameBootSourceRemaining(&rom->enep[index]);
+        if(bytes>=sizeof(*rom->enep))work=rom->enep[index].wrk_no;
+    }
     if(!sys||!rom||rom->ene_n<0||index>=(unsigned int)rom->ene_n||!rom->enep||
-        recvxGameBootSourceRemaining(&rom->enep[index])<sizeof(*rom->enep)||rom->enep[index].wrk_no>=128)
+        bytes<sizeof(*rom->enep)||work>=128){
+        recvxGameBootLog("facial event enemy rejected: index=%u count=%d table=%p bytes=%u work=%u",
+            index,rom?rom->ene_n:-1,rom?(void *)rom->enep:NULL,(unsigned int)bytes,work);
         recvxGameBootUnsupported("invalid facial event enemy record");
+    }
     return &ene[rom->enep[index].wrk_no];
 }
 static void context(BH_PWORK *work)

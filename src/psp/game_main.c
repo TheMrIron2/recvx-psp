@@ -73,7 +73,8 @@ int main(int argc, char **argv)
         recvxGameBootMovieShutdown();
         recvxAudioOutputShutdown();
     } else {
-        recvxGameBootLog("render build=%s %s native GE lighting; direct native strips v1; direct skin v1; strip_join=%u",__DATE__,__TIME__,RECVX_GAME_CHUNK_JOIN_MAX);
+        recvxGameBootLog("render build=%s %s native GE lighting; direct native strips v2; direct skin v1; strip_join=%u",__DATE__,__TIME__,RECVX_GAME_CHUNK_JOIN_MAX);
+        recvxGameBootLog("resource ownership: retained room textures; split live source ranges");
         recvxGameBootLog("main thread attributes=%08x; VFPU enabled", (unsigned int)main_thread.attr);
         recvxGameBootLog("clocks cpu_mhz=%d bus_mhz=%d request=%08x",
             scePowerGetCpuClockFrequencyInt(),scePowerGetBusClockFrequencyInt(),(unsigned int)clock_result);

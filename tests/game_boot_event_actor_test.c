@@ -31,6 +31,7 @@ void bhEne11_LightControl(BH_PWORK *work,int flag)
 static jmp_buf fault_jump;
 static int rejecting;
 static char reason[192];
+void recvxGameBootLog(const char *format, ...) { (void)format; }
 
 unsigned int (*bhScenarioJmpT[256])(void)={
     [0]=bhEnd,[52]=bhObjLinkSetPly,[56]=bhFrameCheck,[252]=bhWhile,[243]=bhEwhile2,[254]=bhEvtNext,[43]=bhMotionPauseSet,[60]=bhMaskSet,[62]=bhMaskStart,

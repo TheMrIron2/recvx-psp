@@ -4,11 +4,13 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import mkiso
 from tools.psp_afs import read_afs_index, read_afs_entry
+from tools.prepare_psp_rooms import prepare as prepare_rooms, write_verified
 
 
 def prepare(iso_path, output):
@@ -24,7 +26,9 @@ def prepare(iso_path, output):
         # archive rather than the opening-room-only resource selection.
         for name, partition, entries in [('SYSTEM', 6, None),
                                         ('BGM1', 0, None), ('VOICE1', 1, None), ('MULTSPQ1', 2, None),
-                                        ('ADV', 3, None), ('ITEM1', 4, None), ('MRY', 5, None)]:
+                                        ('ADV', 3, None), ('ITEM1', 4, None), ('MRY', 5, None),
+                                        ('BGM2', None, None), ('VOICE2', None, None),
+                                        ('MULTSPQ2', None, None), ('ITEM2', None, None)]:
             source = files[name + '.AFS']
             archive = read_afs_index(iso, source.lba, source.size)
             for entry in range(len(archive.entries)) if entries is None else entries:
@@ -34,10 +38,14 @@ def prepare(iso_path, output):
                 path = Path('archives') / name / f'{entry}.bin'
                 target = output / path
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(data)
-                manifest['files'].append({'path': path.as_posix(), 'partition': partition,
-                    'entry': entry, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
-        for name in ['SYSMES.ALD', 'COMMON.MLT', 'MULTSPQ1.IDX']:
+                write_verified(target, data)
+                record = {'path': path.as_posix(), 'archive': name,
+                    'entry': entry, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+                if partition is not None:
+                    record['partition'] = partition
+                manifest['files'].append(record)
+        for name in ['SYSMES.ALD', 'COMMON.MLT', 'MULTSPQ1.IDX', 'MULTSPQ2.IDX',
+                     'SYSEFF.ALD', 'DISCID.BIN', 'BIO_CV.ICO', 'MANATEE.DRV']:
             source = files[name]
             iso.seek(source.lba)
             data = iso.read(source.size)
@@ -45,10 +53,14 @@ def prepare(iso_path, output):
                 raise ValueError(f'short {name} read')
             path = Path('files') / name
             (output / path).parent.mkdir(parents=True, exist_ok=True)
-            (output / path).write_bytes(data)
+            write_verified(output / path, data)
             manifest['files'].append({'path': path.as_posix(), 'size': len(data),
                                      'sha256': hashlib.sha256(data).hexdigest()})
-    (output / 'boot-assets.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    rooms = prepare_rooms(iso_path, output)
+    manifest['files'].extend(rooms)
+    manifest['room_count'] = len(rooms)
+    manifest['archive_count'] = 11
+    write_verified(output / 'boot-assets.json', (json.dumps(manifest, indent=2) + '\n').encode())
     print(f'Packaged {len(manifest["files"])} original boot resources to {output}')
     from tools.prepare_psp_audio import prepare as prepare_audio
     prepare_audio(output)
@@ -61,5 +73,5 @@ if __name__ == '__main__':
     args = parser.parse_args()
     try:
         prepare(args.iso, args.output)
-    except (OSError, ValueError, KeyError) as error:
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         parser.exit(1, f'Boot asset preparation failed: {error}\n')

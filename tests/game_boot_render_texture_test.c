@@ -14,6 +14,24 @@
 #include "ps2/veronica/prog/ps2_dummy.h"
 #include "ps2/veronica/prog/ps2_texture.h"
 
+static unsigned int blocked_allocations;
+static int allocation_blocked;
+static void *watched_source,*watched_pixels;
+static unsigned int source_frees,pixel_frees;
+void __real_free(void *pointer);
+void __wrap_free(void *pointer)
+{
+    if(pointer&&pointer==watched_source)++source_frees;
+    if(pointer&&pointer==watched_pixels)++pixel_frees;
+    __real_free(pointer);
+}
+void *__real_malloc(size_t bytes);
+void *__wrap_malloc(size_t bytes)
+{
+    if(allocation_blocked){++blocked_allocations;return NULL;}
+    return __real_malloc(bytes);
+}
+
 static SYS_WORK work;
 SYS_WORK *sys = &work;
 unsigned char *freemem;
@@ -147,15 +165,27 @@ static void room_texture_backup(int limited_arena)
        The spill buffer must leave that live list intact. */
     NJS_TEXLIST *embedded = (NJS_TEXLIST *)(void *)(arena + 256);
     memcpy(embedded, &list, sizeof(list));
+    const unsigned char *retained_source=recvxGameBootTextureGet(&list,0)->source;
+    const unsigned char *retained_pixels=recvxGameBootTextureGet(&list,0)->pixels;
+    allocation_blocked=1;
     char *spill_end = bhCopyTexmem2MainmemSub(embedded, (char *)sys->memp);
     assert(spill_end > (char *)sys->memp && spill_end <= (char *)embedded);
     assert(embedded->textures == names && embedded->nbTexture == 2);
+    /* The following menu allocation may reuse this transient list storage. */
+    memset(embedded,0,sizeof(*embedded));
     bhCopyMainmem2Texmem(embedded);
+    assert(embedded->textures==names&&embedded->nbTexture==2);
+    allocation_blocked=0;assert(!blocked_allocations);
+    assert(recvxGameBootTextureGet(&list,0)->source==retained_source);
+    assert(recvxGameBootTextureGet(&list,0)->pixels==retained_pixels);
     REJECT(bhCopyTexmem2MainmemSub(embedded, (char *)embedded), "overlaps list");
+    allocation_blocked=limited_arena;
     char *end = bhCopyTexmem2MainmemSub(&list, (char *)sys->memp);
+    allocation_blocked=0;assert(!blocked_allocations);
     assert(end > (char *)sys->memp && end <= (char *)sys->endp && sys->memp == arena + 3);
     REJECT(bhCopyTexmem2MainmemSub(&list, (char *)sys->endp - 1), "backup exceeds");
     REJECT(bhCopyMainmem2Texmem(&wrong), "mismatched");
+    for(unsigned int i=0;i<2;++i)((RecvxBootTexture *)recvxGameBootTextureGet(&list,i))->palette[2]=0;
     njReleaseTexture(&list);
     size_t size;
     unsigned char *data = texture_data(16, 4, &size);
@@ -163,7 +193,13 @@ static void room_texture_backup(int limited_arena)
     const RecvxBootTexture *menu_texture = recvxGameBootTextureGet(&menu, 0);
     unsigned int before = presents;
     render_pending = 1;
+    allocation_blocked=limited_arena;
     bhCopyMainmem2Texmem(&list);
+    allocation_blocked=0;assert(!blocked_allocations);
+    if(limited_arena){
+        assert(recvxGameBootTextureGet(&list,0)->source==retained_source);
+        assert(recvxGameBootTextureGet(&list,0)->pixels==retained_pixels);
+    }
     assert(presents == before + 1 && !render_pending);
     assert(recvxGameBootTextureGet(&menu, 0) == menu_texture && menu_texture->pixels[0] == 2);
     for (unsigned int i = 0; i < 2; ++i) {
@@ -177,10 +213,12 @@ static void room_texture_backup(int limited_arena)
     REJECT(bhCopyMainmem2Texmem(&list), "mismatched");
     /* A restore without release must replace the live copies without leaking
        slots, while repeated saves replace the retail single backup. */
+    allocation_blocked=limited_arena;
     for (unsigned int i = 0; i < 260; ++i) {
         bhCopyTexmem2MainmemSub(&list, (char *)sys->memp);
         bhCopyMainmem2Texmem(&list);
     }
+    allocation_blocked=0;assert(!blocked_allocations);
     bhCopyTexmem2MainmemSub(&list, (char *)sys->memp);
     unsigned char saved = sys->memp[0]; sys->memp[0] ^= 1;
     REJECT(bhCopyMainmem2Texmem(&list), "backup record");
@@ -201,6 +239,47 @@ static void room_texture_backup(int limited_arena)
     assert(bhCopyTexmem2MainmemSub(&empty, (char *)sys->endp) == (char *)sys->endp);
     bhCopyMainmem2Texmem(&empty);
     Init_PS2_SAVE_TEX(); freemem = NULL; sys->endp = NULL;
+}
+
+static void retained_backup_ownership(void)
+{
+    static unsigned char arena[64];
+    NJS_TEXNAME names[2]={{0}},menu_name={0};
+    NJS_TEXLIST list={names,2},menu={&menu_name,1};
+    freemem=arena;sys->endp=arena+sizeof(arena);
+    size_t bytes;unsigned char *data=texture_data(16,4,&bytes);
+    recvxGameBootTextureInstall(&list,0,data,bytes,0,700,2,3);free(data);
+    names[1]=names[0];
+    const RecvxBootTexture *original=recvxGameBootTextureGet(&list,0);
+    watched_source=original->source;watched_pixels=original->pixels;
+    source_frees=pixel_frees=0;
+    allocation_blocked=1;
+    bhCopyTexmem2MainmemSub(&list,(char *)arena);
+    njReleaseTexture(&list);
+    assert(!source_frees&&!pixel_frees&&!blocked_allocations);
+    allocation_blocked=0;
+    data=texture_data(16,4,&bytes);
+    /* Even matching global IDs/banks do not make the menu own the saved buffers. */
+    recvxGameBootTextureInstall(&menu,0,data,bytes,0,700,2,3);free(data);
+    const RecvxBootTexture *menu_texture=recvxGameBootTextureGet(&menu,0);
+    allocation_blocked=1;
+    bhCopyMainmem2Texmem(&list);
+    assert(!source_frees&&!pixel_frees&&!blocked_allocations);
+    assert(names[0].texaddr==names[1].texaddr);
+    assert(recvxGameBootTextureGet(&list,0)->source==watched_source);
+    assert(recvxGameBootTextureGet(&menu,0)==menu_texture);
+    /* Replacing an attached save keeps its live owner; abandoning a detached
+       save frees each unique allocation exactly once, including aliased names. */
+    bhCopyTexmem2MainmemSub(&list,(char *)arena);
+    bhCopyTexmem2MainmemSub(&list,(char *)arena);
+    assert(!source_frees&&!pixel_frees);
+    njReleaseTextureAll();
+    assert(!source_frees&&!pixel_frees);
+    Init_PS2_SAVE_TEX();
+    assert(source_frees==1&&pixel_frees==1&&!blocked_allocations);
+    Init_PS2_SAVE_TEX();assert(source_frees==1&&pixel_frees==1);
+    allocation_blocked=0;watched_source=watched_pixels=NULL;
+    recvxGameBootTexturesShutdown();freemem=NULL;sys->endp=NULL;
 }
 
 static void original_render_controls(void)
@@ -347,7 +426,7 @@ static void mixed_ui_depths(void)
 
 int main(void)
 {
-    texture_resolution(); room_texture_backup(0); room_texture_backup(1); original_render_controls(); sampler_bits(); queued_palette_changes(); texture_collection();mixed_ui_depths();
+    texture_resolution(); room_texture_backup(0); room_texture_backup(1); retained_backup_ownership(); original_render_controls(); sampler_bits(); queued_palette_changes(); texture_collection();mixed_ui_depths();
     puts("PASS: owned TIM2 materials, room texture arena save/restore with live palettes/pixels, repeated restore and slot reuse, wide tiles, released/missing descriptors, queued palette snapshots, texture collection preserves live handles and synchronizes queued users, retail capacity, render controls and sampler bits");
     return 0;
 }

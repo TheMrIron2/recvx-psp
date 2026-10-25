@@ -162,11 +162,12 @@ def prepare(args):
     args.output.mkdir(parents=True, exist_ok=True)
     room_directory = args.output / "rooms"
     room_directory.mkdir(exist_ok=True)
-    for old_file in room_directory.iterdir():
+    for old_file in (() if args.keep_other_rooms else room_directory.iterdir()):
         if old_file.suffix in (".rdx", ".meta") and re.fullmatch(r"RM_\d{4}", old_file.stem):
             if old_file.stem not in {name[:7] for name in selected}:
                 old_file.unlink()
-    (args.output / "rooms.txt").write_text("".join(f"{name}\n" for name in selected))
+    if not args.keep_other_rooms or not (args.output / "rooms.txt").exists():
+        (args.output / "rooms.txt").write_text("".join(f"{name}\n" for name in selected))
     for name in selected:
         packed, metadata, record = prepared[name]
         stem = name[:7]
@@ -194,6 +195,8 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--host-cc", default="cc")
     parser.add_argument("--validate-all", action="store_true")
+    parser.add_argument("--keep-other-rooms", action="store_true",
+                        help="preserve the complete game room package and index")
     try:
         prepare(parser.parse_args())
     except (OSError, ValueError, AssertionError, struct.error, subprocess.CalledProcessError) as error:

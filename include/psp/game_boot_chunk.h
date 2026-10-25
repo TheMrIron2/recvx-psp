@@ -42,6 +42,7 @@ int recvxGameBootChunkParseJoinedStrips(const NJS_CNK_MODEL *model,RecvxGameChun
 typedef struct RecvxGameChunkSource {
     const unsigned char *data;
     unsigned int first,count,stride,normal;
+    unsigned int normals_valid; /* Direct-path eligibility from source validation. */
 } RecvxGameChunkSource;
 typedef struct RecvxGameChunkRawStrip {
     const unsigned char *data;

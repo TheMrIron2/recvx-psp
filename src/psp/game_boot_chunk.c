@@ -44,7 +44,7 @@ static unsigned int chunk_u16(const unsigned char *p)
 }
 static unsigned int chunk_u32(const unsigned char *p)
 { return p[0] | ((unsigned int)p[1] << 8) | ((unsigned int)p[2] << 16) | ((unsigned int)p[3] << 24); }
-static int finite_word(const unsigned char *p)
+static uint32_t vertex_word(const unsigned char *p)
 {
     uint32_t bits;
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -52,7 +52,7 @@ static int finite_word(const unsigned char *p)
 #else
     bits=chunk_u32(p);
 #endif
-    return (bits&0x7f800000u)!=0x7f800000u;
+    return bits;
 }
 static inline float f32(const unsigned char *p)
 {
@@ -154,7 +154,7 @@ void npSetOffsetUV(NJS_CNK_MODEL *model, short offu, short offv)
 
 typedef RecvxGameChunkSource VertexSource;
 
-static int vertices(const NJS_CNK_MODEL *model, VertexSource *source)
+static int vertices(const NJS_CNK_MODEL *model, VertexSource *source,int check_normals)
 {
     const unsigned char *p = (const unsigned char *)model->vlist;
     size_t size = remaining(p, 4), header, bytes;
@@ -169,12 +169,23 @@ static int vertices(const NJS_CNK_MODEL *model, VertexSource *source)
     if (!source->count || source->first + source->count > 65536u || bytes > size ||
         (size_t)chunk_u16(p + 2) * 4u + 4u != bytes)
         return fail("invalid chunk vertex extent", -1);
-    source->data = p + header;
+    source->data = p + header;source->normals_valid=!!check_normals;
     for (unsigned int i = 0; i < source->count; ++i) {
         const unsigned char *v = source->data + i * source->stride;
-        for (unsigned int a = 0; a < 3; ++a)
-            if (!finite_word(v + a * 4) || !finite_word(v + source->normal + a * 4))
-                return fail("invalid chunk vertex or normal", -1);
+        const unsigned char *n = v + source->normal;
+        uint32_t x=vertex_word(v),y=vertex_word(v+4),z=vertex_word(v+8);
+        uint32_t nx=vertex_word(n),ny=vertex_word(n+4),nz=vertex_word(n+8);
+        if((x&0x7f800000u)==0x7f800000u||(y&0x7f800000u)==0x7f800000u||(z&0x7f800000u)==0x7f800000u||
+           (nx&0x7f800000u)==0x7f800000u||(ny&0x7f800000u)==0x7f800000u||(nz&0x7f800000u)==0x7f800000u)
+            return fail("invalid chunk vertex or normal", -1);
+        if(source->normals_valid){
+            nx&=0x7fffffffu;ny&=0x7fffffffu;nz&=0x7fffffffu;
+            uint32_t largest=nx>ny?nx:ny;if(nz>largest)largest=nz;
+            if(largest<0x3e800000u||largest>0x40000000u){
+                float a=f32(n),b=f32(n+4),c=f32(n+8),length=a*a+b*b+c*c;
+                if(!isfinite(length)||length<1e-20f)source->normals_valid=0;
+            }
+        }
     }
     return 0;
 }
@@ -273,7 +284,11 @@ static int raw_strips(const VertexSource *source,const unsigned char **cursor,co
     unsigned int *remaining_strips,unsigned int type,unsigned int attributes,unsigned int *triangle_count,
     RecvxGameChunkEmitRaw raw,void *context,const RecvxGameChunkMaterial *material)
 {
-    RecvxGameChunkRawBatch batch={.source=source,.type=type,.attributes=attributes};
+    /* The probe may only inspect the header; records are filled before use.
+       Avoid clearing the entire record array for each batch. */
+    RecvxGameChunkRawBatch batch;
+    batch.source=source;batch.type=type;batch.attributes=attributes;
+    batch.count=batch.triangles=batch.vertices=0;
     int result=raw(context,material,&batch);
     if(result<=0)return result<0?fail("chunk raw sink rejected geometry",-1):0;
     const unsigned char *scan=*cursor;
@@ -326,7 +341,7 @@ static int parse_strips(const NJS_CNK_MODEL *model, RecvxGameChunkEmit emit, Rec
 #if defined(__PSP__) && defined(__mips__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
     unsigned int validation_started=sceKernelGetSystemTimeLow();
 #endif
-    if ((result = vertices(model, &source))) return result;
+    if ((result = vertices(model, &source,raw!=NULL))) return result;
 #if defined(__PSP__) && defined(__mips__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
     chunk_stats.validation_us+=sceKernelGetSystemTimeLow()-validation_started;
     chunk_stats.source_vertices+=source.count;

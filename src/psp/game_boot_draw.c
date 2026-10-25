@@ -85,11 +85,20 @@ void njPrintC(Int location, const char *string)
    their owned copies must survive the menu's release/reuse of texture slots. */
 static struct {
     NJS_TEXLIST *list;
+    NJS_TEXNAME *original_names;
     unsigned char *first;
     size_t bytes, arena_bytes;
-    unsigned char *heap;
-    unsigned int count;
+    unsigned int count,retained,records;
+    unsigned short name_record[TEXTURE_LIMIT];
+    NJS_TEXNAME names[TEXTURE_LIMIT];
 } texture_save;
+/* Bounded metadata only: pixel/source allocations stay with their owner until
+   release, then the active save owns them until restore or reset. */
+static struct {
+    RecvxBootTexture texture;
+    NJS_TEXMEMLIST descriptor;
+    unsigned int detached;
+} retained_textures[TEXTURE_LIMIT];
 typedef struct {
     uint32_t magic, bytes, count, reserved;
 } SavedTextureToken;
@@ -103,8 +112,22 @@ static unsigned int descriptor_slot(NJS_TEXMEMLIST *descriptor);
 
 void Init_PS2_SAVE_TEX(void)
 {
-    free(texture_save.heap);
+    for(unsigned int i=0;i<texture_save.records;++i)
+        if(retained_textures[i].detached)recvxBootTextureFree(&retained_textures[i].texture);
     memset(&texture_save, 0, sizeof(texture_save));
+}
+
+static void release_texture_slot(unsigned int slot)
+{
+    if(texture_save.retained&&textures[slot].source){
+        for(unsigned int i=0;i<texture_save.records;++i)
+            if(retained_textures[i].texture.source==textures[slot].source){
+                retained_textures[i].detached=1;
+                memset(&textures[slot],0,sizeof(textures[slot]));
+                return;
+            }
+    }
+    recvxBootTextureFree(&textures[slot]);
 }
 
 static int texture_arena(const void *pointer, size_t bytes)
@@ -134,7 +157,7 @@ char *bhCopyTexmem2MainmemSub(NJS_TEXLIST *list, char *destination)
     }
     /* Retail only stores VRAM-sized pixels here. PSP also preserves the TIM2
        source, expanded pixels and palette, which can cross the live room list
-       or the arena end. Keep oversized snapshots outside the original arena;
+       or the arena end. Retain existing buffers for oversized snapshots;
        a small checked token still participates in the caller's bump/rewind. */
     int external = !texture_arena(destination, bytes) ||
         texture_overlap(destination, bytes, list, sizeof(*list)) ||
@@ -144,10 +167,36 @@ char *bhCopyTexmem2MainmemSub(NJS_TEXLIST *list, char *destination)
         texture_overlap(destination, arena_bytes, list, sizeof(*list)) ||
         texture_overlap(destination, arena_bytes, list->textures, list->nbTexture * sizeof(*list->textures)))
         recvxGameBootUnsupported("room texture backup exceeds original arena or overlaps list");
-    unsigned char *heap = external ? malloc(bytes) : NULL;
-    if (external && !heap)
-        recvxGameBootUnsupported("room texture backup allocation failed");
-    unsigned char *cursor = external ? heap : (unsigned char *)destination;
+    if(external){
+        /* Validation above must leave an earlier save usable on failure.
+           Discard it only after proving the new token/list/texture bounds. */
+        Init_PS2_SAVE_TEX();
+        for(unsigned int i=0;i<list->nbTexture;++i){
+            const RecvxBootTexture *texture=recvxGameBootTextureGet(list,i);
+            NJS_TEXMEMLIST *descriptor=(NJS_TEXMEMLIST *)(uintptr_t)list->textures[i].texaddr;
+            unsigned int record=0;
+            for(;record<texture_save.records;++record)
+                if(retained_textures[record].texture.source==texture->source)break;
+            if(record==texture_save.records){
+                retained_textures[record].texture=*texture;
+                retained_textures[record].descriptor=*descriptor;
+                retained_textures[record].detached=0;++texture_save.records;
+            }
+            texture_save.name_record[i]=(unsigned short)record;
+            texture_save.names[i]=list->textures[i];
+        }
+        texture_save.list=list;texture_save.first=(unsigned char *)destination;
+        texture_save.bytes=bytes;texture_save.arena_bytes=arena_bytes;
+        texture_save.count=list->nbTexture;texture_save.retained=1;
+        texture_save.original_names=list->textures;
+        SavedTextureToken token={SAVED_TEXTURE_MAGIC,(uint32_t)bytes,list->nbTexture,1};
+        memcpy(destination,&token,sizeof(token));
+        recvxGameBootLog("room texture backup: retained textures=%u payload_bytes=%u arena=%u",
+            texture_save.records,(unsigned int)bytes,(unsigned int)arena_bytes);
+        if(list->nbTexture)njSetTexture(list);
+        return destination+arena_bytes;
+    }
+    unsigned char *cursor = (unsigned char *)destination;
     for (unsigned int i = 0; i < list->nbTexture; ++i) {
         const RecvxBootTexture *texture = recvxGameBootTextureGet(list, i);
         NJS_TEXMEMLIST *descriptor = (NJS_TEXMEMLIST *)(uintptr_t)list->textures[i].texaddr;
@@ -161,34 +210,68 @@ char *bhCopyTexmem2MainmemSub(NJS_TEXLIST *list, char *destination)
         memcpy(cursor, texture->source, record.source_bytes); cursor += record.source_bytes;
         memcpy(cursor, texture->pixels, record.pixel_bytes); cursor += record.pixel_bytes;
     }
-    if (external) {
-        SavedTextureToken token = {SAVED_TEXTURE_MAGIC, (uint32_t)bytes, list->nbTexture, 0};
-        memcpy(destination, &token, sizeof(token));
-        recvxGameBootLog("room texture backup: external bytes=%u arena=%u",
-            (unsigned int)bytes, (unsigned int)arena_bytes);
-    }
     Init_PS2_SAVE_TEX();
     texture_save.list = list; texture_save.first = (unsigned char *)destination;
     texture_save.bytes = bytes; texture_save.arena_bytes = arena_bytes;
-    texture_save.heap = heap; texture_save.count = list->nbTexture;
+    texture_save.count = list->nbTexture;
     if (list->nbTexture) njSetTexture(list);
     return destination + arena_bytes;
 }
 
+static void restore_retained_textures(NJS_TEXLIST *list)
+{
+    unsigned int slots[TEXTURE_LIMIT];
+    /* Reserve every destination before changing bindings. Restoring must not
+       free an unrelated menu allocation that reused an old descriptor slot. */
+    for(unsigned int i=0;i<texture_save.records;++i){
+        const RecvxBootTexture *saved=&retained_textures[i].texture;
+        if(!saved->source||!saved->pixels||!saved->width||!saved->height)
+            recvxGameBootUnsupported("invalid retained room texture backup record");
+        unsigned int slot=0;
+        for(;slot<TEXTURE_LIMIT;++slot)
+            if(textures[slot].source==saved->source&&textures[slot].pixels==saved->pixels)break;
+        if(slot==TEXTURE_LIMIT){
+            for(slot=0;slot<TEXTURE_LIMIT;++slot){
+                if(textures[slot].source)continue;
+                unsigned int previous=0;
+                for(;previous<i&&slots[previous]!=slot;++previous){}
+                if(previous==i)break;
+            }
+        }
+        if(slot==TEXTURE_LIMIT)recvxGameBootUnsupported("room texture restore exceeds backend capacity");
+        slots[i]=slot;
+    }
+    if(draw_count||recvxGameBootRenderPending())recvxGameBootPresent();
+    for(unsigned int i=0;i<texture_save.records;++i){
+        textures[slots[i]]=retained_textures[i].texture;
+        descriptors[slots[i]]=retained_textures[i].descriptor;
+        retained_textures[i].detached=0;
+    }
+    list->textures=texture_save.original_names;list->nbTexture=texture_save.count;
+    for(unsigned int i=0;i<list->nbTexture;++i){
+        list->textures[i]=texture_save.names[i];
+        list->textures[i].texaddr=(Uint32)(uintptr_t)&descriptors[slots[texture_save.name_record[i]]];
+    }
+    Init_PS2_SAVE_TEX();
+    if(list->nbTexture)njSetTexture(list);
+}
+
 void bhCopyMainmem2Texmem(NJS_TEXLIST *list)
 {
-    if (!list || texture_save.list != list || list->nbTexture != texture_save.count ||
-        list->nbTexture > TEXTURE_LIMIT || (list->nbTexture && !list->textures) ||
+    if (!list || texture_save.list != list ||
+        (!texture_save.retained&&(list->nbTexture != texture_save.count ||
+        list->nbTexture > TEXTURE_LIMIT || (list->nbTexture && !list->textures))) ||
         !texture_arena(texture_save.first, texture_save.arena_bytes))
         recvxGameBootUnsupported("missing or mismatched room texture backup");
-    if (texture_save.heap) {
+    if (texture_save.retained) {
         SavedTextureToken token, expected = {SAVED_TEXTURE_MAGIC,
-            (uint32_t)texture_save.bytes, texture_save.count, 0};
+            (uint32_t)texture_save.bytes, texture_save.count, 1};
         memcpy(&token, texture_save.first, sizeof(token));
         if (memcmp(&token, &expected, sizeof(token)))
             recvxGameBootUnsupported("invalid room texture backup record token");
+        restore_retained_textures(list);return;
     }
-    const unsigned char *saved = texture_save.heap ? texture_save.heap : texture_save.first;
+    const unsigned char *saved = texture_save.first;
     size_t offset = 0;
     /* Validate the entire saved span before releasing any live texture. */
     for (unsigned int i = 0; i < list->nbTexture; ++i) {
@@ -218,7 +301,7 @@ void bhCopyMainmem2Texmem(NJS_TEXLIST *list)
             unsigned int slot = (unsigned int)((address - first) / sizeof(*descriptors));
             if (textures[slot].source && descriptors[slot].globalIndex == record.global_index &&
                 descriptors[slot].bank == record.bank) {
-                recvxBootTextureFree(&textures[slot]);
+                release_texture_slot(slot);
                 memset(&descriptors[slot], 0, sizeof(descriptors[slot]));
             }
         }
@@ -399,7 +482,7 @@ Sint32 njReleaseTexture(NJS_TEXLIST *list)
         unsigned int slot = descriptor_slot((NJS_TEXMEMLIST *)(uintptr_t)list->textures[i].texaddr);
         /* Draws queued earlier this tick must finish before release. */
         if (draw_count || recvxGameBootRenderPending()) recvxGameBootPresent();
-        recvxBootTextureFree(&textures[slot]);
+        release_texture_slot(slot);
         memset(&descriptors[slot], 0, sizeof(descriptors[slot]));
         list->textures[i].texaddr = 0;
     }
@@ -410,7 +493,7 @@ void njReleaseTextureAll(void)
 {
     unsigned int i;
     if (draw_count || recvxGameBootRenderPending()) recvxGameBootPresent();
-    for (i = 0; i < TEXTURE_LIMIT; ++i) recvxBootTextureFree(&textures[i]);
+    for (i = 0; i < TEXTURE_LIMIT; ++i) release_texture_slot(i);
     memset(descriptors, 0, sizeof(descriptors)); current_list = NULL;
     Ps2_current_texmemlist = NULL;
     recvxGameBootRenderTextureList(NULL);
@@ -434,7 +517,7 @@ void njGarbageTexture(NJS_TEXMEMLIST *list, Uint32 count)
     if (draw_count || recvxGameBootRenderPending()) recvxGameBootPresent();
     for (unsigned int slot = 0; slot < TEXTURE_LIMIT; ++slot) {
         if (!textures[slot].source) {
-            recvxBootTextureFree(&textures[slot]);
+            release_texture_slot(slot);
             if (Ps2_current_texmemlist == &descriptors[slot]) {
                 Ps2_current_texmemlist = NULL;
                 recvxGameBootRenderTextureSelected(NULL);

@@ -450,10 +450,21 @@ static void compare_native_strip(const RecvxBootRenderFrame *f,const RecvxBootGp
 
 /* Independently expand GE strips, omitting bridge/retail degenerates, and
    compare every shaded vertex and outward winding with the triangle path. */
+static void compact_vertex_source(void)
+{
+    unsigned char source[96];memcpy(source,data.vertices+64,sizeof(source));
+    data.vertices[0]=41;put16(data.vertices+2,19);
+    for(unsigned int i=0;i<3;++i){
+        memcpy(data.vertices+8+i*24,source+i*32,12);
+        memcpy(data.vertices+20+i*24,source+i*32+16,12);
+    }
+}
+
 static void gpu_native_strip_tests(int native_lighting)
 {
-    for(unsigned int variant=0;variant<32;++variant){
+    for(unsigned int variant=0;variant<64;++variant){
         reset();recvxGameBootRenderGpuEnable(1);recvxGameBootRenderNativeLightingEnable(native_lighting);recvxGameBootRenderGpuStripsEnable(0);
+        if(variant&32)compact_vertex_source();
         data.polygons[1]=variant&16?2:3;
         if(variant&1)njScale(NULL,-2,3,2);
         unsigned int cursor=6;put16(data.polygons+4,2);
@@ -475,10 +486,12 @@ static void gpu_native_strip_tests(int native_lighting)
         CHECK(f->batch_count==1&&f->batches[0].gpu_strip&&f->gpu_vertex_count<expected_count);
         compare_native_strip(f,expected,expected_count);
     }
+    for(unsigned int format=0;format<2;++format)for(unsigned int type=65;type<=66;++type){
     reset();recvxGameBootRenderGpuEnable(1);recvxGameBootRenderNativeLightingEnable(native_lighting);recvxGameBootRenderGpuStripsEnable(0);
+    if(format)compact_vertex_source();
     recvxGameBootRenderTextureList(&textures);
     data.polygons[0]=8;put16(data.polygons+2,0);
-    unsigned char *p=data.polygons+4;p[0]=65;p[1]=3;put16(p+2,26);put16(p+4,1);put16(p+6,8);
+    unsigned char *p=data.polygons+4;p[0]=type;p[1]=3;put16(p+2,26);put16(p+4,1);put16(p+6,8);
     for(unsigned int v=0;v<8;++v){
         put16(p+8+v*6,v%3);put16(p+10+v*6,v*31);put16(p+12+v*6,v*19);
     }
@@ -488,6 +501,7 @@ static void gpu_native_strip_tests(int native_lighting)
     recvxGameBootRenderConsume();recvxGameBootRenderGpuStripsEnable(1);recvxGameBootRenderGpuNativeStripsEnable(1);
     f=draw();CHECK(f->gpu_vertex_count==8&&f->batches[0].gpu_strip);
     compare_native_strip(f,textured,18);
+    }
     reset();
 }
 

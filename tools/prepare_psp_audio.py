@@ -42,7 +42,7 @@ def convert(source, target, executable):
 def prepare(output):
     executable = converter()
     total = 0
-    for archive in ['ADV', 'BGM1', 'VOICE1']:
+    for archive in ['ADV', 'BGM1', 'VOICE1', 'BGM2', 'VOICE2']:
         for source in sorted((output / 'archives' / archive).glob('*.bin')):
             target = output / 'audio' / archive / (source.stem + '.vag')
             if convert(source, target, executable):

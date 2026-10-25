@@ -694,7 +694,7 @@ game-boot-test: $(HOST_BOOT_TEST)
 game-boot-files-test: build/host/game-boot-files-test
 	ASAN_OPTIONS=detect_leaks=0 $< build/psp/data
 
-build/host/game-boot-files-test: tests/game_boot_files_test.c src/psp/game_boot_files.c $(HOST_HEADERS) Makefile
+build/host/game-boot-files-test: tests/game_boot_files_test.c src/psp/game_boot_files.c src/psp/game_boot_message_control.c $(HOST_HEADERS) Makefile
 	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
 		-ffunction-sections -fdata-sections $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
 
@@ -1003,7 +1003,7 @@ assets: $(HOST_SHARED) $(if $(filter game,$(BUILD_PROFILE)),game-movie-assets)
 ifeq ($(BUILD_PROFILE),game)
 	python3 tools/prepare_psp_boot_assets.py --iso "$(ISO)" --output $(BUILD_DIR)/data
 endif
-	python3 tools/prepare_psp_assets.py --iso "$(ISO)" $(ASSET_SELECTION) \
+	python3 tools/prepare_psp_assets.py --iso "$(ISO)" $(ASSET_SELECTION) $(if $(filter game,$(BUILD_PROFILE)),--keep-other-rooms) \
 		--library $(HOST_SHARED) --output $(BUILD_DIR)/data
 
 PLAYER_EFFECT_ARGS = $(if $(SYSTEM_EFFECT_ENTRY),--effect-entry $(SYSTEM_EFFECT_ENTRY),)
@@ -1016,7 +1016,7 @@ route-audit: $(HOST_SHARED)
 		--library $(HOST_SHARED) --output $(BUILD_DIR)/start-route.json
 
 test-assets: $(HOST_SHARED) $(HOST_TEST)
-	python3 tools/prepare_psp_assets.py --iso "$(ISO)" $(ASSET_SELECTION) \
+	python3 tools/prepare_psp_assets.py --iso "$(ISO)" $(ASSET_SELECTION) $(if $(filter game,$(BUILD_PROFILE)),--keep-other-rooms) \
 		--library $(HOST_SHARED) --output $(BUILD_DIR)/data --host-cc "$(HOST_CC)" --validate-all
 	ASAN_OPTIONS=detect_leaks=0 $(HOST_TEST) $(BUILD_DIR)/data
 
@@ -1167,7 +1167,7 @@ build/host/game-boot-chunk-test: tests/game_boot_chunk_test.c src/psp/game_boot_
 build/host/game-boot-render-texture-test: tests/game_boot_render_texture_test.c src/psp/game_boot_render_texture.c src/psp/game_boot_draw.c src/psp/game_boot_texture.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
 	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_GAME_BOOT_HOST_TEST \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
-		-ffunction-sections -fdata-sections $(filter %.c,$^) -Wl,--gc-sections -lm -o $@
+		-ffunction-sections -fdata-sections $(filter %.c,$^) -Wl,--gc-sections,--wrap=malloc,--wrap=free -lm -o $@
 
 build/host/game-boot-gu-test: tests/game_boot_gu_test.c src/psp/game_boot_gu.c $(wildcard include/psp/*.h include/ps2/veronica/prog/*.h) Makefile
 	$(HOST_CC) $(HOST_ORIGINAL_ENGINE_FLAGS) -DRECVX_GAME_BOOT_HOST_TEST -isystem $(PSPSDK)/include \

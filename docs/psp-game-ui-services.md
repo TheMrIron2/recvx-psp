@@ -10,10 +10,12 @@ list of explicit stops for services outside this completed batch.
 Inventory uses the original ITEM1 textures, layout, palettes, messages and item
 logic. Entry backs up room textures; exit restores their pixels, live palettes,
 render settings and the original arena cursor. Backups that cannot fit beside
-the live room texture list use an owned heap buffer, with a checked 16-byte
-reservation in the original arena. This accommodates the PSP's TIM2 sources,
-expanded pixels and palettes without overwriting the list or exceeding the
-arena. Restore, replacement and shutdown free that buffer.
+the live room texture list retain the existing owned source/pixel allocations,
+with bounded saved metadata and a checked 16-byte reservation in the original
+arena. Texture release transfers ownership to the save; restore reattaches the
+allocations and saved palettes without allocating another image copy. Replacing
+or abandoning a detached save frees its buffers once. This avoids the large
+backup heap allocation that can fail on hardware.
 The PSP draw adapter supports
 rotated/flipped sprites, textured quads, border lines, per-batch scissoring and
 multiple ordering-table flushes without clearing the already drawn scene.
@@ -41,6 +43,12 @@ writing depth, then writes depth only for fully opaque pixels in a color-masked
 pass. This prevents the opening full-screen translucent effect from hiding
 Claire and other subsequently drawn models, while opaque texels still occlude
 geometry. Ordinary 3D geometry keeps its normal depth writes.
+
+Asset-source tracking preserves live system and room message ranges across
+later inventory/weapon reads. Ranges are sorted for binary lookup; overlapping
+reads split bounds at overwritten bytes rather than aging valid text out after sixteen
+unrelated loads. Message and item-name validation still requires actual loaded
+bounds.
 
 ## Save slots
 

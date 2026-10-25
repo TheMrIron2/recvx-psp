@@ -406,12 +406,13 @@ typedef struct DrawContext {
     float distance_bound[4],metric_bound;
     int extra_native[8],distance_valid;
     unsigned int group_known,group_mask,group_extra_mask,group_extra_inside,group_color;
-    int group_culled,cull_planes_ready,native_model_bounds_ready,native_model_view,raw_normals_checked,raw_normals_valid;
+    int group_culled,cull_planes_ready,native_model_bounds_ready,native_model_view,raw_normals_checked;
     float group_cull_planes[6][4],group_cull_error[3][4];
     unsigned int distance_material,resident_material;
     unsigned int draw,material_serial,strip_ordinal,strip_generation,light_generation,strip_cache_store,light_cache_reusable;
     const NJS_CNK_MODEL *model;
     int persistent_allowed,model_cache_volatile,model_cache_bypassed;
+    unsigned int raw_attributes;
     RecvxGameChunkMaterial material;
     int material_valid,lights_prepared;
     int gpu_prepared,gpu_compatible,gpu_normal_fix;
@@ -1821,14 +1822,44 @@ static inline __attribute__((always_inline)) void pack_raw_vertex(RecvxBootGpuVe
     }else{d[3]=n[0];d[4]=n[1];d[5]=n[2];}
     d[6]=p[0];d[7]=p[1];d[8]=p[2];
 }
+/* A strip span owns its destination range. Hoist source layout and color
+   once and leave the queue cursor untouched until all vertices are written. */
+static void pack_raw_span(RecvxBootGpuVertex *restrict destination,const RecvxGameChunkRawBatch *raw,
+    const unsigned char *restrict record,unsigned int count,unsigned int color)
+{
+    const unsigned char *restrict data=raw->source->data;
+    unsigned int first=raw->source->first,stride=raw->source->stride,normal=raw->source->normal;
+    unsigned int base=raw->type==64?2u:6u,extra=raw->attributes*2u;
+    float scale=raw->type==65?0.003921569f:0.0009775171f;
+    if(raw->type==64){
+        for(unsigned int i=0;i<count;++i){
+            const unsigned char *vertex=data+(raw_u16(record)-first)*stride;
+            const RenderVertexWord *p=(const RenderVertexWord *)vertex,*n=(const RenderVertexWord *)(vertex+normal);
+            RenderVertexWord *d=(RenderVertexWord *)(destination+i);
+            d[0]=d[1]=0;d[2]=color;d[3]=n[0];d[4]=n[1];d[5]=n[2];d[6]=p[0];d[7]=p[1];d[8]=p[2];
+            record+=base+(i>=2?extra:0);
+        }
+    }else{
+        for(unsigned int i=0;i<count;++i){
+            const unsigned char *vertex=data+(raw_u16(record)-first)*stride;
+            const RenderVertexWord *p=(const RenderVertexWord *)vertex,*n=(const RenderVertexWord *)(vertex+normal);
+            RenderVertexWord *d=(RenderVertexWord *)(destination+i);
+            destination[i].u=raw_u16(record+2)*scale;destination[i].v=raw_u16(record+4)*scale;
+            d[2]=color;d[3]=n[0];d[4]=n[1];d[5]=n[2];d[6]=p[0];d[7]=p[1];d[8]=p[2];
+            record+=base+(i>=2?extra:0);
+        }
+    }
+}
+
 static int emit_gpu_raw(void *user,const RecvxGameChunkMaterial *material,const RecvxGameChunkRawBatch *raw)
 {
     DrawContext *c=user;
-    const RecvxBootTexture *texture;RecvxGameBootSampler sampler;
-    unsigned int attributes=prepare_material(c,material,&texture,&sampler);
-    ensure_gpu_prepared(c,material,attributes);
-    if(!c->gpu_compatible||!c->gpu_state.native_lighting||(attributes&0x20u))return 0;
     if(!raw->count){
+        const RecvxBootTexture *texture;RecvxGameBootSampler sampler;
+        unsigned int attributes=prepare_material(c,material,&texture,&sampler);
+        ensure_gpu_prepared(c,material,attributes);
+        if(!c->gpu_compatible||!c->gpu_state.native_lighting||(attributes&0x20u))return 0;
+        c->raw_attributes=attributes;
         c->vfpu_resident=resident_enabled&&resident_ok;
         if(group_cull_enabled&&!c->native_model_bounds_ready){
 #if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
@@ -1841,17 +1872,18 @@ static int emit_gpu_raw(void *user,const RecvxGameChunkMaterial *material,const 
         }
         if(c->gpu_state.lit&&(!group_cull_enabled||c->native_model_view>=0)){
             if(!c->raw_normals_checked){
-                c->raw_normals_checked=1;c->raw_normals_valid=1;
-                for(unsigned int i=0;i<raw->source->count;++i){
-                    const float *normal=(const float *)(raw->source->data+i*raw->source->stride+raw->source->normal);
-                    ++render_stats.gpu_raw_normal_vertices;
-                    if(!native_normal_valid(normal)){c->raw_normals_valid=0;break;}
-                }
+                c->raw_normals_checked=1;
+                render_stats.gpu_raw_normal_vertices+=raw->source->count;
             }
-            if(!c->raw_normals_valid)return 0;
+            if(!raw->source->normals_valid)return 0;
         }
         return 1;
     }
+    /* No rendering/state callback occurs between the successful probe and
+       this submission, so its material and sampler are still current. */
+    unsigned int attributes=c->raw_attributes;
+    const RecvxBootTexture *texture=c->material_texture;
+    RecvxGameBootSampler sampler=c->material_sampler;
     ++render_stats.gpu_bulk_attempts;++render_stats.gpu_raw_groups;
 #if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
     int sample=(render_stats.gpu_bulk_attempts&7u)==0;
@@ -1892,11 +1924,16 @@ static int emit_gpu_raw(void *user,const RecvxGameChunkMaterial *material,const 
                 pack_raw_vertex(&gpu_vertices[gpu_count++],c,raw,strip->data);
             }
             if(flip)pack_raw_vertex(&gpu_vertices[gpu_count++],c,raw,strip->data);
-            const unsigned char *record=strip->data;
-            for(unsigned int v=0;v<strip->count;++v){
-                pack_raw_vertex(&gpu_vertices[gpu_count++],c,raw,record);
-                record+=(raw->type==64?2u:6u)+(v>=2?raw->attributes*2u:0u);
+            if(!c->gpu_normal_fix){
+                pack_raw_span(gpu_vertices+gpu_count,raw,strip->data,strip->count,c->gpu_state.diffuse);
+            }else{
+                const unsigned char *record=strip->data;
+                for(unsigned int v=0;v<strip->count;++v){
+                    pack_raw_vertex(&gpu_vertices[gpu_count+v],c,raw,record);
+                    record+=(raw->type==64?2u:6u)+(v>=2?raw->attributes*2u:0u);
+                }
             }
+            gpu_count+=strip->count;
             unsigned int submitted=gpu_count-first;batch->count+=submitted;total+=submitted;
         }else{
             /* Preflight supplied the exact budget; degenerate indices remain

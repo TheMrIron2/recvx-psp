@@ -121,6 +121,36 @@ static int raw_emit(void *context,const RecvxGameChunkMaterial *material,const R
     }
     return 1;
 }
+static unsigned int expected_normals;
+static int normals_emit(void *context,const RecvxGameChunkMaterial *material,const RecvxGameChunkRawBatch *batch)
+{
+    check(batch->source->normals_valid==expected_normals);
+    return raw_emit(context,material,batch);
+}
+static void source_normal_proof_tests(void)
+{
+    static const float values[]={0,1e-30f,9e-11f,1e-10f,0.249999f,0.25f,1,2,2.0001f,1e19f,3e38f};
+    for(unsigned int format=0;format<2;++format)for(unsigned int i=0;i<sizeof(values)/sizeof(*values);++i){
+        reset(format?41:51);decline_raw=raw_calls=0;
+        unsigned int header=format?8:64,normal=format?12:16;
+        putfloat(arena.vertices+header+normal,values[i]);
+        putfloat(arena.vertices+header+normal+4,0);
+        float length=values[i]*values[i];expected_normals=isfinite(length)&&length>=1e-20f;
+        check(recvxGameBootChunkParseRawStrips(&arena.model,emit,joined_emit,normals_emit,&work)==0);
+        check(raw_calls>0);
+    }
+    /* A zero normal disables direct lighting eligibility, but must not skip
+       finite validation of later vertices in the same source. */
+    for(unsigned int format=0;format<2;++format){
+        reset(format?41:51);decline_raw=raw_calls=0;
+        unsigned int header=format?8:64,normal=format?12:16,stride=format?24:32;
+        putfloat(arena.vertices+header+normal+4,0);
+        put32(arena.vertices+header+3*stride+normal,0x7f800000u);
+        check(recvxGameBootChunkParseRawStrips(&arena.model,emit,joined_emit,raw_emit,&work)==-1);
+        check(strstr(recvxGameBootChunkFault(),"vertex or normal")!=NULL&&raw_calls==0);
+    }
+}
+
 static void joined_tests(void)
 {
     for(unsigned int type=64;type<=66;++type)for(unsigned int signs=0;signs<8;++signs){
@@ -225,7 +255,7 @@ static void finite_word_tests(void)
 int main(void)
 {
     size_t n;
-    joined_tests();join_capacity_tests();raw_malformed_tests();finite_word_tests();
+    joined_tests();join_capacity_tests();raw_malformed_tests();source_normal_proof_tests();finite_word_tests();
     reset(51); check(parse() == 0); check(emitted == 2);
     check(triangles[0][0].x == 0 && triangles[0][1].x == 1 && triangles[0][2].x == 2);
     check(triangles[1][0].x == 2 && triangles[1][1].x == 1 && triangles[1][2].x == 3);
