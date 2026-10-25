@@ -652,7 +652,7 @@ void bhEne18_MV01(BH_PWORK* epw)
         
             /* fallthrough */
         case 1:
-            epw->shp_ct = bhEne_GetShapeCnt(SpawnAttacker, epw->ct0);
+            epw->shp_ct = bhEne_GetShapeCnt(HeartBeat, epw->ct0);
             
             if (epw->shp_ct < 1000.0f)
             {
