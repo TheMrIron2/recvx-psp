@@ -2,6 +2,7 @@
 #include "psp/game_boot_audio.h"
 #include "psp/game_boot_movie.h"
 #include "psp/game_boot_render.h"
+#include "psp/game_boot_skin.h"
 #include "psp/live_task_dispatch.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,6 +55,7 @@ int main(int argc, char **argv)
     RecvxAudioOutputStats perf_audio={0};
     RecvxBootRenderStats perf_render={0};RecvxBootGuStats perf_gu={0};
     RecvxLiveTaskStats perf_tasks={0};
+    RecvxBootSkinStats perf_skin={0};RecvxBootChunkStats perf_chunk={0};
     pspDebugScreenInit();
     callback = sceKernelCreateCallback("RECVX Exit", exit_callback, NULL);
     sceKernelRegisterExitCallback(callback);
@@ -71,7 +73,7 @@ int main(int argc, char **argv)
         recvxGameBootMovieShutdown();
         recvxAudioOutputShutdown();
     } else {
-        recvxGameBootLog("render build=%s %s native GE lighting enabled",__DATE__,__TIME__);
+        recvxGameBootLog("render build=%s %s native GE lighting; direct native strips v1; direct skin v1; strip_join=%u",__DATE__,__TIME__,RECVX_GAME_CHUNK_JOIN_MAX);
         recvxGameBootLog("main thread attributes=%08x; VFPU enabled", (unsigned int)main_thread.attr);
         recvxGameBootLog("clocks cpu_mhz=%d bus_mhz=%d request=%08x",
             scePowerGetCpuClockFrequencyInt(),scePowerGetBusClockFrequencyInt(),(unsigned int)clock_result);
@@ -82,7 +84,7 @@ int main(int argc, char **argv)
         perf_started=sceKernelGetSystemTimeLow();
         perf_main_cpu=main_cpu_time();perf_audio=recvxAudioOutputStats();
         perf_render=recvxGameBootRenderStats();perf_gu=recvxGameBootGuStats();
-        perf_tasks=recvxLiveTaskStats();
+        perf_tasks=recvxLiveTaskStats();perf_skin=recvxGameBootSkinStats();perf_chunk=recvxGameBootChunkStats();
         while (!exit_requested) {
             RecvxInputState input;
             if (recvxPlatformReadInput(&input) <= 0) {
@@ -188,6 +190,24 @@ int main(int argc, char **argv)
                     (r.gpu_fallback[5]-perf_render.gpu_fallback[5])/perf_frames,
                     (r.gpu_fallback[6]-perf_render.gpu_fallback[6])/perf_frames,
                     (r.gpu_fallback[7]-perf_render.gpu_fallback[7])/perf_frames);
+                recvxGameBootLog("perf_raw vertices=%u groups=%u partial_groups=%u source_normals=%u",
+                    (r.gpu_raw_vertices-perf_render.gpu_raw_vertices)/perf_frames,
+                    (r.gpu_raw_groups-perf_render.gpu_raw_groups)/perf_frames,
+                    (r.gpu_raw_partial_groups-perf_render.gpu_raw_partial_groups)/perf_frames,
+                    (r.gpu_raw_normal_vertices-perf_render.gpu_raw_normal_vertices)/perf_frames);
+                RecvxBootSkinStats skin=recvxGameBootSkinStats();RecvxBootChunkStats chunk=recvxGameBootChunkStats();
+                recvxGameBootLog("perf_geometry room=%u/%u/%u parse_us=%u validate_us=%u source_vertices=%u native_preflight_us=%u skin_prepare_us=%u skin_blend_us=%u skin_vertices=%u model_inside_groups=%u model_outside_groups=%u",
+                    sys->stg_no,sys->rom_no,sys->rcase,
+                    (r.chunk_parse_us-perf_render.chunk_parse_us)/perf_frames,
+                    (chunk.validation_us-perf_chunk.validation_us)/perf_frames,
+                    (chunk.source_vertices-perf_chunk.source_vertices)/perf_frames,
+                    (r.native_preflight_us-perf_render.native_preflight_us)/perf_frames,
+                    (skin.prepare_us-perf_skin.prepare_us)/perf_frames,
+                    (skin.blend_us-perf_skin.blend_us)/perf_frames,
+                    (skin.vertices-perf_skin.vertices)/perf_frames,
+                    (r.gpu_model_bounds_inside-perf_render.gpu_model_bounds_inside)/perf_frames,
+                    (r.gpu_model_bounds_outside-perf_render.gpu_model_bounds_outside)/perf_frames);
+                perf_skin=skin;perf_chunk=chunk;
                 recvxGameBootLog("perf_game enemy_us=%u player_us=%u effects_us=%u objects_us=%u camera_us=%u light_us=%u draw_us=%u",
                     (tasks.game_us[0]-perf_tasks.game_us[0])/perf_frames,
                     (tasks.game_us[1]-perf_tasks.game_us[1])/perf_frames,

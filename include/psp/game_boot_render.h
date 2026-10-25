@@ -63,6 +63,7 @@ typedef struct RecvxBootRenderStats {
     unsigned int models,triangles,position_transforms,normal_transforms,shaded_vertices,cache_hits;
     unsigned int material_preparations,face_normalizations;
     unsigned int chunk_join_skipped_vertices,gpu_matrix_us;
+    unsigned int chunk_parse_us,native_preflight_us;
     unsigned int chunk_us; /* PSP time decoding, transforming and shading models. */
     unsigned int clip_inside,clip_rejected,clip_intersections;
     unsigned int gpu_vertices,gpu_lit_vertices,gpu_colored_vertices,gpu_fallback_triangles;
@@ -74,6 +75,8 @@ typedef struct RecvxBootRenderStats {
     unsigned int gpu_distance_batches,gpu_distance_refinements,gpu_distance_reuse;
     unsigned int gpu_group_vertices,gpu_group_constant_vertices,gpu_group_metric_skips,gpu_group_bounds_us;
     unsigned int gpu_group_range_queries,gpu_group_reused_vertices;
+    unsigned int gpu_raw_vertices,gpu_raw_groups,gpu_raw_partial_groups,gpu_raw_normal_vertices;
+    unsigned int gpu_model_bounds_inside,gpu_model_bounds_outside;
     unsigned int gpu_culled_groups,gpu_culled_vertices,gpu_culled_triangles;
     unsigned int gpu_light_cache_hits,gpu_light_cache_misses,gpu_light_cache_bypass;
     unsigned int gpu_classifications; /* Cached source-vertex light masks. */
@@ -102,6 +105,7 @@ void recvxGameBootRenderGpuEnable(int enabled);
 void recvxGameBootRenderNativeLightingEnable(int enabled);
 void recvxGameBootRenderGpuStripsEnable(int enabled);
 void recvxGameBootRenderGpuNativeStripsEnable(int enabled);
+void recvxGameBootRenderRawStripsEnable(int enabled);
 void recvxGameBootRenderGpuStripCacheEnable(int enabled);
 void recvxGameBootRenderResidentEnable(int enabled);
 void recvxGameBootRenderDistanceBatchesEnable(int enabled);

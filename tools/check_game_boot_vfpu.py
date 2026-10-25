@@ -5,13 +5,81 @@ and evaluate the register rows independently, using the VFPU layout described
 by PPSSPP's ReadMatrix and Int_Vtfm, to catch an accidental M/E transpose.
 This is an instruction/layout regression check, not a hardware emulator.
 """
+import math
 import re
 import subprocess
 import sys
 
 
+def check_direct_skin(assembly):
+    """Evaluate the actual compiled position/normal kernels, including row scratch."""
+    text=assembly.split('<skin_vertex_direct>:',1)[1].split('Disassembly of section',1)[0]
+    instructions=[]
+    for line in text.splitlines():
+        match=re.match(r'\s*[0-9a-f]+:\s+[0-9a-f]{8}\s+(\S+)\s*(.*)',line)
+        if match and match[1].startswith(('lv.','sv.','vtfm','vone','vzero','vsub','vscl','vadd','vmov')):
+            instructions.append((match[1],match[2]))
+    blocks=[];current=[];stores=0
+    for instruction in instructions:
+        current.append(instruction)
+        if instruction[0]=='sv.s':stores+=1
+        if stores==6:blocks.append(current);current=[];stores=0
+    assert len(blocks)==2 and not current,'expected rigid and blended skin kernels'
+    first=[0,2,0,0,-3,0,0,0,0,0,0.5,0,7,-9,11,1]
+    second=[-1,0,0,0,0,0.25,0,0,0,0,4,0,-13,5,-2,1]
+    source=[0.5,3,1.5,float('nan'),1.5,-2,0.25,float('nan')]
+    def coordinates(name,size):
+        name=name.split('.')[0];kind=name[0];m,c,r=map(int,name[1:])
+        assert m in (6,7),name
+        return [(m,c,r)] if kind=='S' else [(m,c+i,r) if kind=='R' else (m,c,r+i) for i in range(size)]
+    def transformed(matrix,offset,w):
+        return [sum(matrix[k*4+r]*source[offset+k] for k in range(3))+matrix[12+r]*w for r in range(3)]
+    for block in blocks:
+        blended=sum(op=='lv.q' for op,_ in block)==8
+        for weight in ([i/10 for i in range(1,10)] if blended else [1]):
+            registers={};output={};transforms=0
+            def read(name,size):return [registers[key] for key in coordinates(name,size)]
+            def write(name,values):registers.update(zip(coordinates(name,len(values)),values))
+            for op,args in block:
+                parts=args.split(',')
+                if op in ('lv.q','lv.s','sv.s'):
+                    address=re.fullmatch(r'(-?\d+)\((\w+)\)',parts[1]);assert address,args
+                    offset,base=int(address[1]),address[2]
+                    if op=='lv.q':
+                        assert base in ('a0','a1') and offset in (0,16,32,48),args
+                        matrix=first if base=='a0' else second
+                        write(parts[0],matrix[offset//4:offset//4+4])
+                    elif op=='lv.s':
+                        if base=='a2':write(parts[0],[source[offset//4]])
+                        else:
+                            assert parts[0]=='S633.s' and base=='sp' and offset==0,args
+                            write(parts[0],[weight])
+                    else:
+                        assert base=='a3' and offset in (0,4,8,16,20,24),args
+                        output[offset]=read(parts[0],1)[0]
+                elif op in ('vone.s','vzero.s'):write(parts[0],[1 if op=='vone.s' else 0])
+                elif op=='vtfm4.q':
+                    assert parts[1]=='E600.q',args
+                    assert not set(coordinates(parts[0],4))&set(coordinates(parts[2],4)),args
+                    vector=read(parts[2],4)
+                    result=[sum(registers[(6,c,r)]*vector[c] for c in range(4)) for r in range(4)]
+                    write(parts[0],result);transforms+=1
+                elif op=='vmov.t':write(parts[0],read(parts[1],3))
+                elif op in ('vsub.t','vadd.t','vscl.t'):
+                    a=read(parts[1],3);b=read(parts[2],1 if op=='vscl.t' else 3)
+                    result=[a[i]*b[0] if op=='vscl.t' else a[i]-b[i] if op=='vsub.t' else a[i]+b[i] for i in range(3)]
+                    write(parts[0],result)
+                else:raise AssertionError((op,args))
+            assert transforms==(4 if blended else 2),transforms
+            for normal in (0,1):
+                a=transformed(first,normal*4,1-normal);b=transformed(second,normal*4,1-normal)
+                expected=[a[i]+(b[i]-a[i])*weight if blended else b[i] for i in range(3)]
+                for i in range(3):assert math.isclose(output[normal*16+i*4],expected[i],rel_tol=1e-6,abs_tol=1e-5),(output,expected)
+    print('PASS: compiled direct skin kernels, all ten weights, untranslated non-unit normals, row scratch and six-word output')
+
 def check(object_path, skin=False):
     assembly = subprocess.check_output(['psp-objdump', '-d', object_path], text=True)
+    if skin and '<skin_vertex_direct>:' in assembly:return check_direct_skin(assembly)
     # Deliberately asymmetric rotation, scale and translation. Identity alone
     # cannot expose the column/row mistake.
     matrix = [0, 2, 0, 0, -3, 0, 0, 0, 0, 0, 0.5, 0, 7, -9, 11, 1]

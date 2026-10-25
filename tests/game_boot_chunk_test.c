@@ -14,15 +14,16 @@ static struct {
     unsigned char vertices[512];
     unsigned char polygons[4096];
 } arena;
-static RecvxGameChunkVertex triangles[64][3];
-static RecvxGameChunkMaterial materials[64];
+static RecvxGameChunkVertex triangles[128][3];
+static RecvxGameChunkMaterial materials[128];
 static unsigned int emitted, checks;
 static const void *source_pointer;
 static size_t source_size;
 
 size_t recvxGameBootSourceRemaining(const void *pointer)
 { return pointer == source_pointer ? source_size : 0; }
-static void check(int condition) { ++checks; assert(condition); }
+static void check_at(int condition,unsigned int line) { ++checks; if(!condition)fprintf(stderr,"chunk check failed at line %u\n",line); assert(condition); }
+#define check(condition) check_at(!!(condition),__LINE__)
 static void put16(unsigned char *p, unsigned int value)
 { p[0] = value; p[1] = value >> 8; }
 static void put32(unsigned char *p, unsigned int value)
@@ -32,7 +33,7 @@ static void putfloat(unsigned char *p, float value)
 static int close_to(float a, float b) { return fabsf(a - b) < 0.00001f; }
 static int emit(void *context, const RecvxGameChunkMaterial *material, const RecvxGameChunkVertex vertices[3])
 {
-    check(context == &work); check(emitted < 64);
+    check(context == &work); check(emitted < 128);
     memcpy(triangles[emitted], vertices, sizeof(triangles[0])); materials[emitted++] = *material;
     return 0;
 }
@@ -93,6 +94,33 @@ static int joined_emit(void *context,const RecvxGameChunkMaterial *m,const Recvx
     }
     return 1;
 }
+static unsigned int raw_calls,decline_raw;
+static RecvxGameChunkVertex raw_vertex(const RecvxGameChunkRawBatch *batch,const RecvxGameChunkRawStrip *strip,unsigned int i)
+{
+    const unsigned char *record=strip->data+i*(batch->type==64?2u:6u)+(i>2?(i-2)*batch->attributes*2u:0u);
+    unsigned int index=record[0]|((unsigned int)record[1]<<8);
+    const unsigned char *source=batch->source->data+(index-batch->source->first)*batch->source->stride;
+    RecvxGameChunkVertex result={.color=0xffffffffu,.source_index=index};
+    memcpy(&result.x,source,12);memcpy(&result.nx,source+batch->source->normal,12);
+    if(batch->type!=64){
+        float scale=batch->type==65?0.003921569f:0.0009775171f;
+        result.u=(record[2]|((unsigned int)record[3]<<8))*scale;
+        result.v=(record[4]|((unsigned int)record[5]<<8))*scale;
+    }
+    return result;
+}
+static int raw_emit(void *context,const RecvxGameChunkMaterial *material,const RecvxGameChunkRawBatch *batch)
+{
+    if(!batch->count)return decline_raw==1?0:1;
+    ++raw_calls;if(decline_raw==2)return 0;
+    for(unsigned int s=0;s<batch->count;++s)for(unsigned int i=2;i<batch->strips[s].count;++i){
+        RecvxGameChunkVertex v[3]={raw_vertex(batch,&batch->strips[s],i-2),raw_vertex(batch,&batch->strips[s],i-1),raw_vertex(batch,&batch->strips[s],i)};
+        if(v[0].source_index==v[1].source_index||v[0].source_index==v[2].source_index||v[1].source_index==v[2].source_index)continue;
+        if(((i-2)&1u)^batch->strips[s].reversed){RecvxGameChunkVertex swap=v[0];v[0]=v[1];v[1]=swap;}
+        emit(context,material,v);
+    }
+    return 1;
+}
 static void joined_tests(void)
 {
     for(unsigned int type=64;type<=66;++type)for(unsigned int signs=0;signs<8;++signs){
@@ -110,7 +138,7 @@ static void joined_tests(void)
         }
         put16(p+2,(cursor-p-4)/2);put16(cursor,255);
         check(parse()==0);unsigned int expected_count=emitted;
-        RecvxGameChunkVertex expected[64][3];RecvxGameChunkMaterial expected_materials[64];
+        RecvxGameChunkVertex expected[128][3];RecvxGameChunkMaterial expected_materials[128];
         memcpy(expected,triangles,sizeof(expected));memcpy(expected_materials,materials,sizeof(expected_materials));
         emitted=joined_calls=decline_joined=0;recvxGameBootChunkReset();
         check(recvxGameBootChunkParseJoinedStrips(&arena.model,emit,joined_emit,&work)==0);
@@ -129,7 +157,7 @@ static void joined_tests(void)
 
 static void join_capacity_tests(void)
 {
-    const unsigned int counts[][2]={{31,32},{32,31},{62,3},{30,31}};
+    const unsigned int counts[][2]={{31,32},{32,31},{62,3},{30,31},{63,64},{64,63},{126,3},{62,63}};
     for(unsigned int type=64;type<=66;++type)for(unsigned int signs=0;signs<4;++signs)
     for(unsigned int test=0;test<sizeof(counts)/sizeof(counts[0]);++test){
         reset(51);arena.polygons[0]=8;put16(arena.polygons+2,0);
@@ -144,14 +172,43 @@ static void join_capacity_tests(void)
         }
         put16(p+2,(cursor-p-4)/2);put16(cursor,255);
         check(parse()==0);unsigned int expected_count=emitted;
-        RecvxGameChunkVertex expected[64][3];memcpy(expected,triangles,sizeof(expected));
+        RecvxGameChunkVertex expected[128][3];memcpy(expected,triangles,sizeof(expected));
         for(unsigned int decline=0;decline<2;++decline){
             emitted=joined_calls=0;decline_joined=decline;recvxGameBootChunkReset();
             check(recvxGameBootChunkParseJoinedStrips(&arena.model,emit,joined_emit,&work)==0);
             check(emitted==expected_count&&!memcmp(expected,triangles,emitted*sizeof(*triangles)));
-            if(test<3)check(recvxGameBootChunkJoinSkippedVertices()==counts[test][0]);
+            if(test>=4&&test<7)check(recvxGameBootChunkJoinSkippedVertices()==counts[test][0]);
+        }
+        for(decline_raw=0;decline_raw<3;++decline_raw){
+            emitted=raw_calls=0;decline_joined=0;recvxGameBootChunkReset();
+            check(recvxGameBootChunkParseRawStrips(&arena.model,emit,joined_emit,raw_emit,&work)==0);
+            check(emitted==expected_count&&!memcmp(expected,triangles,emitted*sizeof(*triangles)));
+            if(decline_raw!=1)check(raw_calls>0);
         }
     }
+}
+static void raw_malformed_tests(void)
+{
+    for(unsigned int format=0;format<2;++format){
+        reset(format?41:51);put16(arena.vertices+4,100);
+        arena.polygons[0]=8;put16(arena.polygons+2,0);
+        size_t size=strip(arena.polygons+4,65,2,-4,100,3);put16(arena.polygons+4+size,255);
+        check(parse()==0);unsigned int count=emitted;
+        RecvxGameChunkVertex expected[2][3];memcpy(expected,triangles,sizeof(expected));
+        emitted=raw_calls=decline_raw=0;recvxGameBootChunkReset();
+        check(recvxGameBootChunkParseRawStrips(&arena.model,emit,joined_emit,raw_emit,&work)==0);
+        check(raw_calls==1&&emitted==count&&!memcmp(expected,triangles,sizeof(expected)));
+    }
+    reset(51);decline_raw=0;raw_calls=0;
+    size_t size=strip(arena.polygons,64,2,-4,0,3);put16(arena.polygons+size,255);
+    put16(arena.polygons+8,100);
+    check(recvxGameBootChunkParseRawStrips(&arena.model,emit,joined_emit,raw_emit,&work)==-1);
+    check(strstr(recvxGameBootChunkFault(),"vertex index")!=NULL&&raw_calls==0);
+    reset(51);decline_raw=0;raw_calls=0;
+    size=strip(arena.polygons,64,2,-4,0,3);put16(arena.polygons+size,255);
+    put16(arena.polygons+6,100);
+    check(recvxGameBootChunkParseRawStrips(&arena.model,emit,joined_emit,raw_emit,&work)==-1);
+    check(strstr(recvxGameBootChunkFault(),"truncated chunk strip vertex")!=NULL&&raw_calls==0);
 }
 static void finite_word_tests(void)
 {
@@ -168,7 +225,7 @@ static void finite_word_tests(void)
 int main(void)
 {
     size_t n;
-    joined_tests();join_capacity_tests();finite_word_tests();
+    joined_tests();join_capacity_tests();raw_malformed_tests();finite_word_tests();
     reset(51); check(parse() == 0); check(emitted == 2);
     check(triangles[0][0].x == 0 && triangles[0][1].x == 1 && triangles[0][2].x == 2);
     check(triangles[1][0].x == 2 && triangles[1][1].x == 1 && triangles[1][2].x == 3);

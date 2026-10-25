@@ -1012,3 +1012,138 @@ CPU counters across sustained gameplay. `perf_native_lighting` reports native
 vertices, HDR sources and omitted lights. Startup prints the renderer build
 time so hardware logs can be matched to the actual loaded build. Real PSP
 frame-rate gains require a new hardware run.
+
+
+The native packed-strip cache experiment regressed on hardware: the busy-room
+log showed about 98 hits versus 276 misses per frame, with chunk work rising
+from roughly 38 ms to 49 ms. It has been removed. The native strip path now
+bypasses CPU per-vertex color/mask arrays and loads no resident model/normal/
+distance matrices just to compute bounds. GE continues to transform, normalize,
+light and clip vertices; CPU work converts source layout, preserves strip
+winding and constructs absent/flat normals. The common authored-normal range
+uses an integer magnitude check; unusual magnitudes keep the original squared-
+length test. Native strips are compared with triangle expansion across encoded
+parities, reflection, nonuniform scale, UVs and duplicate indices. Hardware
+performance for this replacement remains to be measured.
+
+
+The next hardware diagnostic separates `perf_geometry` source validation,
+model parsing, native strip preflight and skin preparation/blending. Parser
+time includes renderer callbacks; native preflight is a sampled subset of bulk
+time, while skin preparation/blending are outside chunk rendering. These times
+must not be added together as independent frame costs. Counters remain
+cumulative across room/parser/skin resets and use the existing 120-frame log
+window. The room identifier labels the room at the end of that window. Timing
+calls occur per model/skin operation, not per vertex; normal/topology timing
+shares the existing one-in-eight strip sample. This is instrumentation, with
+no new FPS claim.
+
+
+The diagnostic hardware log measured about 32.0 ms in chunk parsing including
+callbacks, 2.33 ms validating 7,870 source vertices, 2.9 ms in native strip
+preflight, and 6.44 ms in skin preparation/blending for 2,242 weighted vertices.
+Skin transforms now use the existing aligned helpers directly on the owned
+64-byte-aligned matrix rows, avoiding a redundant 64-byte temporary copy per
+position/normal/bone transform. Chunk halfword readers now use aligned
+little-endian loads for already-validated headers, indices and UVs; big-endian
+hosts retain byte assembly. Existing malformed-stream and winding/UV tests,
+weighted-skin reference checks and compiled VFPU layout checks cover these
+changes. Hardware speedup remains to be measured.
+
+
+The aligned-skin hardware log lowered skin blending from about 4.16 ms to
+2.66 ms, but total tick time remained about 55.3 ms before display pacing,
+landing on a roughly 66.7 ms swap interval. Lower CPU time alone does not cross
+the next refresh deadline. Native rendering now bounds each validated live
+vertex source once per model draw. Fully inside or outside models reuse that
+view result across strips; partial models retain the existing group tests.
+The decision never trusts authored spheres or persists across draws, so skin,
+morph and camera changes remain live. `perf_geometry model_inside_groups` and
+`model_outside_groups` expose reuse; `vfpu_bound_vertices` includes model and
+partial-strip scans. Both source formats and scalar/VFPU bounds are covered,
+with native culling checked against independent clip-coordinate references.
+Hardware performance of model-level reuse remains to be measured.
+
+
+A subsequent PSPLink log still reported the 18:05 build and omitted both
+model-reuse counters; it therefore did not exercise the model-bounds change.
+The rebuilt PRX/ELF/PBP startup marker explicitly includes `live model bounds
+v1`. The same log stopped in room 0/3 at an effect-table range guard. Range
+failures now log the generated function, line, signed index and capacity before
+retaining the existing stop. This adds fault context rather than clamping an
+unknown selector or claiming that the effect fault is fixed.
+
+
+The next hardware run confirmed model-bounds reuse: around 296 inside-strip
+and 18 outside-strip results per frame, with scanned bound vertices falling
+from about 19,730 to 10,776. Main-thread CPU time was about 42.4 ms and tick
+work about 52.4 ms, still above the 33.3 ms target. Compatible short-strip
+joining now permits 128 decoded vertices (5,120 bytes) instead of 64. This
+reduces parser-to-renderer callbacks without adding persistent geometry caches
+or changing materials/triangle order; GE draw batches were already merged.
+Capacity tests cover both the old 64-vertex and new 128-vertex boundaries,
+signed strip lengths, UV variants, face attributes, exact winding and accepted/
+declined sinks. Startup prints `strip_join=128` to identify the feature build.
+Hardware timing for the larger grouping remains to be measured.
+
+
+Direct native strip submission now keeps validated source records rather than
+constructing a 40-byte decoded vertex temporary for every occurrence. The
+parser validates full index/UV/attribute extents and triangle budgets before
+submission, then the renderer writes the final GE vertices directly. A
+per-draw source-normal check replaces repeated strip-normal checks. This path
+accepts both source vertex formats, live skin/morph streams, all native draw
+modes, material specular, nonuniform scale and reflections. Partially visible
+models use GE clipping; wholly outside live bounds remain rejected. Flat and
+missing-normal materials retain native GE rendering with existing CPU face
+construction. Unsupported direct cases preserve the decoded fallback. There
+is no persistent geometry snapshot or exclusion of animated models.
+
+The raw stream tests compare accepted/probe-declined/submit-declined batches
+against authored triangle order and exact UVs across both source formats,
+nonzero index bases, signed strip lengths, both grouping limits and face
+attributes. Truncation and invalid indices fail before direct submission.
+Renderer comparisons independently toggle direct submission for reflected,
+nonuniform, zero-normal and flat variants. Checks passed: 110,416 parser
+checks, 9,486 renderer checks, compiled VFPU layout validation, and 1,201 full
+native frames in submission and independent-culling-reference modes.
+
+The first hardware run confirmed `direct native strips v1` and 19,413 direct
+vertices out of 19,413 total. In the heavy view, frame time fell from about
+66.7 ms to 50.1 ms (roughly 15 to 20 FPS), main CPU time from about 42.5 ms to
+38.0 ms, and geometry parsing/submission from about 29.9 ms to 24.9 ms. Source
+normal checks cover about 7,175 vertices per frame; all shading, light masks
+and CPU position/normal transforms remain zero. GPU wait is still about
+8.8 ms, skin preparation/blending about 4.8 ms, and total tick work about
+48.2 ms. This is measured progress, not achievement of the 33.3 ms frame
+budget. `perf_raw` reports direct vertices/groups, partially visible groups
+and source-normal counts for subsequent hardware comparisons.
+
+
+Skinning now has a direct VFPU position/normal kernel. It loads each bone
+matrix once for both vectors, blends in M6/M7 registers and writes the six
+result fields straight into the generated stream. A rigid weight uses one
+matrix; blended weights use two. The first position is retained in the
+matrix's fourth row, which contributes only to discarded output w, freeing a
+non-aliasing transform destination without touching reserved M2-M5 banks.
+The stream header and two packed metadata words per vertex are copied exactly;
+source xyz/normals are no longer copied merely to be overwritten. Normal
+translation and normalization remain absent, matching the original skin math.
+
+Checks cover all ten weight levels, non-unit normals, translations and the
+packed NaN-shaped metadata (436 host skin checks). The compiled PSP kernels
+are independently interpreted for row/column layout, fourth-row scratch,
+non-aliasing results, six-field writes and all ten weights. A one-time PSP
+self-check compares actual VFPU output with scalar results and checks metadata
+before using the kernel on actors. Startup includes `direct skin v1`; existing
+`skin_blend_us` measures the change. Hardware timing remains to be measured.
+
+
+The first `direct skin v1` hardware log passed the new VFPU self-check. For
+2,242 weighted vertices, skin blending fell from about 2.70 ms to 1.50 ms
+(about 44% less time), while preparation remained about 2.06 ms. In a similar
+heavy view with one additional model, main CPU time was about 37.3 ms and tick
+work about 47.5 ms; display intervals remained about 50.1 ms (~20 FPS).
+Geometry parsing/submission was about 25.3 ms and GE wait about 8.84 ms. All
+19,419 submitted vertices used the direct strip path. The direct skin change
+reduces work but does not yet cross the 33.3 ms deadline for 30 FPS.

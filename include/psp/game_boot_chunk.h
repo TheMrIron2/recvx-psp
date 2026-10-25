@@ -22,6 +22,8 @@ typedef int (*RecvxGameChunkEmit)(void *context, const RecvxGameChunkMaterial *m
                                 const RecvxGameChunkVertex vertices[3]);
 
 #define RECVX_GAME_CHUNK_STRIP_MAX 256u
+/* Five KiB of decoded vertices for compatible-strip batching. */
+#define RECVX_GAME_CHUNK_JOIN_MAX 128u
 /* Return 1 if handled, 0 to retain original triangle emission, negative on
    failure. Vertices/UVs and the complete strip payload are already validated. */
 typedef int (*RecvxGameChunkEmitStrip)(void *context,const RecvxGameChunkMaterial *material,
@@ -34,9 +36,34 @@ int recvxGameBootChunkParseStrips(const NJS_CNK_MODEL *model,RecvxGameChunkEmit 
 int recvxGameBootChunkParseJoinedStrips(const NJS_CNK_MODEL *model,RecvxGameChunkEmit emit,
     RecvxGameChunkEmitStrip strip,void *context);
 
+/* Raw batches retain validated source streams and strip records instead of
+   building temporary vertices. A zero-strip batch probes sink compatibility;
+   a declined probe/submit preserves the decoded-strip fallback. */
+typedef struct RecvxGameChunkSource {
+    const unsigned char *data;
+    unsigned int first,count,stride,normal;
+} RecvxGameChunkSource;
+typedef struct RecvxGameChunkRawStrip {
+    const unsigned char *data;
+    unsigned int count,reversed;
+} RecvxGameChunkRawStrip;
+#define RECVX_GAME_CHUNK_RAW_STRIPS 32u
+typedef struct RecvxGameChunkRawBatch {
+    const RecvxGameChunkSource *source;
+    unsigned int type,attributes,count,triangles,vertices;
+    RecvxGameChunkRawStrip strips[RECVX_GAME_CHUNK_RAW_STRIPS];
+} RecvxGameChunkRawBatch;
+typedef int (*RecvxGameChunkEmitRaw)(void *context,const RecvxGameChunkMaterial *material,
+    const RecvxGameChunkRawBatch *batch);
+int recvxGameBootChunkParseRawStrips(const NJS_CNK_MODEL *model,RecvxGameChunkEmit emit,
+    RecvxGameChunkEmitStrip strip,RecvxGameChunkEmitRaw raw,void *context);
+
 /* The model and relocated streams must lie in the original arena. Callback
    returns zero to continue. Failures report their specific boundary via Fault.
    A null callback validates a model without submitting triangles. */
+typedef struct RecvxBootChunkStats { unsigned int validation_us,source_vertices; } RecvxBootChunkStats;
+/* Cumulative across parser resets. */
+RecvxBootChunkStats recvxGameBootChunkStats(void);
 void recvxGameBootChunkReset(void);
 unsigned int recvxGameBootChunkJoinSkippedVertices(void);
 int recvxGameBootChunkParse(const NJS_CNK_MODEL *model, RecvxGameChunkEmit emit, void *context);

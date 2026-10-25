@@ -1,4 +1,7 @@
 #include <math.h>
+#if defined(__PSP__) && defined(__mips__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+#include <pspkernel.h>
+#endif
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +22,8 @@ static unsigned char *allocation, *storage;
 static size_t capacity, used;
 static struct { size_t offset, bytes; } ranges[128];
 static unsigned int range_count;
+static RecvxBootSkinStats skin_stats;
+RecvxBootSkinStats recvxGameBootSkinStats(void) { return skin_stats; }
 
 static void checked_math(void)
 {
@@ -196,11 +201,92 @@ static void initialize(O_WRK *work, int count, SkinEntry entries[128], size_t to
     }
 }
 
+/* Both matrices belong to the aligned skin matrix table. Keep only M6/M7
+   scratch live and write xyz/normal directly; packed fourth words are separate. */
+static __attribute__((noinline)) void skin_vertex_direct(const float *first,const float *second,
+    const float *source,float *destination,float weight)
+{
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+    if(weight==1.0f){
+        __asm__ volatile (
+            "lv.q C600,0(%0)\n" "lv.q C610,16(%0)\n" "lv.q C620,32(%0)\n" "lv.q C630,48(%0)\n"
+            "lv.s S710,0(%1)\n" "lv.s S711,4(%1)\n" "lv.s S712,8(%1)\n" "vone.s S713\n"
+            "lv.s S720,16(%1)\n" "lv.s S721,20(%1)\n" "lv.s S722,24(%1)\n" "vzero.s S723\n"
+            "vtfm4.q C700,E600,C710\n" "vtfm4.q C730,E600,C720\n"
+            "sv.s S700,0(%2)\n" "sv.s S701,4(%2)\n" "sv.s S702,8(%2)\n"
+            "sv.s S730,16(%2)\n" "sv.s S731,20(%2)\n" "sv.s S732,24(%2)\n"
+            : : "r"(second),"r"(source),"r"(destination) : "memory");
+    }else{
+        __asm__ volatile (
+            "lv.q C600,0(%0)\n" "lv.q C610,16(%0)\n" "lv.q C620,32(%0)\n" "lv.q C630,48(%0)\n"
+            "lv.s S710,0(%2)\n" "lv.s S711,4(%2)\n" "lv.s S712,8(%2)\n" "vone.s S713\n"
+            "lv.s S720,16(%2)\n" "lv.s S721,20(%2)\n" "lv.s S722,24(%2)\n" "vzero.s S723\n"
+            "vtfm4.q C700,E600,C710\n" "vtfm4.q C730,E600,C720\n"
+            "lv.q C600,0(%1)\n" "lv.q C610,16(%1)\n" "lv.q C620,32(%1)\n" "lv.q C630,48(%1)\n"
+            /* The matrix's fourth row only contributes to discarded w.
+               Retain the first position there to free a non-aliasing result. */
+            "vmov.t R603,C700\n"
+            "vtfm4.q C700,E600,C710\n" "vtfm4.q C710,E600,C720\n"
+            "lv.s S633,0(%4)\n"
+            "vsub.t C700,C700,R603\n" "vscl.t C700,C700,S633\n" "vadd.t C700,C700,R603\n"
+            "vsub.t C710,C710,C730\n" "vscl.t C710,C710,S633\n" "vadd.t C730,C730,C710\n"
+            "sv.s S700,0(%3)\n" "sv.s S701,4(%3)\n" "sv.s S702,8(%3)\n"
+            "sv.s S730,16(%3)\n" "sv.s S731,20(%3)\n" "sv.s S732,24(%3)\n"
+            : : "r"(first),"r"(second),"r"(source),"r"(destination),"r"(&weight) : "memory");
+    }
+#else
+    for(unsigned int normal=0;normal<2;++normal){
+        float a[3],b[3],delta[3];
+        if(normal)recvxSkinDirectionAligned(second,source+4,b);
+        else recvxFaceTransformAligned(second,source,b);
+        if(weight!=1.0f){
+            if(normal)recvxSkinDirectionAligned(first,source+4,a);
+            else recvxFaceTransformAligned(first,source,a);
+            for(unsigned int k=0;k<3;++k)delta[k]=b[k]-a[k];
+            recvxFaceScaleAdd(a,delta,weight);
+            memcpy(destination+normal*4,a,sizeof(a));
+        }else memcpy(destination+normal*4,b,sizeof(b));
+    }
+#endif
+}
+
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+static void check_direct_skin(void)
+{
+    static int checked;
+    if(checked)return;
+    float first[16] __attribute__((aligned(16)))={0,2,0,0,-3,0,0,0,0,0,0.5f,0,7,-9,11,1};
+    float second[16] __attribute__((aligned(16)))={-1,0,0,0,0,0.25f,0,0,0,0,4,0,-13,5,-2,1};
+    float source[8]={0.5f,3,1.5f,0,1.5f,-2,0.25f,0},out[8];
+    uint32_t packed=UINT32_C(0x7fc00001);
+    memcpy(source+3,&packed,4);memcpy(source+7,&packed,4);
+    for(unsigned int level=0;level<10;++level){
+        float weight=(level+1)*0.1f;
+        memset(out,0,sizeof(out));memcpy(out+3,&packed,4);memcpy(out+7,&packed,4);
+        skin_vertex_direct(first,second,source,out,weight);
+        for(unsigned int normal=0;normal<2;++normal)for(unsigned int k=0;k<3;++k){
+            float a=0,b=0;
+            for(unsigned int j=0;j<3;++j){a+=first[j*4+k]*source[normal*4+j];b+=second[j*4+k]*source[normal*4+j];}
+            if(!normal){a+=first[12+k];b+=second[12+k];}
+            float expected=weight==1?b:a+(b-a)*weight;
+            if(!isfinite(out[normal*4+k])||fabsf(out[normal*4+k]-expected)>1e-4f*(fabsf(expected)+1))
+                recvxGameBootUnsupported("direct skin VFPU self-check failed");
+        }
+        if(memcmp(out+3,&packed,4)||memcmp(out+7,&packed,4))
+            recvxGameBootUnsupported("direct skin VFPU metadata self-check failed");
+    }
+    checked=1;recvxGameBootLog("direct skin VFPU self-check passed");
+}
+#endif
+
 static void calculate(void *pointer, int count, int *table, int fm, int transform)
 {
     static const float level[10] = {0.1f,0.2f,0.3f,0.4f,0.5f,0.6f,0.7f,0.8f,0.9f,1.0f};
     SkinEntry entries[128];
     if (!table && transform) return;
+#if defined(__PSP__) && defined(__mips__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+    unsigned int profile_started=sceKernelGetSystemTimeLow();
+#endif
     O_WRK *work = actor(pointer);
     size_t total = prepare(work, count, table, fm, entries);
     if (transform && !njPushMatrixEx()) {
@@ -208,39 +294,45 @@ static void calculate(void *pointer, int count, int *table, int fm, int transfor
         recvxGameBootUnsupported("original skin matrix push failed");
     }
     initialize(work, count, entries, total);
+#if defined(__PSP__) && defined(__mips__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+    unsigned int blend_started=sceKernelGetSystemTimeLow();
+    skin_stats.prepare_us+=blend_started-profile_started;
+#endif
     if (!transform) return;
     recvxFaceVectorPrepare();
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+    check_direct_skin();
+#endif
+    /* matrices[] owns 64-byte-aligned rows. Use them directly instead of
+       recopying 64 bytes into a temporary for every position/normal transform. */
     for (int i = 0; i < count; ++i) {
         SkinEntry *entry = &entries[i];
         if (!(entry->flags & 2u)) continue;
+#if defined(__PSP__) && defined(__mips__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+        skin_stats.vertices+=entry->count;
+#endif
         unsigned char *output = storage + entry->offset;
         size_t bytes = sizeof(HDR_PS) + entry->count*32u;
-        /* Fourth words are packed metadata; preserve them without float loads. */
-        memcpy(output, entry->source, bytes);
+        /* Copy the header and packed words only. Coordinates/normals are
+           generated directly instead of copying values that are overwritten. */
+        memcpy(output, entry->source, sizeof(HDR_PS));
         for (unsigned int j = 0; j < entry->count; ++j) {
             unsigned int packed = entry->weights[j], bone = packed >> 24;
             if (fm && bone > 10) bone += 4;
             float weight = level[(packed >> 16) & 255u];
             const float *source = (const float *)(entry->source + sizeof(HDR_PS) + j*32u);
             float *destination = (float *)(output + sizeof(HDR_PS) + j*32u);
-            for (unsigned int normal = 0; normal < 2; ++normal) {
-                float first[3], second[3], delta[3];
-                if (normal) recvxSkinDirection(matrices[bone][1], source + 4, second);
-                else recvxFaceTransform(matrices[bone][1], source, second);
-                if (weight != 1.0f) {
-                    if (normal) recvxSkinDirection(matrices[bone][0], source + 4, first);
-                    else recvxFaceTransform(matrices[bone][0], source, first);
-                    for (unsigned int a = 0; a < 3; ++a) delta[a] = second[a] - first[a];
-                    recvxFaceScaleAdd(first, delta, weight);
-                    memcpy(destination + normal*4u, first, sizeof(first));
-                } else memcpy(destination + normal*4u, second, sizeof(second));
-            }
+            memcpy(destination+3,source+3,4);memcpy(destination+7,source+7,4);
+            skin_vertex_direct(matrices[bone][0],matrices[bone][1],source,destination,weight);
         }
         *(unsigned int *)(output + bytes) = 255u;
         work->mlwP->objP[i].model->vlist = (int *)output;
     }
     if (!njPopMatrixEx()) recvxGameBootUnsupported("original skin matrix pop failed");
     checked_math();
+#if defined(__PSP__) && defined(__mips__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+    skin_stats.blend_us+=sceKernelGetSystemTimeLow()-blend_started;
+#endif
 }
 
 void npInitCalcSkin(void *work, int count, int *table) { calculate(work,count,table,0,0); }

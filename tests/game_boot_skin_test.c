@@ -81,6 +81,26 @@ static void table(unsigned int output, unsigned int bone)
     data.table[6]=1; data.table[7]=0;
 }
 
+static void all_weight_levels(void)
+{
+    static const float levels[]={0.1f,0.2f,0.3f,0.4f,0.5f,0.6f,0.7f,0.8f,0.9f,1.0f};
+    for(unsigned int weight=0;weight<10;++weight){
+        reset();table(5,1);player.px=10;player.py=20;player.pz=30;
+        float *m=data.joint[1].mtx;
+        m[0]=0;m[1]=1;m[4]=-1;m[5]=0;m[12]=100;m[13]=200;m[14]=300;
+        data.object[1].ang[2]=0x4000;
+        for(unsigned int j=0;j<3;++j)data.table[3+j]=(1u<<24)|(weight<<16);
+        npCalcSkin(&player,2,(int *)data.table);
+        const float (*out)[8]=(const float (*)[8])((HDR_PS *)np.vlp[5]+1);
+        for(unsigned int j=0;j<3;++j){
+            NEAR(out[j][0],91-levels[weight]);NEAR(out[j][1],180+levels[weight]);NEAR(out[j][2],270);
+            NEAR(out[j][4],2-2*levels[weight]);NEAR(out[j][5],2*levels[weight]);NEAR(out[j][6],0);
+            CHECK(!memcmp(&out[j][3],&data.stream[0].vertex[j][3],4));
+            CHECK(!memcmp(&out[j][7],&data.stream[0].vertex[j][7],4));
+        }
+    }
+}
+
 static void weighted_math(void)
 {
     reset(); table(5,1);
@@ -188,7 +208,7 @@ static void morph_owned_source(void)
 
 int main(void)
 {
-    weighted_math(); fm_and_last_bone(); invalid_inputs(); morph_owned_source(); recvxGameBootSkinReset();
+    all_weight_levels();weighted_math(); fm_and_last_bone(); invalid_inputs(); morph_owned_source(); recvxGameBootSkinReset();
     printf("PASS: %u skin checks, weighted positions and untranslated non-unit normals, packed metadata, 128 bones, FM remap, matrix restore and malformed bounds\n",assertions);
     return 0;
 }

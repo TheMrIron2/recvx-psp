@@ -450,10 +450,10 @@ static void compare_native_strip(const RecvxBootRenderFrame *f,const RecvxBootGp
 
 /* Independently expand GE strips, omitting bridge/retail degenerates, and
    compare every shaded vertex and outward winding with the triangle path. */
-static void gpu_native_strip_tests(void)
+static void gpu_native_strip_tests(int native_lighting)
 {
     for(unsigned int variant=0;variant<32;++variant){
-        reset();recvxGameBootRenderGpuEnable(1);recvxGameBootRenderGpuStripsEnable(0);
+        reset();recvxGameBootRenderGpuEnable(1);recvxGameBootRenderNativeLightingEnable(native_lighting);recvxGameBootRenderGpuStripsEnable(0);
         data.polygons[1]=variant&16?2:3;
         if(variant&1)njScale(NULL,-2,3,2);
         unsigned int cursor=6;put16(data.polygons+4,2);
@@ -475,7 +475,7 @@ static void gpu_native_strip_tests(void)
         CHECK(f->batch_count==1&&f->batches[0].gpu_strip&&f->gpu_vertex_count<expected_count);
         compare_native_strip(f,expected,expected_count);
     }
-    reset();recvxGameBootRenderGpuEnable(1);recvxGameBootRenderGpuStripsEnable(0);
+    reset();recvxGameBootRenderGpuEnable(1);recvxGameBootRenderNativeLightingEnable(native_lighting);recvxGameBootRenderGpuStripsEnable(0);
     recvxGameBootRenderTextureList(&textures);
     data.polygons[0]=8;put16(data.polygons+2,0);
     unsigned char *p=data.polygons+4;p[0]=65;p[1]=3;put16(p+2,26);put16(p+4,1);put16(p+6,8);
@@ -707,6 +707,58 @@ static void native_ge_lighting_tests(void)
     reset();
 }
 
+static void native_raw_reference_tests(void)
+{
+    for(unsigned int variant=0;variant<64;++variant){
+        unsigned int attributes=variant&1?0x20u:0;
+        specular_model(0xffb08040u,0x11ffffffu,attributes);
+        recvxGameBootRenderGpuEnable(1);recvxGameBootRenderNativeLightingEnable(1);
+        recvxGameBootRenderGroupCullEnable(1);
+        if(variant&2)njScale(NULL,-2,3,2);
+        if(variant&4)njRotateY(NULL,0x1300);
+        if(variant&8)putfloat(data.vertices+64+24,0);
+        if(variant&16){
+            unsigned char source[96];memcpy(source,data.vertices+64,sizeof(source));
+            data.vertices[0]=41;put16(data.vertices+2,19);
+            for(unsigned int i=0;i<3;++i){
+                memcpy(data.vertices+8+i*24,source+i*32,12);
+                memcpy(data.vertices+20+i*24,source+i*32+16,12);
+            }
+        }
+        if(variant&32)njTranslate(NULL,1,0,0);
+        recvxGameBootRenderRawStripsEnable(0);const RecvxBootRenderFrame *f=draw();
+        size_t count=f->gpu_vertex_count,batches=f->batch_count;
+        CHECK(count<=3&&batches<=1&&!f->vertex_count);
+        RecvxBootGpuVertex expected[3];RecvxBootRenderBatch batch={0};
+        if(count)memcpy(expected,f->gpu_vertices,count*sizeof(*expected));
+        if(batches)batch=f->batches[0];
+        recvxGameBootRenderConsume();recvxGameBootRenderRawStripsEnable(1);f=draw();
+        CHECK(f->gpu_vertex_count==count&&f->batch_count==batches&&!f->vertex_count);
+        CHECK(!count||!memcmp(expected,f->gpu_vertices,count*sizeof(*expected)));
+        CHECK(!batches||(!memcmp(&batch.gpu_state,&f->batches[0].gpu_state,sizeof(batch.gpu_state))&&batch.gpu_mask==f->batches[0].gpu_mask));
+        if(attributes&0x20u)CHECK(!recvxGameBootRenderStats().gpu_raw_vertices);
+        if(!(attributes&0x20u)&&!(variant&8)&&count)CHECK(recvxGameBootRenderStats().gpu_raw_vertices>0);
+    }
+    reset();
+}
+
+static void native_ge_normal_preflight_tests(void)
+{
+    static const float values[]={0.0f,1e-30f,9e-11f,1e-10f,0.249999f,0.25f,1,2,2.0001f,1e19f,3e38f};
+    for(unsigned int i=0;i<sizeof(values)/sizeof(*values);++i){
+        specular_model(0xffb08040u,0x11ffffffu,0);
+        recvxGameBootRenderGpuEnable(1);recvxGameBootRenderNativeLightingEnable(1);
+        putfloat(data.vertices+64+24,values[i]);
+        recvxGameBootRenderGpuStripsEnable(0);const RecvxBootRenderFrame *f=draw();
+        CHECK(f->gpu_vertex_count==3&&!f->vertex_count);
+        RecvxBootGpuVertex expected[3];memcpy(expected,f->gpu_vertices,sizeof(expected));
+        recvxGameBootRenderConsume();recvxGameBootRenderGpuStripsEnable(1);f=draw();
+        CHECK(f->gpu_vertex_count==3&&!memcmp(expected,f->gpu_vertices,sizeof(expected)));
+        CHECK(!recvxGameBootRenderStats().gpu_fallback_triangles);
+    }
+    reset();
+}
+
 static void gpu_direct_overflow_tests(void)
 {
     unsigned int fast=0;
@@ -752,13 +804,47 @@ static void gpu_vertex_bounds_tests(void)
     }
 }
 
-static void gpu_group_cull_tests(void)
+static void native_model_bounds_tests(void)
+{
+    for(unsigned int variant=0;variant<4;++variant){
+        reset();recvxGameBootRenderGpuEnable(1);recvxGameBootRenderNativeLightingEnable(1);
+        recvxGameBootRenderGroupCullEnable(1);recvxGameBootRenderResidentEnable(!(variant&1));
+        if(variant&2){
+            unsigned char source[96];memcpy(source,data.vertices+64,sizeof(source));
+            data.vertices[0]=41;put16(data.vertices+2,19);
+            for(unsigned int i=0;i<3;++i){
+                memcpy(data.vertices+8+i*24,source+i*32,12);
+                memcpy(data.vertices+20+i*24,source+i*32+16,12);
+            }
+        }
+        unsigned int cursor=0;
+        for(unsigned int i=0;i<4;++i){
+            unsigned char *p=data.polygons+cursor;p[0]=64;p[1]=3;
+            put16(p+2,5);put16(p+4,1);put16(p+6,3);
+            for(unsigned int j=0;j<3;++j)put16(p+8+j*2,j);
+            cursor+=14;
+        }
+        put16(data.polygons+cursor,255);
+        const RecvxBootRenderFrame *f=draw();CHECK(f->gpu_vertex_count==12);
+        RecvxBootRenderStats stats=recvxGameBootRenderStats();
+        CHECK(stats.gpu_model_bounds_inside>1&&!stats.gpu_model_bounds_outside&&!stats.gpu_culled_groups);
+        if(!(variant&1))CHECK(stats.gpu_vfpu_bound_vertices==3);
+        recvxGameBootRenderConsume();njTranslate(NULL,10000,0,0);f=draw();
+        stats=recvxGameBootRenderStats();
+        CHECK(!f->gpu_vertex_count&&stats.gpu_model_bounds_outside>1);
+        recvxGameBootRenderConsume();njTranslate(NULL,-10000,0,0);f=draw();
+        CHECK(f->gpu_vertex_count==12);
+    }
+    reset();
+}
+
+static void gpu_group_cull_tests(int native_lighting)
 {
     /* Fully outside each of the six clip planes, with deliberately stale
        authored bounds. The decoded vertices determine rejection. */
     const float offsets[6][3]={{-40,0,0},{40,0,0},{0,-40,0},{0,40,0},{0,0,-8},{0,0,150}};
     for(unsigned int variant=0;variant<24;++variant){
-        reset();recvxGameBootRenderGpuEnable(1);recvxGameBootRenderGroupCullEnable(1);
+        reset();recvxGameBootRenderNativeLightingEnable(native_lighting);recvxGameBootRenderGpuEnable(1);recvxGameBootRenderGroupCullEnable(1);
         if(variant&1){
             njScale(NULL,-1,2,1);data.polygons[1]=2;
             njCnkSetEasyMultiLight(2);njCnkSetEasyMultiLightSwitch(2,1);
@@ -784,7 +870,7 @@ static void gpu_group_cull_tests(void)
         {{-100,-100,4},{100,-100,4},{0,100,4}}
     };
     for(unsigned int variant=0;variant<sizeof(retained)/sizeof(retained[0]);++variant){
-        reset();clip_model_vertices(retained[variant],3);recvxGameBootRenderGpuEnable(1);
+        reset();recvxGameBootRenderNativeLightingEnable(native_lighting);clip_model_vertices(retained[variant],3);recvxGameBootRenderGpuEnable(1);
         const RecvxBootRenderFrame *f=draw();CHECK(f->gpu_vertex_count==3);
         RecvxBootGpuVertex expected[3];memcpy(expected,f->gpu_vertices,sizeof(expected));
         recvxGameBootRenderConsume();recvxGameBootRenderGroupCullEnable(1);f=draw();
@@ -793,14 +879,14 @@ static void gpu_group_cull_tests(void)
     }
     /* Inventory-style off-center projection, and a live-deformed vertex that
        reaches the viewport despite the original off-screen model sphere. */
-    reset();recvxGameBootRenderGpuEnable(1);recvxGameBootRenderGroupCullEnable(1);
+    reset();recvxGameBootRenderNativeLightingEnable(native_lighting);recvxGameBootRenderGpuEnable(1);recvxGameBootRenderGroupCullEnable(1);
     NJS_SCREEN screen={.dist=500,.w=352,.h=184,.cx=235,.cy=224};recvxEngineOriginalViewSetScreen(&screen);
     const RecvxBootRenderFrame *f=draw();CHECK(f->gpu_vertex_count==3);
     recvxGameBootRenderConsume();njTranslate(NULL,40,0,0);draw();
     CHECK(recvxGameBootRenderStats().gpu_culled_groups==1);
     recvxGameBootRenderConsume();putfloat(data.vertices+64,-40);f=draw();
     CHECK(f->gpu_vertex_count==3&&recvxGameBootRenderStats().gpu_culled_groups==1);
-    reset();
+    reset();recvxGameBootRenderNativeLightingEnable(native_lighting);
 }
 
 static void gpu_box_interval_tests(void)
@@ -1025,7 +1111,7 @@ static void gpu_render_tests(void)
 
 int main(void)
 {
-    gpu_compare_reference();gpu_render_tests();gpu_shared_light_classifications();gpu_prelit_queue_transition();gpu_bulk_reference_tests();gpu_native_strip_tests();gpu_strip_cache_tests();gpu_light_response_tests();gpu_resident_reference_tests();gpu_distance_batch_tests();native_ge_lighting_tests();gpu_direct_overflow_tests();gpu_vertex_bounds_tests();gpu_group_cull_tests();gpu_box_interval_tests();gpu_group_color_reuse_tests();gpu_group_bounds_tests();gpu_volatile_cache_tests();benchmark_strip();
+    gpu_compare_reference();gpu_render_tests();gpu_shared_light_classifications();gpu_prelit_queue_transition();gpu_bulk_reference_tests();gpu_native_strip_tests(0);gpu_native_strip_tests(1);gpu_strip_cache_tests();gpu_light_response_tests();gpu_resident_reference_tests();gpu_distance_batch_tests();native_ge_lighting_tests();native_raw_reference_tests();native_ge_normal_preflight_tests();gpu_direct_overflow_tests();gpu_vertex_bounds_tests();native_model_bounds_tests();gpu_group_cull_tests(0);gpu_group_cull_tests(1);gpu_box_interval_tests();gpu_group_color_reuse_tests();gpu_group_bounds_tests();gpu_volatile_cache_tests();benchmark_strip();
     const RecvxBootRenderFrame *f;
     reset(); njGenerateFogTable3(NULL,-1,-100); njSetFogColor(0xff123456); njFogEnable();
     f=draw(); draw();

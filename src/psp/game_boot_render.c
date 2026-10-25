@@ -37,13 +37,14 @@ static size_t gpu_count,gpu_capacity;
 #define GPU_DEFAULT 0
 #endif
 static int gpu_enabled=GPU_DEFAULT,gpu_strips_enabled=1;
-static int gpu_native_strips=GPU_DEFAULT,gpu_strip_cache_enabled=GPU_DEFAULT;
+static int gpu_native_strips=GPU_DEFAULT,gpu_strip_cache_enabled=GPU_DEFAULT,gpu_raw_strips=1;
 static void strip_cache_reset(void);
 static int resident_enabled=1,resident_checked,resident_ok,distance_batches_enabled=1,group_bounds_enabled=1,group_cull_enabled=GPU_DEFAULT,overflow_fast_enabled=1,native_lighting_enabled=GPU_DEFAULT;
 void recvxGameBootRenderGpuEnable(int enabled){gpu_enabled=!!enabled;}
 void recvxGameBootRenderNativeLightingEnable(int enabled){native_lighting_enabled=!!enabled;strip_cache_reset();}
 void recvxGameBootRenderGpuStripsEnable(int enabled){gpu_strips_enabled=!!enabled;}
 void recvxGameBootRenderGpuNativeStripsEnable(int enabled){gpu_native_strips=!!enabled;}
+void recvxGameBootRenderRawStripsEnable(int enabled){gpu_raw_strips=!!enabled;}
 void recvxGameBootRenderGpuStripCacheEnable(int enabled){gpu_strip_cache_enabled=!!enabled;}
 void recvxGameBootRenderResidentEnable(int enabled){resident_enabled=!!enabled;}
 void recvxGameBootRenderDistanceBatchesEnable(int enabled){distance_batches_enabled=!!enabled;}
@@ -122,7 +123,7 @@ void recvxGameBootRenderReset(void)
     /* A fault may leave 2D overlays pointing into the same palette views.
        Discard those draws before freeing their frame-owned snapshots. */
     if (recvxGameBootDrawDiscard) recvxGameBootDrawDiscard();
-    strip_cache_reset();gpu_strip_cache_enabled=GPU_DEFAULT;resident_enabled=1;resident_checked=resident_ok=0;distance_batches_enabled=1;group_bounds_enabled=1;group_cull_enabled=GPU_DEFAULT;overflow_fast_enabled=1;native_lighting_enabled=GPU_DEFAULT;
+    strip_cache_reset();gpu_raw_strips=1;gpu_strip_cache_enabled=GPU_DEFAULT;resident_enabled=1;resident_checked=resident_ok=0;distance_batches_enabled=1;group_bounds_enabled=1;group_cull_enabled=GPU_DEFAULT;overflow_fast_enabled=1;native_lighting_enabled=GPU_DEFAULT;
     memset(&render_stats,0,sizeof(render_stats));
     free(gpu_vertices);gpu_vertices=NULL;gpu_capacity=0;gpu_enabled=GPU_DEFAULT;gpu_strips_enabled=1;gpu_native_strips=GPU_DEFAULT;
     free(vertices); free(batches); vertices = NULL; batches = NULL;
@@ -405,7 +406,7 @@ typedef struct DrawContext {
     float distance_bound[4],metric_bound;
     int extra_native[8],distance_valid;
     unsigned int group_known,group_mask,group_extra_mask,group_extra_inside,group_color;
-    int group_culled,cull_planes_ready;
+    int group_culled,cull_planes_ready,native_model_bounds_ready,native_model_view,raw_normals_checked,raw_normals_valid;
     float group_cull_planes[6][4],group_cull_error[3][4];
     unsigned int distance_material,resident_material;
     unsigned int draw,material_serial,strip_ordinal,strip_generation,light_generation,strip_cache_store,light_cache_reusable;
@@ -1150,6 +1151,42 @@ static int group_outside_view(DrawContext *c,const float center[3],const float e
     }
     return 0;
 }
+/* Source positions were validated by the parser before any strip callback.
+   Bound live skin/morph streams too; authored spheres can be stale. */
+static void prepare_native_model_view(DrawContext *c)
+{
+    if(c->native_model_bounds_ready)return;
+    c->native_model_bounds_ready=1;
+    const unsigned char *v=(const unsigned char *)c->model->vlist;
+    unsigned int count=(unsigned int)v[6]|((unsigned int)v[7]<<8);
+    unsigned int stride=v[0]==51?32:24,header=v[0]==51?64:8;
+    const float *source=(const float *)(v+header);
+    float lo[3],hi[3],center[3],extent[3];
+    if(c->vfpu_resident){
+        recvxRenderResidentBounds(source,count,stride,lo,hi);
+        render_stats.gpu_vfpu_bound_vertices+=count;
+    }else{
+        for(unsigned int k=0;k<3;++k)lo[k]=hi[k]=source[k];
+        for(unsigned int i=1;i<count;++i){
+            const float *p=(const float *)((const unsigned char *)source+i*stride);
+            for(unsigned int k=0;k<3;++k){if(p[k]<lo[k])lo[k]=p[k];if(p[k]>hi[k])hi[k]=p[k];}
+        }
+    }
+    for(unsigned int k=0;k<3;++k){center[k]=lo[k]*0.5f+hi[k]*0.5f;extent[k]=(hi[k]-lo[k])*0.5f;}
+    if(group_outside_view(c,center,extent,lo,hi)){c->native_model_view=-1;return;}
+    for(unsigned int plane=0;plane<6;++plane){
+        const float *p=c->group_cull_planes[plane],*error=c->group_cull_error[plane/2];
+        float lower=p[3],magnitude=error[3];
+        for(unsigned int k=0;k<3;++k){
+            lower+=p[k]*center[k]-fabsf(p[k])*extent[k];
+            magnitude+=error[k]*(fabsf(lo[k])+fabsf(hi[k]));
+        }
+        float margin=(64.0f/65536)*(magnitude+1);
+        if(!isfinite(lower)||!isfinite(margin)||lower<=margin)return;
+    }
+    c->native_model_view=1;
+}
+
 static void prepare_group_bounds(DrawContext *c,const RecvxGameChunkVertex *input,unsigned int count)
 {
     c->group_known=0;c->group_culled=0;c->group_extra_inside=0;c->group_extra_mask=(1u<<c->gpu_extra_count)-1;
@@ -1663,6 +1700,229 @@ static unsigned int prepare_material(DrawContext *context,const RecvxGameChunkMa
     *out_texture=texture;*out_sampler=sampler;return attributes;
 }
 
+/* Native GE vertices need no CPU color/mask arrays or light classification.
+   Keep only conversion, topology and the missing-normal fallback on CPU. */
+static int native_normal_valid(const float *normal)
+{
+    const RenderVertexWord *w=(const RenderVertexWord *)normal;
+    unsigned int x=w[0]&0x7fffffffu,y=w[1]&0x7fffffffu,z=w[2]&0x7fffffffu;
+    unsigned int largest=x>y?x:y;if(z>largest)largest=z;
+    /* Usual authored normals are safely within the squared-length limits.
+       Unusual magnitudes retain the exact original fallback decision. */
+    if(largest>=0x3e800000u&&largest<=0x40000000u)return 1;
+    float n2=normal[0]*normal[0]+normal[1]*normal[1]+normal[2]*normal[2];
+    return isfinite(n2)&&n2>=1e-20f;
+}
+static int emit_native_strip(DrawContext *c,const RecvxGameChunkMaterial *material,
+    const RecvxGameChunkVertex *input,unsigned int count,unsigned int reversed,
+    unsigned int attributes,const RecvxBootTexture *texture,RecvxGameBootSampler sampler)
+{
+    if(attributes&0x20u)return 0;
+    /* Bounds use M6 scratch only; native lighting never needs the CPU
+       model/normal/distance matrices loaded into resident VFPU registers. */
+    c->vfpu_resident=resident_enabled&&resident_ok;
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+    unsigned int started=c->bulk_profile?sceKernelGetSystemTimeLow():0;
+#endif
+    if(group_cull_enabled){
+        prepare_native_model_view(c);
+        if(c->native_model_view){
+            c->group_culled=c->native_model_view<0;
+            if(!c->group_culled)++render_stats.gpu_model_bounds_inside;
+            else ++render_stats.gpu_model_bounds_outside;
+        }else prepare_group_bounds(c,input,count);
+    }else prepare_group_bounds(c,input,count);
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+    if(c->bulk_profile)render_stats.gpu_group_bounds_us+=(sceKernelGetSystemTimeLow()-started)*8u;
+#endif
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+    unsigned int preflight_started=c->bulk_profile?sceKernelGetSystemTimeLow():0;
+#endif
+    unsigned int triangles=0;
+    for(unsigned int v=2;v<count;++v)
+        if(input[v-2].source_index!=input[v-1].source_index&&input[v].source_index!=input[v-2].source_index&&input[v].source_index!=input[v-1].source_index)++triangles;
+    if(c->group_culled){
+#if defined(RECVX_GAME_BOOT_HOST_TEST)
+        if(recvxGameBootRenderCullCheck)recvxGameBootRenderCullCheck(c->matrix,frame.projection,input,count);
+#endif
+        ++render_stats.gpu_culled_groups;render_stats.gpu_culled_vertices+=count;
+        render_stats.gpu_culled_triangles+=triangles;render_stats.triangles+=triangles;return 1;
+    }
+    if(c->gpu_state.lit)for(unsigned int v=0;v<count;++v)
+        if(!native_normal_valid(&input[v].nx)){c->gpu_reason=5;return 0;}
+    render_stats.gpu_vertex_calls+=count;render_stats.gpu_group_vertices+=count;
+    render_stats.gpu_group_constant_vertices+=count;
+    if(!triangles)return 1;
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+    if(c->bulk_profile){
+        c->bulk_output_started=sceKernelGetSystemTimeLow();
+        render_stats.native_preflight_us+=(c->bulk_output_started-preflight_started)*8u;
+    }
+#endif
+    unsigned int mask=(1u<<c->gpu_state.light_count)-1,color=c->gpu_state.diffuse;
+    unsigned int flip=!!reversed^!!c->reversed,submitted;
+    if(gpu_native_strips&&count+flip+3<triangles*3){
+        RecvxBootRenderBatch *batch=gpu_queue(c,material,attributes,texture,sampler,mask,count+flip+3,1);
+        unsigned int first=gpu_count;
+        if(batch->count){
+            RecvxBootGpuVertex last=gpu_vertices[gpu_count-1];gpu_vertices[gpu_count++]=last;
+            if(batch->count&1u)gpu_vertices[gpu_count++]=last;
+            pack_gpu_vertex(&gpu_vertices[gpu_count++],c,&input[0],color);
+        }
+        if(flip)pack_gpu_vertex(&gpu_vertices[gpu_count++],c,&input[0],color);
+        for(unsigned int v=0;v<count;++v)pack_gpu_vertex(&gpu_vertices[gpu_count++],c,&input[v],color);
+        submitted=gpu_count-first;batch->count+=submitted;
+    }else{
+        RecvxBootRenderBatch *batch=gpu_queue(c,material,attributes,texture,sampler,mask,triangles*3,0);
+        for(unsigned int v=2;v<count;++v){
+            if(input[v-2].source_index==input[v-1].source_index||input[v].source_index==input[v-2].source_index||input[v].source_index==input[v-1].source_index)continue;
+            unsigned int a=v-2,b=v-1,d=v;
+            if(((v-2)&1u)^reversed){unsigned int swap=a;a=b;b=swap;}
+            if(c->reversed){unsigned int swap=b;b=d;d=swap;}
+            pack_gpu_vertex(&gpu_vertices[gpu_count++],c,&input[a],color);
+            pack_gpu_vertex(&gpu_vertices[gpu_count++],c,&input[b],color);
+            pack_gpu_vertex(&gpu_vertices[gpu_count++],c,&input[d],color);
+        }
+        submitted=triangles*3;batch->count+=submitted;
+    }
+    render_stats.triangles+=triangles;render_stats.gpu_bulk_triangles+=triangles;
+    render_stats.gpu_direct_vertices+=submitted;render_stats.gpu_vertices+=submitted;
+    if(c->gpu_state.lit){render_stats.gpu_lit_vertices+=submitted;render_stats.gpu_native_light_vertices+=submitted;}
+    return 1;
+}
+
+static unsigned int raw_u16(const unsigned char *p)
+{
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__==__ORDER_LITTLE_ENDIAN__
+    uint16_t value;memcpy(&value,__builtin_assume_aligned(p,2),2);return value;
+#else
+    return p[0]|((unsigned int)p[1]<<8);
+#endif
+}
+static const unsigned char *raw_record(const RecvxGameChunkRawBatch *b,const RecvxGameChunkRawStrip *strip,unsigned int i)
+{
+    return strip->data+i*(b->type==64?2u:6u)+(i>2?(i-2)*b->attributes*2u:0u);
+}
+static inline __attribute__((always_inline)) void pack_raw_vertex(RecvxBootGpuVertex *restrict out,DrawContext *c,
+    const RecvxGameChunkRawBatch *b,const unsigned char *record)
+{
+    unsigned int index=raw_u16(record)-b->source->first;
+    const unsigned char *source=b->source->data+index*b->source->stride;
+    const RenderVertexWord *p=(const RenderVertexWord *)source;
+    const RenderVertexWord *n=(const RenderVertexWord *)(source+b->source->normal);
+    RenderVertexWord *d=(RenderVertexWord *)out;
+    float scale=b->type==65?0.003921569f:0.0009775171f;
+    out->u=b->type==64?0:raw_u16(record+2)*scale;
+    out->v=b->type==64?0:raw_u16(record+4)*scale;
+    d[2]=c->gpu_state.diffuse;
+    if(c->gpu_normal_fix){
+        const float *normal=(const float *)n;
+        for(unsigned int k=0;k<3;++k)(&out->nx)[k]=c->gpu_normal_matrix[k]*normal[0]+c->gpu_normal_matrix[k+3]*normal[1]+c->gpu_normal_matrix[k+6]*normal[2];
+    }else{d[3]=n[0];d[4]=n[1];d[5]=n[2];}
+    d[6]=p[0];d[7]=p[1];d[8]=p[2];
+}
+static int emit_gpu_raw(void *user,const RecvxGameChunkMaterial *material,const RecvxGameChunkRawBatch *raw)
+{
+    DrawContext *c=user;
+    const RecvxBootTexture *texture;RecvxGameBootSampler sampler;
+    unsigned int attributes=prepare_material(c,material,&texture,&sampler);
+    ensure_gpu_prepared(c,material,attributes);
+    if(!c->gpu_compatible||!c->gpu_state.native_lighting||(attributes&0x20u))return 0;
+    if(!raw->count){
+        c->vfpu_resident=resident_enabled&&resident_ok;
+        if(group_cull_enabled&&!c->native_model_bounds_ready){
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+            unsigned int bounds_started=sceKernelGetSystemTimeLow();
+#endif
+            prepare_native_model_view(c);
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+            render_stats.gpu_group_bounds_us+=sceKernelGetSystemTimeLow()-bounds_started;
+#endif
+        }
+        if(c->gpu_state.lit&&(!group_cull_enabled||c->native_model_view>=0)){
+            if(!c->raw_normals_checked){
+                c->raw_normals_checked=1;c->raw_normals_valid=1;
+                for(unsigned int i=0;i<raw->source->count;++i){
+                    const float *normal=(const float *)(raw->source->data+i*raw->source->stride+raw->source->normal);
+                    ++render_stats.gpu_raw_normal_vertices;
+                    if(!native_normal_valid(normal)){c->raw_normals_valid=0;break;}
+                }
+            }
+            if(!c->raw_normals_valid)return 0;
+        }
+        return 1;
+    }
+    ++render_stats.gpu_bulk_attempts;++render_stats.gpu_raw_groups;
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+    int sample=(render_stats.gpu_bulk_attempts&7u)==0;
+    unsigned int started=sample?sceKernelGetSystemTimeLow():0;
+#endif
+    unsigned int source_vertices=0;
+    for(unsigned int s=0;s<raw->count;++s)source_vertices+=raw->strips[s].count;
+    if(group_cull_enabled&&c->native_model_view<0){
+#if defined(RECVX_GAME_BOOT_HOST_TEST)
+        if(recvxGameBootRenderCullCheck){
+            RecvxGameChunkVertex decoded[RECVX_GAME_CHUNK_STRIP_MAX];unsigned int count=0;
+            for(unsigned int s=0;s<raw->count;++s)for(unsigned int v=0;v<raw->strips[s].count;++v){
+                unsigned int index=raw_u16(raw_record(raw,&raw->strips[s],v))-raw->source->first;
+                memcpy(&decoded[count++].x,raw->source->data+index*raw->source->stride,12);
+            }
+            recvxGameBootRenderCullCheck(c->matrix,frame.projection,decoded,count);
+        }
+#endif
+        ++render_stats.gpu_culled_groups;++render_stats.gpu_model_bounds_outside;
+        render_stats.gpu_culled_vertices+=source_vertices;render_stats.gpu_culled_triangles+=raw->triangles;
+        render_stats.triangles+=raw->triangles;return 1;
+    }
+    if(group_cull_enabled&&c->native_model_view>0)++render_stats.gpu_model_bounds_inside;
+    else if(group_cull_enabled)++render_stats.gpu_raw_partial_groups;
+    if(!raw->triangles)return 1;
+    unsigned int mask=(1u<<c->gpu_state.light_count)-1,total=0;
+    int strips=gpu_native_strips&&raw->vertices+!!c->reversed+3<raw->triangles*3;
+    unsigned int reservation=strips?raw->vertices+2*raw->count+3:raw->triangles*3;
+    RecvxBootRenderBatch *batch=gpu_queue(c,material,attributes,texture,sampler,mask,reservation,strips);
+    for(unsigned int s=0;s<raw->count;++s){
+        const RecvxGameChunkRawStrip *strip=&raw->strips[s];
+        unsigned int flip=strip->reversed^!!c->reversed;
+        if(strips){
+            unsigned int first=gpu_count;
+            if(batch->count){
+                RecvxBootGpuVertex last=gpu_vertices[gpu_count-1];gpu_vertices[gpu_count++]=last;
+                if(batch->count&1u)gpu_vertices[gpu_count++]=last;
+                pack_raw_vertex(&gpu_vertices[gpu_count++],c,raw,strip->data);
+            }
+            if(flip)pack_raw_vertex(&gpu_vertices[gpu_count++],c,raw,strip->data);
+            const unsigned char *record=strip->data;
+            for(unsigned int v=0;v<strip->count;++v){
+                pack_raw_vertex(&gpu_vertices[gpu_count++],c,raw,record);
+                record+=(raw->type==64?2u:6u)+(v>=2?raw->attributes*2u:0u);
+            }
+            unsigned int submitted=gpu_count-first;batch->count+=submitted;total+=submitted;
+        }else{
+            /* Preflight supplied the exact budget; degenerate indices remain
+               omitted in triangle mode exactly as in the decoded path. */
+            unsigned int first=gpu_count;
+            for(unsigned int v=2;v<strip->count;++v){
+                const unsigned char *r[3]={raw_record(raw,strip,v-2),raw_record(raw,strip,v-1),raw_record(raw,strip,v)};
+                unsigned int index[3]={raw_u16(r[0]),raw_u16(r[1]),raw_u16(r[2])};
+                if(index[0]==index[1]||index[0]==index[2]||index[1]==index[2])continue;
+                if(((v-2)&1u)^strip->reversed){const unsigned char *swap=r[0];r[0]=r[1];r[1]=swap;}
+                if(c->reversed){const unsigned char *swap=r[1];r[1]=r[2];r[2]=swap;}
+                for(unsigned int i=0;i<3;++i)pack_raw_vertex(&gpu_vertices[gpu_count++],c,raw,r[i]);
+            }
+            unsigned int submitted=gpu_count-first;batch->count+=submitted;total+=submitted;
+        }
+    }
+    render_stats.triangles+=raw->triangles;render_stats.gpu_bulk_triangles+=raw->triangles;
+    render_stats.gpu_vertices+=total;render_stats.gpu_direct_vertices+=total;render_stats.gpu_raw_vertices+=total;
+    render_stats.gpu_vertex_calls+=source_vertices;
+    if(c->gpu_state.lit){render_stats.gpu_lit_vertices+=total;render_stats.gpu_native_light_vertices+=total;}
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+    if(sample){unsigned int elapsed=(sceKernelGetSystemTimeLow()-started)*8u;render_stats.gpu_bulk_us+=elapsed;render_stats.gpu_output_us+=elapsed;}
+#endif
+    c->vfpu_resident=0;return 1;
+}
+
 /* Preflight each source vertex once. Native strips keep authored triangle
    order; repeated vertices bridge compatible strips without new fragments. */
 static int emit_gpu_strip_inner(void *user,const RecvxGameChunkMaterial *material,
@@ -1673,7 +1933,7 @@ static int emit_gpu_strip_inner(void *user,const RecvxGameChunkMaterial *materia
     unsigned int attributes=prepare_material(c,material,&texture,&sampler);
     ensure_gpu_prepared(c,material,attributes);
     if(!c->gpu_compatible)return 0;
-    if(c->gpu_state.native_lighting&&(attributes&0x20u))return 0;
+    if(c->gpu_state.native_lighting)return emit_native_strip(c,material,input,count,reversed,attributes,texture,sampler);
     unsigned int ordinal=c->strip_ordinal++;
     StripCacheEntry *cached=gpu_strip_cache_enabled&&c->persistent_allowed?strip_cache_entry(c,ordinal):NULL;
     RecvxBootGpuVertex scratch[RECVX_GAME_CHUNK_STRIP_MAX];
@@ -2040,9 +2300,15 @@ int njCnkDrawModelLocal(NJS_CNK_MODEL *model)
     if(!context.draw){memset(vertex_cache,0,sizeof(vertex_cache));memset(gpu_overflow_cache,0,sizeof(gpu_overflow_cache));context.draw=++draw_serial;}
     ++render_stats.models;
     context.custom_clip=recvxEngineOriginalViewClipVolumePlanes(context.clip_planes);checked_math();
-    if (recvxGameBootChunkParseJoinedStrips(model, emit, gpu_enabled&&gpu_strips_enabled?emit_gpu_strip:NULL, &context)) recvxGameBootUnsupported(recvxGameBootChunkFault());
 #if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
-    render_stats.chunk_us+=sceKernelGetSystemTimeLow()-started;
+    unsigned int parse_started=sceKernelGetSystemTimeLow();
+#endif
+    if (recvxGameBootChunkParseRawStrips(model, emit, gpu_enabled&&gpu_strips_enabled?emit_gpu_strip:NULL,
+        gpu_enabled&&gpu_strips_enabled&&gpu_raw_strips&&native_lighting_enabled?emit_gpu_raw:NULL, &context)) recvxGameBootUnsupported(recvxGameBootChunkFault());
+#if defined(__PSP__) && !defined(RECVX_GAME_BOOT_HOST_TEST)
+    unsigned int parse_ended=sceKernelGetSystemTimeLow();
+    render_stats.chunk_parse_us+=parse_ended-parse_started;
+    render_stats.chunk_us+=parse_ended-started;
 #endif
     return 1;
 }

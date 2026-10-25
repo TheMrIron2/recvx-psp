@@ -9,7 +9,12 @@ list of explicit stops for services outside this completed batch.
 
 Inventory uses the original ITEM1 textures, layout, palettes, messages and item
 logic. Entry backs up room textures; exit restores their pixels, live palettes,
-render settings and the original arena cursor. The PSP draw adapter supports
+render settings and the original arena cursor. Backups that cannot fit beside
+the live room texture list use an owned heap buffer, with a checked 16-byte
+reservation in the original arena. This accommodates the PSP's TIM2 sources,
+expanded pixels and palettes without overwriting the list or exceeding the
+arena. Restore, replacement and shutdown free that buffer.
+The PSP draw adapter supports
 rotated/flipped sprites, textured quads, border lines, per-batch scissoring and
 multiple ordering-table flushes without clearing the already drawn scene.
 The shared 2D queue draws larger camera distances first, keeping backgrounds behind

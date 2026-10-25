@@ -128,12 +128,12 @@ static void texture_resolution(void)
     list.nbTexture = 257; REJECT(recvxGameBootRenderTextureList(&list), "render texture list");
 }
 
-static void room_texture_backup(void)
+static void room_texture_backup(int limited_arena)
 {
-    static unsigned char arena[65536];
+    static unsigned char arena[65536] __attribute__((aligned(16)));
     NJS_TEXNAME names[2] = {{0}}, menu_name = {0};
     NJS_TEXLIST list = {names, 2}, menu = {&menu_name, 1}, wrong = {names, 1};
-    freemem = arena; sys->endp = arena + sizeof(arena); sys->memp = arena + 3;
+    freemem = arena; sys->endp = arena + (limited_arena ? 512 : sizeof(arena)); sys->memp = arena + 3;
     Init_PS2_SAVE_TEX();
     for (unsigned int i = 0; i < 2; ++i) {
         size_t size;
@@ -143,6 +143,15 @@ static void room_texture_backup(void)
         RecvxBootTexture *texture = (RecvxBootTexture *)recvxGameBootTextureGet(&list, i);
         texture->pixels[5] = 77 + i; texture->palette[2] = 0x12345678u + i;
     }
+    /* A room list can occupy the arena before the expanded PSP snapshot ends.
+       The spill buffer must leave that live list intact. */
+    NJS_TEXLIST *embedded = (NJS_TEXLIST *)(void *)(arena + 256);
+    memcpy(embedded, &list, sizeof(list));
+    char *spill_end = bhCopyTexmem2MainmemSub(embedded, (char *)sys->memp);
+    assert(spill_end > (char *)sys->memp && spill_end <= (char *)embedded);
+    assert(embedded->textures == names && embedded->nbTexture == 2);
+    bhCopyMainmem2Texmem(embedded);
+    REJECT(bhCopyTexmem2MainmemSub(embedded, (char *)embedded), "overlaps list");
     char *end = bhCopyTexmem2MainmemSub(&list, (char *)sys->memp);
     assert(end > (char *)sys->memp && end <= (char *)sys->endp && sys->memp == arena + 3);
     REJECT(bhCopyTexmem2MainmemSub(&list, (char *)sys->endp - 1), "backup exceeds");
@@ -338,7 +347,7 @@ static void mixed_ui_depths(void)
 
 int main(void)
 {
-    texture_resolution(); room_texture_backup(); original_render_controls(); sampler_bits(); queued_palette_changes(); texture_collection();mixed_ui_depths();
+    texture_resolution(); room_texture_backup(0); room_texture_backup(1); original_render_controls(); sampler_bits(); queued_palette_changes(); texture_collection();mixed_ui_depths();
     puts("PASS: owned TIM2 materials, room texture arena save/restore with live palettes/pixels, repeated restore and slot reuse, wide tiles, released/missing descriptors, queued palette snapshots, texture collection preserves live handles and synchronizes queued users, retail capacity, render controls and sampler bits");
     return 0;
 }

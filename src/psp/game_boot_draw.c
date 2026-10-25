@@ -86,9 +86,13 @@ void njPrintC(Int location, const char *string)
 static struct {
     NJS_TEXLIST *list;
     unsigned char *first;
-    size_t bytes;
+    size_t bytes, arena_bytes;
+    unsigned char *heap;
     unsigned int count;
 } texture_save;
+typedef struct {
+    uint32_t magic, bytes, count, reserved;
+} SavedTextureToken;
 typedef struct {
     uint32_t magic, source_bytes, pixel_bytes, global_index, attributes, bank;
     uint32_t palette[256];
@@ -97,7 +101,11 @@ typedef struct {
 NJS_TEXMEMLIST *Ps2_current_texmemlist;
 static unsigned int descriptor_slot(NJS_TEXMEMLIST *descriptor);
 
-void Init_PS2_SAVE_TEX(void) { memset(&texture_save, 0, sizeof(texture_save)); }
+void Init_PS2_SAVE_TEX(void)
+{
+    free(texture_save.heap);
+    memset(&texture_save, 0, sizeof(texture_save));
+}
 
 static int texture_arena(const void *pointer, size_t bytes)
 {
@@ -124,11 +132,22 @@ char *bhCopyTexmem2MainmemSub(NJS_TEXLIST *list, char *destination)
             recvxGameBootUnsupported("room texture backup size overflow");
         bytes += record;
     }
-    if (!texture_arena(destination, bytes) ||
+    /* Retail only stores VRAM-sized pixels here. PSP also preserves the TIM2
+       source, expanded pixels and palette, which can cross the live room list
+       or the arena end. Keep oversized snapshots outside the original arena;
+       a small checked token still participates in the caller's bump/rewind. */
+    int external = !texture_arena(destination, bytes) ||
         texture_overlap(destination, bytes, list, sizeof(*list)) ||
-        texture_overlap(destination, bytes, list->textures, list->nbTexture * sizeof(*list->textures)))
+        texture_overlap(destination, bytes, list->textures, list->nbTexture * sizeof(*list->textures));
+    size_t arena_bytes = external ? sizeof(SavedTextureToken) : bytes;
+    if (!texture_arena(destination, arena_bytes) ||
+        texture_overlap(destination, arena_bytes, list, sizeof(*list)) ||
+        texture_overlap(destination, arena_bytes, list->textures, list->nbTexture * sizeof(*list->textures)))
         recvxGameBootUnsupported("room texture backup exceeds original arena or overlaps list");
-    unsigned char *cursor = (unsigned char *)destination;
+    unsigned char *heap = external ? malloc(bytes) : NULL;
+    if (external && !heap)
+        recvxGameBootUnsupported("room texture backup allocation failed");
+    unsigned char *cursor = external ? heap : (unsigned char *)destination;
     for (unsigned int i = 0; i < list->nbTexture; ++i) {
         const RecvxBootTexture *texture = recvxGameBootTextureGet(list, i);
         NJS_TEXMEMLIST *descriptor = (NJS_TEXMEMLIST *)(uintptr_t)list->textures[i].texaddr;
@@ -142,25 +161,41 @@ char *bhCopyTexmem2MainmemSub(NJS_TEXLIST *list, char *destination)
         memcpy(cursor, texture->source, record.source_bytes); cursor += record.source_bytes;
         memcpy(cursor, texture->pixels, record.pixel_bytes); cursor += record.pixel_bytes;
     }
+    if (external) {
+        SavedTextureToken token = {SAVED_TEXTURE_MAGIC, (uint32_t)bytes, list->nbTexture, 0};
+        memcpy(destination, &token, sizeof(token));
+        recvxGameBootLog("room texture backup: external bytes=%u arena=%u",
+            (unsigned int)bytes, (unsigned int)arena_bytes);
+    }
+    Init_PS2_SAVE_TEX();
     texture_save.list = list; texture_save.first = (unsigned char *)destination;
-    texture_save.bytes = bytes; texture_save.count = list->nbTexture;
+    texture_save.bytes = bytes; texture_save.arena_bytes = arena_bytes;
+    texture_save.heap = heap; texture_save.count = list->nbTexture;
     if (list->nbTexture) njSetTexture(list);
-    return (char *)cursor;
+    return destination + arena_bytes;
 }
 
 void bhCopyMainmem2Texmem(NJS_TEXLIST *list)
 {
     if (!list || texture_save.list != list || list->nbTexture != texture_save.count ||
         list->nbTexture > TEXTURE_LIMIT || (list->nbTexture && !list->textures) ||
-        !texture_arena(texture_save.first, texture_save.bytes))
+        !texture_arena(texture_save.first, texture_save.arena_bytes))
         recvxGameBootUnsupported("missing or mismatched room texture backup");
+    if (texture_save.heap) {
+        SavedTextureToken token, expected = {SAVED_TEXTURE_MAGIC,
+            (uint32_t)texture_save.bytes, texture_save.count, 0};
+        memcpy(&token, texture_save.first, sizeof(token));
+        if (memcmp(&token, &expected, sizeof(token)))
+            recvxGameBootUnsupported("invalid room texture backup record token");
+    }
+    const unsigned char *saved = texture_save.heap ? texture_save.heap : texture_save.first;
     size_t offset = 0;
     /* Validate the entire saved span before releasing any live texture. */
     for (unsigned int i = 0; i < list->nbTexture; ++i) {
         SavedTexture record;
         if (offset > texture_save.bytes || sizeof(record) > texture_save.bytes - offset)
             recvxGameBootUnsupported("truncated room texture backup");
-        memcpy(&record, texture_save.first + offset, sizeof(record)); offset += sizeof(record);
+        memcpy(&record, saved + offset, sizeof(record)); offset += sizeof(record);
         if (record.magic != SAVED_TEXTURE_MAGIC || record.bank > 255 ||
             record.source_bytes < 64 || record.pixel_bytes < 128 || record.pixel_bytes > 1024u * 512u ||
             record.source_bytes > texture_save.bytes - offset ||
@@ -173,7 +208,7 @@ void bhCopyMainmem2Texmem(NJS_TEXLIST *list)
     offset = 0;
     for (unsigned int i = 0; i < list->nbTexture; ++i) {
         SavedTexture record;
-        memcpy(&record, texture_save.first + offset, sizeof(record));
+        memcpy(&record, saved + offset, sizeof(record));
         offset += sizeof(record) + record.source_bytes + record.pixel_bytes;
         /* A released descriptor slot may now belong to menu artwork. Only
            release the original still-live binding, never a reused slot. */
@@ -191,14 +226,14 @@ void bhCopyMainmem2Texmem(NJS_TEXLIST *list)
     offset = 0;
     for (unsigned int i = 0; i < list->nbTexture; ++i) {
         SavedTexture record;
-        memcpy(&record, texture_save.first + offset, sizeof(record)); offset += sizeof(record);
-        recvxGameBootTextureInstall(list, i, texture_save.first + offset,
+        memcpy(&record, saved + offset, sizeof(record)); offset += sizeof(record);
+        recvxGameBootTextureInstall(list, i, saved + offset,
             record.source_bytes, 0, record.global_index, record.attributes, record.bank);
         unsigned int slot = descriptor_slot((NJS_TEXMEMLIST *)(uintptr_t)list->textures[i].texaddr);
         if (textures[slot].width * textures[slot].height != record.pixel_bytes)
             recvxGameBootUnsupported("room texture backup pixel extent mismatch");
         offset += record.source_bytes;
-        memcpy(textures[slot].pixels, texture_save.first + offset, record.pixel_bytes);
+        memcpy(textures[slot].pixels, saved + offset, record.pixel_bytes);
         memcpy(textures[slot].palette, record.palette, sizeof(record.palette));
         offset += record.pixel_bytes;
     }
